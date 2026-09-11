@@ -1,0 +1,12 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "my-store",
+  "main": "./dist/_worker.js/index.js",
+  "compatibility_date": "2026-09-09",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": { "directory": "./dist", "binding": "ASSETS" },
+  "observability": { "enabled": true }
+  // Secrets are never committed. Set them with `wrangler secret put <NAME>`:
+  //   STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET,
+  //   SENDGRID_API_KEY, MAIL_FROM, ORDER_NOTIFICATION_EMAIL, CONTACT_NOTIFICATION_EMAIL
+}

@@ -1,0 +1,73 @@
+---
+import { Image } from 'astro:assets'
+import type { Product } from '@skuio/storefront'
+import { resolveImage } from '../lib/images'
+
+interface Props {
+  product: Product
+}
+
+const { product } = Astro.props
+const gallery = product.images
+  .map((i) => ({ image: resolveImage(i), alt: i.alt ?? product.name }))
+  .filter((g): g is { image: ImageMetadata; alt: string } => g.image !== null)
+const hero = gallery[0]
+const heroId = `gallery-hero-${product.id}`
+---
+
+{
+  hero ? (
+    <div>
+      <div class="overflow-hidden rounded-lg border border-rule bg-white">
+        <Image
+          src={hero.image}
+          alt={hero.alt}
+          widths={[600, 900, 1200]}
+          sizes="(min-width: 1024px) 560px, 92vw"
+          loading="eager"
+          fetchpriority="high"
+          id={heroId}
+          class="h-full w-full object-contain"
+        />
+      </div>
+
+      {gallery.length > 1 && (
+        <ul class="mt-4 grid grid-cols-5 gap-3" data-gallery={heroId}>
+          {gallery.map((g, i) => (
+            <li>
+              <button
+                type="button"
+                class="block w-full overflow-hidden rounded border border-rule bg-white p-1 transition hover:border-accent aria-pressed:border-accent"
+                aria-pressed={i === 0 ? 'true' : 'false'}
+                aria-label={`Show image ${i + 1}`}
+                data-full={g.image.src}
+                data-alt={g.alt}
+              >
+                <Image src={g.image} alt="" width={120} height={90} loading="lazy" class="aspect-4/3 w-full object-contain" />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  ) : (
+    <div class="flex aspect-4/3 items-center justify-center rounded-lg border border-rule text-sm text-body/50">No image</div>
+  )
+}
+
+<script>
+  // Thumbnail -> hero swap. Without JavaScript the hero shows the primary image.
+  document.querySelectorAll<HTMLElement>('[data-gallery]').forEach((gallery) => {
+    const hero = document.getElementById(gallery.dataset.gallery!) as HTMLImageElement | null
+    gallery.addEventListener('click', (event) => {
+      const button = (event.target as HTMLElement).closest<HTMLButtonElement>('button[data-full]')
+      if (!button || !hero) return
+      hero.src = button.dataset.full!
+      hero.srcset = ''
+      hero.alt = button.dataset.alt ?? ''
+      gallery.querySelectorAll<HTMLButtonElement>('button[data-full]').forEach((b) =>
+        b.setAttribute('aria-pressed', String(b === button))
+      )
+    })
+  })
+</script>

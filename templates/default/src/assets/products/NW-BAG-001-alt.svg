@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600" viewBox="0 0 800 600">
+  <rect width="800" height="600" fill="#f4f4f2"/>
+  <rect x="120" y="90" width="560" height="420" rx="24" fill="#2f5d62"/>
+  <text x="400" y="555" font-family="system-ui, sans-serif" font-size="22" font-weight="700" fill="#333" text-anchor="middle">Ridge Daypack 22L</text>
+</svg>

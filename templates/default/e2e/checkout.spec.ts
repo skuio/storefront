@@ -1,0 +1,69 @@
+import { expect, test } from '@playwright/test'
+import { readFileSync, existsSync } from 'node:fs'
+
+/**
+ * The guardrail. Change anything you like about this store; keep this green.
+ *
+ * The Stripe step needs STRIPE_SECRET_KEY (from .env) and is skipped without
+ * it, so the structural checks still run on a fresh clone.
+ */
+
+const products = JSON.parse(readFileSync(new URL('../src/data/products.json', import.meta.url), 'utf8')) as {
+  sku: string
+  slug: string
+  price: { amount: number }
+  available: boolean
+}[]
+const sample = products.find((p) => p.available)!
+
+function stripeKey(): string | undefined {
+  if (process.env.STRIPE_SECRET_KEY) return process.env.STRIPE_SECRET_KEY
+  const envFile = new URL('../.env', import.meta.url)
+  if (!existsSync(envFile)) return undefined
+  return readFileSync(envFile, 'utf8').match(/^STRIPE_SECRET_KEY=(.+)$/m)?.[1]?.trim()
+}
+
+test('home page lists categories and links into the catalogue', async ({ page }) => {
+  await page.goto('/')
+  await expect(page.locator('h1')).toBeVisible()
+  const links = page.locator('a[href^="/collections/"], a[href^="/products/"]')
+  expect(await links.count()).toBeGreaterThan(0)
+})
+
+test('product page has a buy form that carries a SKU and no price', async ({ page }) => {
+  await page.goto(`/products/${sample.slug}/`)
+  const form = page.locator('form[action="/api/checkout"]')
+  await expect(form).toBeVisible()
+  await expect(form.locator('input[name=sku]')).toHaveValue(sample.sku)
+  expect(await form.locator('input[name=price], input[name=amount]').count()).toBe(0)
+})
+
+test('checkout endpoint refuses an unknown SKU', async ({ request }) => {
+  const res = await request.post('/api/checkout', { form: { sku: 'DOES-NOT-EXIST', quantity: '1' }, maxRedirects: 0 })
+  expect(res.status()).toBe(400)
+})
+
+test('checkout creates a Stripe session priced from the catalogue', async ({ request }) => {
+  const key = stripeKey()
+  test.skip(!key, 'STRIPE_SECRET_KEY not set — skipping live Stripe check')
+
+  const res = await request.post('/api/checkout', { form: { sku: sample.sku, quantity: '2' }, maxRedirects: 0 })
+  expect(res.status()).toBe(303)
+  const location = res.headers()['location']!
+  expect(location).toContain('checkout.stripe.com')
+
+  const sessionId = location.match(/cs_(?:test|live)_[A-Za-z0-9]+/)![0]
+  interface SessionShape {
+    mode: string
+    amount_subtotal: number
+    line_items: { data: { quantity: number; price: { unit_amount: number } }[] }
+  }
+  const stripe = (await fetch(`https://api.stripe.com/v1/checkout/sessions/${sessionId}?expand[]=line_items`, {
+    headers: { Authorization: `Basic ${Buffer.from(`${key}:`).toString('base64')}` },
+  }).then((r) => r.json())) as SessionShape
+
+  expect(stripe.mode).toBe('payment')
+  expect(stripe.line_items.data[0]!.quantity).toBe(2)
+  expect(stripe.line_items.data[0]!.price.unit_amount).toBe(sample.price.amount)
+  expect(stripe.amount_subtotal).toBe(sample.price.amount * 2)
+})

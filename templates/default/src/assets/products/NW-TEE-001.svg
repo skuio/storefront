@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600" viewBox="0 0 800 600">
+  <rect width="800" height="600" fill="#4f6f52"/>
+  <rect x="200" y="150" width="400" height="300" rx="24" fill="rgba(255,255,255,0.18)"/>
+  <text x="400" y="320" font-family="system-ui, sans-serif" font-size="34" font-weight="700" fill="#fff" text-anchor="middle">Trailhead Tee — Moss</text>
+</svg>

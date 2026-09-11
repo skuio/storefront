@@ -1,0 +1,45 @@
+---
+import { catalog, config, routes } from '../lib/catalog'
+
+const tops = catalog.tree().filter((n) => n.productCount > 0)
+const year = new Date().getFullYear()
+const { phone, phoneE164, email } = config.contact ?? {}
+---
+
+<footer class="mt-24">
+  <div class="border-t border-rule bg-[#fafafa]">
+    <div class="mx-auto max-w-6xl px-5 py-14">
+      <div class="grid gap-10 md:grid-cols-[1.2fr_2fr]">
+        <div>
+          <h2 class="display-heading text-3xl">Shop by category</h2>
+          <p class="mt-2 max-w-xs text-sm">{catalog.products.length} products across {tops.length} categories.</p>
+          {
+            (phone || email) && (
+              <p class="mt-5 space-x-3 text-sm">
+                {phone && <a href={`tel:${phoneE164 ?? phone}`} class="font-semibold text-ink hover:text-accent">{phone}</a>}
+                {email && <a href={`mailto:${email}`} class="font-semibold text-ink hover:text-accent">{email}</a>}
+              </p>
+            )
+          }
+        </div>
+
+        <div class="grid grid-cols-2 gap-x-6 gap-y-1 sm:grid-cols-3 lg:grid-cols-4">
+          {tops.map((n) => <a href={routes.category(n)} class="py-1 text-sm transition-colors hover:text-accent">{n.name}</a>)}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="bg-shell">
+    <div class="mx-auto flex max-w-6xl flex-col items-center justify-between gap-3 px-5 py-5 text-center text-[12px] text-white/60 sm:flex-row sm:text-left">
+      <p>&copy; {year} {config.name}</p>
+      <nav class="flex flex-wrap items-center justify-center gap-x-5 gap-y-1" aria-label="Legal">
+        <a href="/terms/" class="hover:text-white">Terms</a>
+        <a href="/returns/" class="hover:text-white">Returns</a>
+        <a href="/shipping/" class="hover:text-white">Shipping</a>
+        <a href="/privacy/" class="hover:text-white">Privacy</a>
+        <a href="/account/order-lookup/" class="hover:text-white">Order status</a>
+      </nav>
+    </div>
+  </div>
+</footer>

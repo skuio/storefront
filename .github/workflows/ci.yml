@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  kit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+      - run: npm run check
+      - name: Registry and template must agree
+        run: node scripts/sync-template.mjs --check
+      - name: Reference template builds
+        run: npm run template:build
+      - name: Template guardrail (structural; Stripe step skips without a key)
+        run: npx playwright install --with-deps chromium && npm run template:e2e
+        env:
+          CI: true

@@ -1,0 +1,50 @@
+@import 'tailwindcss';
+
+/*
+ * Design tokens. Change these and the whole store follows; blocks only ever
+ * reference the token names. `display-heading` is the one typographic flourish
+ * — swap the font to give the store a voice.
+ */
+@theme {
+  --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-display: var(--font-sans);
+
+  --color-ink: #1a1a1a;
+  --color-body: #555555;
+  --color-shell: #1f2933;
+  --color-shell-veil: rgba(31, 41, 51, 0.7);
+  --color-rule: #e6e6e6;
+  --color-accent: #0f6fff;
+  --color-accent-dark: #0b55c4;
+}
+
+@layer base {
+  html { scroll-behavior: smooth; }
+  body {
+    font-family: var(--font-sans);
+    font-size: 15px;
+    line-height: 1.7;
+    color: var(--color-body);
+    background: #ffffff;
+    -webkit-font-smoothing: antialiased;
+  }
+  h1, h2, h3, h4, h5, h6 { color: var(--color-ink); font-weight: 700; line-height: 1.2; }
+  a { color: inherit; }
+
+  /* Rich text from product descriptions and policy pages. */
+  .prose-store p { margin-block: 1em; }
+  .prose-store h2, .prose-store h3 { margin-block: 1.4em 0.5em; }
+  .prose-store ul, .prose-store ol { margin-block: 1em; padding-inline-start: 1.4em; }
+  .prose-store ul { list-style: disc; }
+  .prose-store ol { list-style: decimal; }
+  .prose-store li { margin-block: 0.35em; }
+  .prose-store a { color: var(--color-accent); text-decoration: underline; }
+  .prose-store strong { color: var(--color-ink); }
+}
+
+@utility display-heading {
+  font-family: var(--font-display);
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: var(--color-ink);
+}

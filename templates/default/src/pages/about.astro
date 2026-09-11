@@ -1,0 +1,16 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro'
+import Breadcrumbs from '../components/Breadcrumbs.astro'
+import { config } from '../lib/catalog'
+export const prerender = true
+---
+
+<BaseLayout title="About" description={`About ${config.name}.`}>
+  <div class="mx-auto max-w-3xl px-5 py-10">
+    <Breadcrumbs items={[{ label: 'Home', href: '/' }, { label: 'About' }]} />
+    <h1 class="display-heading mt-6 text-5xl">About {config.name}</h1>
+    <div class="prose-store mt-8 text-sm">
+      <p>Tell your story here — who you are, what you make, why it matters. This page is plain HTML; edit it directly.</p>
+    </div>
+  </div>
+</BaseLayout>

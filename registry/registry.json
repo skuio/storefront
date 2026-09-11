@@ -1,0 +1,78 @@
+{
+  "version": 1,
+  "conventions": {
+    "note": "Blocks import `catalog`, `config` and `routes` from src/lib/catalog.ts and `resolveImage` from src/lib/images.ts. Both files ship in the template; keep those exports if you restructure.",
+    "sdk": "@skuio/storefront"
+  },
+  "blocks": [
+    {
+      "name": "price",
+      "description": "Price with optional strike-through compare-at",
+      "files": [{ "from": "Price.astro", "to": "src/components/Price.astro" }]
+    },
+    {
+      "name": "product-card",
+      "description": "Grid card: image, name, SKU, price, sale badge",
+      "files": [{ "from": "ProductCard.astro", "to": "src/components/ProductCard.astro" }],
+      "registryDependencies": ["price"]
+    },
+    {
+      "name": "buy-button",
+      "description": "Quantity + Buy Now form that POSTs a SKU to /api/checkout. Works without JavaScript.",
+      "files": [{ "from": "BuyButton.astro", "to": "src/components/BuyButton.astro" }]
+    },
+    {
+      "name": "breadcrumbs",
+      "description": "Accessible breadcrumb trail",
+      "files": [{ "from": "Breadcrumbs.astro", "to": "src/components/Breadcrumbs.astro" }]
+    },
+    {
+      "name": "product-gallery",
+      "description": "Hero image with thumbnail switcher; degrades to the primary image without JavaScript",
+      "files": [{ "from": "ProductGallery.astro", "to": "src/components/ProductGallery.astro" }]
+    },
+    {
+      "name": "category-nav",
+      "description": "Chip list of child categories for a category page",
+      "files": [{ "from": "CategoryNav.astro", "to": "src/components/CategoryNav.astro" }]
+    },
+    {
+      "name": "site-header",
+      "description": "Sticky header with primary nav and a mobile menu listing top-level categories",
+      "files": [{ "from": "SiteHeader.astro", "to": "src/components/SiteHeader.astro" }]
+    },
+    {
+      "name": "site-footer",
+      "description": "Footer with category links, contact and legal nav",
+      "files": [{ "from": "SiteFooter.astro", "to": "src/components/SiteFooter.astro" }]
+    },
+    {
+      "name": "checkout",
+      "description": "Stripe Checkout: the /api/checkout endpoint, the webhook receiver, and the success page. Prices come from the catalogue on the server.",
+      "files": [
+        { "from": "api/checkout.ts", "to": "src/pages/api/checkout.ts" },
+        { "from": "api/stripe-webhook.ts", "to": "src/pages/api/stripe-webhook.ts" },
+        { "from": "checkout/success.astro", "to": "src/pages/checkout/success.astro" },
+        { "from": "lib/orders.ts", "to": "src/lib/orders.ts" }
+      ],
+      "dependencies": ["stripe"]
+    },
+    {
+      "name": "contact-form",
+      "description": "Contact form with honeypot, posting to /api/contact which sends via SendGrid",
+      "files": [
+        { "from": "ContactForm.astro", "to": "src/components/ContactForm.astro" },
+        { "from": "api/contact.ts", "to": "src/pages/api/contact.ts" }
+      ]
+    },
+    {
+      "name": "order-lookup",
+      "description": "Order status by email + reference, read live from Stripe. The seed of the customer portal; needs no SKU.io API.",
+      "files": [
+        { "from": "account/order-lookup.astro", "to": "src/pages/account/order-lookup.astro" },
+        { "from": "api/order-lookup.ts", "to": "src/pages/api/order-lookup.ts" }
+      ],
+      "dependencies": ["stripe"]
+    }
+  ]
+}

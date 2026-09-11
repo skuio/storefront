@@ -1,0 +1,356 @@
+[
+  {
+    "id": "1",
+    "sku": "NW-TEE-001",
+    "name": "Trailhead Tee — Moss",
+    "slug": "trailhead-tee-moss",
+    "shortDescription": "Trailhead Tee — Moss from Northwind Outfitters. Replace this copy with the real thing.",
+    "description": "<p>Trailhead Tee — Moss is a placeholder product in the demo catalogue. Its price, image and category are real enough to exercise every page and the checkout.</p><ul><li>Edit <code>src/data/products.json</code> to change it</li><li>Or connect the store to SKU.io and delete the file</li></ul>",
+    "price": {
+      "amount": 3200,
+      "currency": "usd"
+    },
+    "categoryIds": [
+      "apparel-tees"
+    ],
+    "images": [
+      {
+        "src": "NW-TEE-001.svg",
+        "alt": "Trailhead Tee — Moss"
+      },
+      {
+        "src": "NW-TEE-001-alt.svg",
+        "alt": "Trailhead Tee — Moss, detail"
+      }
+    ],
+    "available": true,
+    "attributes": {
+      "Fit": "Regular",
+      "Fabric": "100% organic cotton"
+    }
+  },
+  {
+    "id": "2",
+    "sku": "NW-TEE-002",
+    "name": "Trailhead Tee — Slate",
+    "slug": "trailhead-tee-slate",
+    "shortDescription": "Trailhead Tee — Slate from Northwind Outfitters. Replace this copy with the real thing.",
+    "description": "<p>Trailhead Tee — Slate is a placeholder product in the demo catalogue. Its price, image and category are real enough to exercise every page and the checkout.</p><ul><li>Edit <code>src/data/products.json</code> to change it</li><li>Or connect the store to SKU.io and delete the file</li></ul>",
+    "price": {
+      "amount": 3200,
+      "currency": "usd"
+    },
+    "categoryIds": [
+      "apparel-tees"
+    ],
+    "images": [
+      {
+        "src": "NW-TEE-002.svg",
+        "alt": "Trailhead Tee — Slate"
+      },
+      {
+        "src": "NW-TEE-002-alt.svg",
+        "alt": "Trailhead Tee — Slate, detail"
+      }
+    ],
+    "available": true,
+    "attributes": {
+      "Fit": "Regular",
+      "Fabric": "100% organic cotton"
+    }
+  },
+  {
+    "id": "3",
+    "sku": "NW-TEE-003",
+    "name": "Summit Pocket Tee",
+    "slug": "summit-pocket-tee",
+    "shortDescription": "Summit Pocket Tee from Northwind Outfitters. Replace this copy with the real thing.",
+    "description": "<p>Summit Pocket Tee is a placeholder product in the demo catalogue. Its price, image and category are real enough to exercise every page and the checkout.</p><ul><li>Edit <code>src/data/products.json</code> to change it</li><li>Or connect the store to SKU.io and delete the file</li></ul>",
+    "price": {
+      "amount": 3800,
+      "currency": "usd"
+    },
+    "compareAtPrice": {
+      "amount": 4500,
+      "currency": "usd"
+    },
+    "categoryIds": [
+      "apparel-tees"
+    ],
+    "images": [
+      {
+        "src": "NW-TEE-003.svg",
+        "alt": "Summit Pocket Tee"
+      },
+      {
+        "src": "NW-TEE-003-alt.svg",
+        "alt": "Summit Pocket Tee, detail"
+      }
+    ],
+    "available": true,
+    "attributes": {
+      "Fit": "Relaxed"
+    }
+  },
+  {
+    "id": "4",
+    "sku": "NW-HOOD-001",
+    "name": "Basecamp Hoodie — Charcoal",
+    "slug": "basecamp-hoodie-charcoal",
+    "shortDescription": "Basecamp Hoodie — Charcoal from Northwind Outfitters. Replace this copy with the real thing.",
+    "description": "<p>Basecamp Hoodie — Charcoal is a placeholder product in the demo catalogue. Its price, image and category are real enough to exercise every page and the checkout.</p><ul><li>Edit <code>src/data/products.json</code> to change it</li><li>Or connect the store to SKU.io and delete the file</li></ul>",
+    "price": {
+      "amount": 8900,
+      "currency": "usd"
+    },
+    "categoryIds": [
+      "apparel-hoodies"
+    ],
+    "images": [
+      {
+        "src": "NW-HOOD-001.svg",
+        "alt": "Basecamp Hoodie — Charcoal"
+      },
+      {
+        "src": "NW-HOOD-001-alt.svg",
+        "alt": "Basecamp Hoodie — Charcoal, detail"
+      }
+    ],
+    "available": true,
+    "attributes": {
+      "Weight": "400gsm fleece"
+    }
+  },
+  {
+    "id": "5",
+    "sku": "NW-HOOD-002",
+    "name": "Basecamp Hoodie — Sand",
+    "slug": "basecamp-hoodie-sand",
+    "shortDescription": "Basecamp Hoodie — Sand from Northwind Outfitters. Replace this copy with the real thing.",
+    "description": "<p>Basecamp Hoodie — Sand is a placeholder product in the demo catalogue. Its price, image and category are real enough to exercise every page and the checkout.</p><ul><li>Edit <code>src/data/products.json</code> to change it</li><li>Or connect the store to SKU.io and delete the file</li></ul>",
+    "price": {
+      "amount": 8900,
+      "currency": "usd"
+    },
+    "categoryIds": [
+      "apparel-hoodies"
+    ],
+    "images": [
+      {
+        "src": "NW-HOOD-002.svg",
+        "alt": "Basecamp Hoodie — Sand"
+      },
+      {
+        "src": "NW-HOOD-002-alt.svg",
+        "alt": "Basecamp Hoodie — Sand, detail"
+      }
+    ],
+    "available": true,
+    "attributes": {
+      "Weight": "400gsm fleece"
+    }
+  },
+  {
+    "id": "6",
+    "sku": "NW-BAG-001",
+    "name": "Ridge Daypack 22L",
+    "slug": "ridge-daypack-22l",
+    "shortDescription": "Ridge Daypack 22L from Northwind Outfitters. Replace this copy with the real thing.",
+    "description": "<p>Ridge Daypack 22L is a placeholder product in the demo catalogue. Its price, image and category are real enough to exercise every page and the checkout.</p><ul><li>Edit <code>src/data/products.json</code> to change it</li><li>Or connect the store to SKU.io and delete the file</li></ul>",
+    "price": {
+      "amount": 12900,
+      "currency": "usd"
+    },
+    "categoryIds": [
+      "gear-bags"
+    ],
+    "images": [
+      {
+        "src": "NW-BAG-001.svg",
+        "alt": "Ridge Daypack 22L"
+      },
+      {
+        "src": "NW-BAG-001-alt.svg",
+        "alt": "Ridge Daypack 22L, detail"
+      }
+    ],
+    "available": true,
+    "attributes": {
+      "Volume": "22 L",
+      "Fabric": "Recycled 600D"
+    }
+  },
+  {
+    "id": "7",
+    "sku": "NW-BAG-002",
+    "name": "Commuter Roll-Top 18L",
+    "slug": "commuter-roll-top-18l",
+    "shortDescription": "Commuter Roll-Top 18L from Northwind Outfitters. Replace this copy with the real thing.",
+    "description": "<p>Commuter Roll-Top 18L is a placeholder product in the demo catalogue. Its price, image and category are real enough to exercise every page and the checkout.</p><ul><li>Edit <code>src/data/products.json</code> to change it</li><li>Or connect the store to SKU.io and delete the file</li></ul>",
+    "price": {
+      "amount": 14900,
+      "currency": "usd"
+    },
+    "compareAtPrice": {
+      "amount": 16900,
+      "currency": "usd"
+    },
+    "categoryIds": [
+      "gear-bags"
+    ],
+    "images": [
+      {
+        "src": "NW-BAG-002.svg",
+        "alt": "Commuter Roll-Top 18L"
+      },
+      {
+        "src": "NW-BAG-002-alt.svg",
+        "alt": "Commuter Roll-Top 18L, detail"
+      }
+    ],
+    "available": true,
+    "attributes": {
+      "Volume": "18 L"
+    }
+  },
+  {
+    "id": "8",
+    "sku": "NW-BAG-003",
+    "name": "Field Tote",
+    "slug": "field-tote",
+    "shortDescription": "Field Tote from Northwind Outfitters. Replace this copy with the real thing.",
+    "description": "<p>Field Tote is a placeholder product in the demo catalogue. Its price, image and category are real enough to exercise every page and the checkout.</p><ul><li>Edit <code>src/data/products.json</code> to change it</li><li>Or connect the store to SKU.io and delete the file</li></ul>",
+    "price": {
+      "amount": 6900,
+      "currency": "usd"
+    },
+    "categoryIds": [
+      "gear-bags"
+    ],
+    "images": [
+      {
+        "src": "NW-BAG-003.svg",
+        "alt": "Field Tote"
+      },
+      {
+        "src": "NW-BAG-003-alt.svg",
+        "alt": "Field Tote, detail"
+      }
+    ],
+    "available": false
+  },
+  {
+    "id": "9",
+    "sku": "NW-BTL-001",
+    "name": "Insulated Bottle 750ml",
+    "slug": "insulated-bottle-750ml",
+    "shortDescription": "Insulated Bottle 750ml from Northwind Outfitters. Replace this copy with the real thing.",
+    "description": "<p>Insulated Bottle 750ml is a placeholder product in the demo catalogue. Its price, image and category are real enough to exercise every page and the checkout.</p><ul><li>Edit <code>src/data/products.json</code> to change it</li><li>Or connect the store to SKU.io and delete the file</li></ul>",
+    "price": {
+      "amount": 3400,
+      "currency": "usd"
+    },
+    "categoryIds": [
+      "gear-bottles"
+    ],
+    "images": [
+      {
+        "src": "NW-BTL-001.svg",
+        "alt": "Insulated Bottle 750ml"
+      },
+      {
+        "src": "NW-BTL-001-alt.svg",
+        "alt": "Insulated Bottle 750ml, detail"
+      }
+    ],
+    "available": true,
+    "attributes": {
+      "Capacity": "750 ml",
+      "Material": "Stainless steel"
+    }
+  },
+  {
+    "id": "10",
+    "sku": "NW-BTL-002",
+    "name": "Trail Flask 500ml",
+    "slug": "trail-flask-500ml",
+    "shortDescription": "Trail Flask 500ml from Northwind Outfitters. Replace this copy with the real thing.",
+    "description": "<p>Trail Flask 500ml is a placeholder product in the demo catalogue. Its price, image and category are real enough to exercise every page and the checkout.</p><ul><li>Edit <code>src/data/products.json</code> to change it</li><li>Or connect the store to SKU.io and delete the file</li></ul>",
+    "price": {
+      "amount": 2800,
+      "currency": "usd"
+    },
+    "categoryIds": [
+      "gear-bottles"
+    ],
+    "images": [
+      {
+        "src": "NW-BTL-002.svg",
+        "alt": "Trail Flask 500ml"
+      },
+      {
+        "src": "NW-BTL-002-alt.svg",
+        "alt": "Trail Flask 500ml, detail"
+      }
+    ],
+    "available": true,
+    "attributes": {
+      "Capacity": "500 ml"
+    }
+  },
+  {
+    "id": "11",
+    "sku": "NW-MUG-001",
+    "name": "Enamel Camp Mug",
+    "slug": "enamel-camp-mug",
+    "shortDescription": "Enamel Camp Mug from Northwind Outfitters. Replace this copy with the real thing.",
+    "description": "<p>Enamel Camp Mug is a placeholder product in the demo catalogue. Its price, image and category are real enough to exercise every page and the checkout.</p><ul><li>Edit <code>src/data/products.json</code> to change it</li><li>Or connect the store to SKU.io and delete the file</li></ul>",
+    "price": {
+      "amount": 1800,
+      "currency": "usd"
+    },
+    "categoryIds": [
+      "home-mugs"
+    ],
+    "images": [
+      {
+        "src": "NW-MUG-001.svg",
+        "alt": "Enamel Camp Mug"
+      },
+      {
+        "src": "NW-MUG-001-alt.svg",
+        "alt": "Enamel Camp Mug, detail"
+      }
+    ],
+    "available": true,
+    "attributes": {
+      "Capacity": "350 ml"
+    }
+  },
+  {
+    "id": "12",
+    "sku": "NW-MUG-002",
+    "name": "Stoneware Mug — Fog",
+    "slug": "stoneware-mug-fog",
+    "shortDescription": "Stoneware Mug — Fog from Northwind Outfitters. Replace this copy with the real thing.",
+    "description": "<p>Stoneware Mug — Fog is a placeholder product in the demo catalogue. Its price, image and category are real enough to exercise every page and the checkout.</p><ul><li>Edit <code>src/data/products.json</code> to change it</li><li>Or connect the store to SKU.io and delete the file</li></ul>",
+    "price": {
+      "amount": 2400,
+      "currency": "usd"
+    },
+    "categoryIds": [
+      "home-mugs"
+    ],
+    "images": [
+      {
+        "src": "NW-MUG-002.svg",
+        "alt": "Stoneware Mug — Fog"
+      },
+      {
+        "src": "NW-MUG-002-alt.svg",
+        "alt": "Stoneware Mug — Fog, detail"
+      }
+    ],
+    "available": true
+  }
+]

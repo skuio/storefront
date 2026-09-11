@@ -1,0 +1,15 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro'
+import Breadcrumbs from '../components/Breadcrumbs.astro'
+export const prerender = true
+---
+
+<BaseLayout title="Privacy" description="Privacy policy.">
+  <div class="mx-auto max-w-3xl px-5 py-10">
+    <Breadcrumbs items={[{ label: 'Home', href: '/' }, { label: 'Privacy' }]} />
+    <h1 class="display-heading mt-6 text-5xl">Privacy</h1>
+    <div class="prose-store mt-8 text-sm">
+      <p><strong>Placeholder.</strong> Replace this with your real Privacy policy before going live. Plain HTML — edit the file directly.</p>
+    </div>
+  </div>
+</BaseLayout>

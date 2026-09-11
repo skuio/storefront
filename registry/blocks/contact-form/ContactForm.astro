@@ -1,0 +1,78 @@
+---
+import { config } from '../lib/catalog'
+
+const phone = config.contact?.phone
+const email = config.contact?.email
+---
+
+<form method="POST" action="/api/contact" class="space-y-4" data-contact-form>
+  {/* Honeypot: bots fill it, humans never see it. */}
+  <div class="absolute h-0 w-0 overflow-hidden" aria-hidden="true">
+    <label for="company">Company</label>
+    <input id="company" name="company" type="text" tabindex="-1" autocomplete="off" />
+  </div>
+
+  <div>
+    <label for="name" class="block text-xs font-semibold tracking-wide text-ink uppercase">Full name</label>
+    <input id="name" name="name" type="text" required autocomplete="name"
+      class="mt-1.5 w-full rounded-md border border-rule px-3 py-2.5 text-sm focus:border-accent focus:ring-2 focus:ring-accent/25 focus:outline-none" />
+  </div>
+
+  <div>
+    <label for="email" class="block text-xs font-semibold tracking-wide text-ink uppercase">Email address</label>
+    <input id="email" name="email" type="email" required autocomplete="email"
+      class="mt-1.5 w-full rounded-md border border-rule px-3 py-2.5 text-sm focus:border-accent focus:ring-2 focus:ring-accent/25 focus:outline-none" />
+  </div>
+
+  <div>
+    <label for="message" class="block text-xs font-semibold tracking-wide text-ink uppercase">Message</label>
+    <textarea id="message" name="message" rows="6" required
+      class="mt-1.5 w-full rounded-md border border-rule px-3 py-2.5 text-sm focus:border-accent focus:ring-2 focus:ring-accent/25 focus:outline-none"></textarea>
+  </div>
+
+  <button type="submit" class="w-full rounded-md bg-accent px-8 py-3 text-sm font-bold tracking-wide text-white uppercase transition hover:bg-accent-dark disabled:opacity-60">
+    Send message
+  </button>
+
+  {
+    (phone || email) && (
+      <p class="text-xs text-body/70">
+        Prefer to talk?
+        {phone && <a href={`tel:${config.contact?.phoneE164 ?? phone}`} class="font-semibold text-accent"> {phone}</a>}
+        {email && <a href={`mailto:${email}`} class="font-semibold text-accent"> {email}</a>}
+      </p>
+    )
+  }
+</form>
+
+<div class="mt-4 hidden rounded-md border border-green-600/30 bg-green-50 px-4 py-3 text-sm text-green-800" role="status" data-contact-success>
+  Thanks — your message is on its way. We usually reply within one business day.
+</div>
+<div class="mt-4 hidden rounded-md border border-accent/30 bg-accent/5 px-4 py-3 text-sm text-accent" role="alert" data-contact-error></div>
+
+<script define:vars={{ phone, email }}>
+  const form = document.querySelector('[data-contact-form]')
+  const success = document.querySelector('[data-contact-success]')
+  const errorBox = document.querySelector('[data-contact-error]')
+
+  form?.addEventListener('submit', async (event) => {
+    event.preventDefault()
+    const button = form.querySelector('button[type=submit]')
+    button.disabled = true
+    button.textContent = 'Sending…'
+    errorBox.classList.add('hidden')
+
+    try {
+      const response = await fetch(form.action, { method: 'POST', body: new FormData(form), headers: { Accept: 'application/json' } })
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      form.classList.add('hidden')
+      success.classList.remove('hidden')
+    } catch {
+      const alt = [email && `email ${email}`, phone && `call ${phone}`].filter(Boolean).join(' or ')
+      errorBox.textContent = `We could not send that.${alt ? ` Please ${alt}.` : ''}`
+      errorBox.classList.remove('hidden')
+      button.disabled = false
+      button.textContent = 'Send message'
+    }
+  })
+</script>

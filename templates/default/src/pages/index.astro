@@ -1,0 +1,55 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro'
+import ProductCard from '../components/ProductCard.astro'
+import { catalog, config, routes } from '../lib/catalog'
+
+export const prerender = true
+
+const tops = catalog.tree().filter((n) => n.productCount > 0)
+const featured = catalog.products.filter((p) => p.available).slice(0, 8)
+
+const schema = [
+  { '@context': 'https://schema.org', '@type': 'Organization', name: config.name, url: config.url, ...(config.contact?.phoneE164 ? { telephone: config.contact.phoneE164 } : {}) },
+  { '@context': 'https://schema.org', '@type': 'WebSite', name: config.name, url: config.url },
+]
+---
+
+<BaseLayout title={config.name} schema={schema}>
+  <section class="bg-shell">
+    <div class="mx-auto max-w-6xl px-5 py-24 text-center text-white sm:py-32">
+      <h1 class="display-heading text-4xl text-white sm:text-6xl">{config.name}</h1>
+      <p class="mx-auto mt-4 max-w-xl text-white/75">
+        {catalog.products.length} products across {tops.length} categories. Replace this hero with your story.
+      </p>
+      <a href={routes.shop()} class="mt-8 inline-block rounded-full bg-accent px-8 py-3 text-sm font-semibold tracking-wide text-white transition hover:bg-accent-dark">
+        Shop everything
+      </a>
+    </div>
+  </section>
+
+  <section class="mx-auto max-w-6xl px-5 py-16" aria-labelledby="browse">
+    <h2 id="browse" class="display-heading text-3xl">Browse by category</h2>
+    <ul class="mt-8 grid grid-cols-2 gap-5 sm:grid-cols-3 lg:grid-cols-4">
+      {tops.map((node) => (
+        <li>
+          <a href={routes.category(node)} class="block rounded-lg border border-rule p-6 transition hover:border-accent hover:shadow-sm">
+            <span class="block text-base font-semibold text-ink">{node.name}</span>
+            <span class="mt-1 block text-xs text-body/70">{node.productCount} {node.productCount === 1 ? 'product' : 'products'}</span>
+          </a>
+        </li>
+      ))}
+    </ul>
+  </section>
+
+  {featured.length > 0 && (
+    <section class="mx-auto max-w-6xl px-5 pb-16" aria-labelledby="featured">
+      <div class="flex items-baseline justify-between border-b border-rule pb-3">
+        <h2 id="featured" class="display-heading text-3xl">Featured</h2>
+        <a href={routes.shop()} class="text-xs font-semibold tracking-wide text-accent uppercase hover:underline">All products →</a>
+      </div>
+      <div class="mt-6 grid grid-cols-2 gap-6 sm:grid-cols-3 lg:grid-cols-4">
+        {featured.map((p, i) => <ProductCard product={p} loading={i < 4 ? 'eager' : 'lazy'} />)}
+      </div>
+    </section>
+  )}
+</BaseLayout>

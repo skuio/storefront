@@ -1,0 +1,107 @@
+---
+import { formatMoney } from '@skuio/storefront'
+import { orderFromSession } from '@skuio/storefront/stripe'
+import BaseLayout from '../../layouts/BaseLayout.astro'
+import { config, routes } from '../../lib/catalog'
+import { getStripe } from '../../lib/stripe'
+
+// Renders per request: the summary comes from the Stripe session.
+export const prerender = false
+
+const sessionId = Astro.url.searchParams.get('session_id')
+let order = null
+let lookupFailed = false
+
+if (sessionId) {
+  const stripe = getStripe(Astro)
+  if (stripe) {
+    try {
+      const session = await stripe.checkout.sessions.retrieve(sessionId, {
+        expand: ['line_items', 'line_items.data.price.product'],
+      })
+      // Only acknowledge a session that actually paid.
+      if (session.payment_status === 'paid' || session.status === 'complete') {
+        order = orderFromSession(session)
+      }
+    } catch (error) {
+      console.error('success page: could not retrieve session', error)
+      lookupFailed = true
+    }
+  } else {
+    lookupFailed = true
+  }
+}
+
+const phone = config.contact?.phone
+const tel = config.contact?.phoneE164 ?? phone
+const fmt = (m: { amount: number; currency: string }) => formatMoney(m, config.locale)
+---
+
+<BaseLayout title="Order confirmed" noindex>
+  <div class="mx-auto max-w-2xl px-5 py-20">
+    {
+      order ? (
+        <>
+          <div class="flex items-center gap-3">
+            <span class="flex h-11 w-11 items-center justify-center rounded-full bg-green-600 text-xl text-white" aria-hidden="true">✓</span>
+            <h1 class="display-heading text-5xl">Thank you</h1>
+          </div>
+
+          <p class="mt-5 text-sm">
+            Your order is confirmed{order.customer.email ? ` and a receipt is on its way to ${order.customer.email}` : ''}.
+            Reference <strong class="text-ink">{order.reference}</strong>.
+          </p>
+
+          <div class="mt-8 rounded-lg border border-rule">
+            <ul class="divide-y divide-rule">
+              {order.lines.map((line) => (
+                <li class="flex items-start justify-between gap-4 p-4 text-sm">
+                  <span>
+                    <span class="font-semibold text-ink">{line.name}</span>
+                    {line.quantity > 1 && <span class="text-body/70"> × {line.quantity}</span>}
+                  </span>
+                  <span class="shrink-0 font-semibold text-ink">{fmt(line.total)}</span>
+                </li>
+              ))}
+            </ul>
+            <div class="flex items-center justify-between border-t border-rule px-4 py-3 text-sm">
+              <span>Shipping</span>
+              <span class="font-semibold text-ink">{order.shipping.amount > 0 ? fmt(order.shipping) : 'Free'}</span>
+            </div>
+            <div class="flex items-center justify-between border-t border-rule bg-[#fafafa] p-4">
+              <span class="text-sm font-semibold text-ink">Total paid</span>
+              <span class="text-lg font-bold text-ink">{fmt(order.total)}</span>
+            </div>
+          </div>
+
+          <div class="mt-8 rounded-lg bg-[#fafafa] p-5 text-sm">
+            <h2 class="font-semibold text-ink">What happens next</h2>
+            <p class="mt-2">
+              We will confirm the details and send tracking as soon as your order ships. You can check its
+              status any time at <a href="/account/order-lookup/" class="font-semibold text-accent">order status</a>
+              with your email and reference {order.reference}.
+            </p>
+            {phone && (
+              <p class="mt-3">
+                Questions? Call <a href={`tel:${tel}`} class="font-semibold text-accent">{phone}</a>.
+              </p>
+            )}
+          </div>
+        </>
+      ) : (
+        <>
+          <h1 class="display-heading text-5xl">{lookupFailed ? 'We could not load your order' : 'Nothing to show here'}</h1>
+          <p class="mt-4 text-sm">
+            {lookupFailed
+              ? 'Your payment may still have gone through. Please do not pay again — contact us and we will confirm the order.'
+              : 'This page confirms an order after checkout. It looks like you arrived without completing one.'}
+          </p>
+        </>
+      )
+    }
+
+    <a href={routes.shop()} class="mt-10 inline-block rounded-full border-2 border-ink px-7 py-2.5 text-sm font-semibold transition hover:bg-ink hover:text-white">
+      Back to the shop
+    </a>
+  </div>
+</BaseLayout>

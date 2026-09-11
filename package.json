@@ -1,0 +1,23 @@
+{
+  "name": "skuio-storefront-monorepo",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "templates/*"
+  ],
+  "scripts": {
+    "build": "npm run build -w @skuio/storefront -w @skuio/cli",
+    "test": "npm run test -w @skuio/storefront",
+    "check": "npm run check --workspaces --if-present",
+    "sync:template": "node scripts/sync-template.mjs",
+    "template:build": "npm run build -w @skuio/template-default",
+    "template:e2e": "npm run e2e -w @skuio/template-default"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "overrides": {
+    "vite": "^6.4.3"
+  }
+}

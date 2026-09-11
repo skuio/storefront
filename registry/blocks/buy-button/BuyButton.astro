@@ -1,0 +1,90 @@
+---
+import { formatMoney, type Product } from '@skuio/storefront'
+import { config } from '../lib/catalog'
+
+interface Props {
+  product: Product
+}
+
+const { product } = Astro.props
+const max = config.checkout.maxQuantity
+const phone = config.contact?.phone
+---
+
+{/*
+  A real form POST, not a fetch. Without JavaScript the browser submits it and
+  /api/checkout answers with a 303 to Stripe's hosted page. The script below
+  only adds a pending state.
+
+  There is no price field. The endpoint looks the price up by SKU on the
+  server, so nothing a client can edit reaches Stripe.
+*/}
+<form method="POST" action="/api/checkout" class="mt-7" data-buy-form>
+  <input type="hidden" name="sku" value={product.sku} />
+
+  <div class="flex flex-wrap items-stretch gap-3">
+    <label class="sr-only" for={`qty-${product.sku}`}>Quantity</label>
+    <input
+      id={`qty-${product.sku}`}
+      name="quantity"
+      type="number"
+      inputmode="numeric"
+      value="1"
+      min="1"
+      max={max}
+      disabled={!product.available}
+      class="w-20 rounded-md border border-rule px-3 py-3 text-center text-sm font-semibold text-ink focus:border-accent focus:ring-2 focus:ring-accent/25 focus:outline-none disabled:opacity-50"
+    />
+
+    <button
+      type="submit"
+      disabled={!product.available}
+      class="flex-1 rounded-md bg-accent px-8 py-3.5 text-sm font-bold tracking-wide text-white uppercase transition hover:bg-accent-dark focus:ring-2 focus:ring-accent/40 focus:ring-offset-2 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+      data-buy-submit
+    >
+      <span data-buy-label>
+        {product.available ? `Buy now — ${formatMoney(product.price, config.locale)}` : 'Sold out'}
+      </span>
+    </button>
+  </div>
+
+  <p class="mt-3 text-xs text-body/70">Secure checkout by Stripe. Card, Apple Pay and Google Pay accepted.</p>
+
+  <p class="mt-3 hidden rounded-md border border-accent/30 bg-accent/5 px-3 py-2 text-xs text-accent" role="alert" data-buy-error></p>
+</form>
+
+<script define:vars={{ phone }}>
+  document.querySelectorAll('[data-buy-form]').forEach((form) => {
+    const button = form.querySelector('[data-buy-submit]')
+    const label = form.querySelector('[data-buy-label]')
+    if (!button || !label) return
+    const original = label.textContent
+
+    form.addEventListener('submit', () => {
+      button.disabled = true
+      label.textContent = 'Taking you to checkout…'
+      // If the redirect never comes (offline, endpoint down), hand the button back.
+      window.setTimeout(() => {
+        if (!document.hidden) {
+          button.disabled = false
+          label.textContent = original
+        }
+      }, 12000)
+    })
+  })
+
+  const error = new URLSearchParams(window.location.search).get('checkout_error')
+  if (error) {
+    const call = phone ? ` Or call ${phone} and we will take your order by phone.` : ''
+    const text =
+      error === 'unavailable'
+        ? `Checkout is temporarily unavailable.${call}`
+        : error === 'cancelled'
+          ? 'Checkout was cancelled — nothing was charged.'
+          : `Something went wrong starting checkout. Please try again.${call}`
+    document.querySelectorAll('[data-buy-error]').forEach((el) => {
+      el.textContent = text
+      el.classList.remove('hidden')
+    })
+  }
+</script>

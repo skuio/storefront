@@ -1,0 +1,31 @@
+{
+  "name": "@skuio/cli",
+  "version": "0.1.0",
+  "description": "Scaffold a SKU.io storefront and add blocks from the registry. `npx @skuio/cli create my-store`.",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/skuio/storefront",
+    "directory": "packages/cli"
+  },
+  "bin": {
+    "skuio": "./bin/skuio.js"
+  },
+  "files": [
+    "bin",
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "check": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsup": "^8.5.0",
+    "typescript": "^5.9.3"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

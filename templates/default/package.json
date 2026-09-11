@@ -1,0 +1,30 @@
+{
+  "name": "@skuio/template-default",
+  "description": "Reference storefront: Astro + Stripe Checkout on Cloudflare Workers, catalogue from @skuio/storefront.",
+  "private": true,
+  "type": "module",
+  "version": "0.1.0",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "wrangler dev",
+    "deploy": "astro build && wrangler deploy",
+    "check": "astro check",
+    "e2e": "playwright test"
+  },
+  "dependencies": {
+    "@astrojs/cloudflare": "^12.6.10",
+    "@astrojs/sitemap": "^3.6.0",
+    "@skuio/storefront": "*",
+    "astro": "^5.14.1",
+    "stripe": "^19.3.0"
+  },
+  "devDependencies": {
+    "@astrojs/check": "^0.9.4",
+    "@playwright/test": "^1.55.0",
+    "@tailwindcss/vite": "^4.1.14",
+    "tailwindcss": "^4.1.14",
+    "typescript": "^5.9.3",
+    "wrangler": "^4.42.0"
+  }
+}

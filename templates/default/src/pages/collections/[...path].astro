@@ -1,0 +1,56 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro'
+import Breadcrumbs from '../../components/Breadcrumbs.astro'
+import ProductCard from '../../components/ProductCard.astro'
+import CategoryNav from '../../components/CategoryNav.astro'
+import { catalog, config, routes } from '../../lib/catalog'
+
+export const prerender = true
+
+export function getStaticPaths() {
+  return catalog.nonEmptyCategories().map((node) => ({
+    params: { path: node.path.join('/') },
+    props: { node },
+  }))
+}
+
+const { node } = Astro.props
+const items = catalog.productsIn(node.id, { deep: true })
+
+// Root-first chain to this node, for breadcrumbs and schema.
+const chain = []
+let cur = node
+while (cur) {
+  chain.unshift(cur)
+  cur = cur.parentId ? catalog.category(cur.parentId)! : undefined!
+}
+
+const crumbs = [
+  { label: 'Home', href: '/' },
+  { label: 'Shop', href: routes.shop() },
+  ...chain.map((c) => ({ label: c.name, href: routes.category(c) })),
+]
+
+const schema = [{
+  '@context': 'https://schema.org',
+  '@type': 'BreadcrumbList',
+  itemListElement: crumbs.map((c, i) => ({ '@type': 'ListItem', position: i + 1, name: c.label, item: new URL(c.href, config.url).href })),
+}]
+---
+
+<BaseLayout title={node.name} description={node.description ?? `${items.length} products in ${node.name} from ${config.name}.`} schema={schema}>
+  <div class="mx-auto max-w-6xl px-5 py-10">
+    <Breadcrumbs items={crumbs} />
+    <header class="mt-6 border-b border-rule pb-8">
+      <h1 class="display-heading text-5xl">{node.name}</h1>
+      {node.description && <p class="mt-3 max-w-2xl text-sm">{node.description}</p>}
+      <p class="mt-3 text-sm text-body/70">{items.length} {items.length === 1 ? 'product' : 'products'}</p>
+    </header>
+
+    {node.children.length > 0 && <div class="mt-8"><CategoryNav nodes={node.children} label={`${node.name} categories`} /></div>}
+
+    <div class="mt-10 grid grid-cols-2 gap-6 sm:grid-cols-3 lg:grid-cols-4">
+      {items.map((p, i) => <ProductCard product={p} loading={i < 8 ? 'eager' : 'lazy'} />)}
+    </div>
+  </div>
+</BaseLayout>

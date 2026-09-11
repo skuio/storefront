@@ -1,0 +1,57 @@
+---
+import '../styles/global.css'
+import SiteHeader from '../components/SiteHeader.astro'
+import SiteFooter from '../components/SiteFooter.astro'
+import { config } from '../lib/catalog'
+
+interface Props {
+  title: string
+  description?: string
+  overlayHeader?: boolean
+  image?: string
+  canonical?: string
+  noindex?: boolean
+  /** Raw JSON-LD objects to embed. */
+  schema?: unknown[]
+}
+
+const {
+  title,
+  description = `${config.name} — shop online.`,
+  overlayHeader = false,
+  image,
+  canonical,
+  noindex = false,
+  schema = [],
+} = Astro.props
+
+const canonicalUrl = canonical ?? new URL(Astro.url.pathname, config.url).href
+const ogImage = image ? new URL(image, config.url).href : undefined
+const fullTitle = title === config.name ? title : `${title} | ${config.name}`
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{fullTitle}</title>
+    <meta name="description" content={description} />
+    <link rel="canonical" href={canonicalUrl} />
+    {noindex && <meta name="robots" content="noindex, nofollow" />}
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content={config.name} />
+    <meta property="og:title" content={fullTitle} />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content={canonicalUrl} />
+    {ogImage && <meta property="og:image" content={ogImage} />}
+    <meta name="twitter:card" content={ogImage ? 'summary_large_image' : 'summary'} />
+    <link rel="sitemap" href="/sitemap-index.xml" />
+    {schema.map((s) => <script type="application/ld+json" is:inline set:html={JSON.stringify(s)} />)}
+  </head>
+  <body class="flex min-h-screen flex-col">
+    <SiteHeader overlay={overlayHeader} />
+    <main class="flex-1"><slot /></main>
+    <SiteFooter />
+  </body>
+</html>

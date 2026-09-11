@@ -1,0 +1,19 @@
+---
+import { formatMoney, type Money } from '@skuio/storefront'
+import { config } from '../lib/catalog'
+
+interface Props {
+  price: Money
+  compareAt?: Money
+  size?: 'sm' | 'md' | 'lg'
+}
+
+const { price, compareAt, size = 'md' } = Astro.props
+const discounted = compareAt && compareAt.amount > price.amount
+const sizes = { sm: 'text-base', md: 'text-lg', lg: 'text-3xl' }
+---
+
+<span class="inline-flex items-baseline gap-2">
+  <span class:list={['font-bold text-ink', sizes[size]]}>{formatMoney(price, config.locale)}</span>
+  {discounted && <span class="text-sm text-body/60 line-through">{formatMoney(compareAt!, config.locale)}</span>}
+</span>

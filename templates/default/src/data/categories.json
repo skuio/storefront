@@ -1,0 +1,52 @@
+[
+  {
+    "id": "apparel",
+    "name": "Apparel",
+    "slug": "apparel",
+    "parentId": null,
+    "description": "Everyday layers built to last."
+  },
+  {
+    "id": "apparel-tees",
+    "name": "Tees",
+    "slug": "tees",
+    "parentId": "apparel"
+  },
+  {
+    "id": "apparel-hoodies",
+    "name": "Hoodies",
+    "slug": "hoodies",
+    "parentId": "apparel"
+  },
+  {
+    "id": "gear",
+    "name": "Gear",
+    "slug": "gear",
+    "parentId": null,
+    "description": "Bags and carry for the trail and the commute."
+  },
+  {
+    "id": "gear-bags",
+    "name": "Bags",
+    "slug": "bags",
+    "parentId": "gear"
+  },
+  {
+    "id": "gear-bottles",
+    "name": "Bottles",
+    "slug": "bottles",
+    "parentId": "gear"
+  },
+  {
+    "id": "home",
+    "name": "Home",
+    "slug": "home",
+    "parentId": null
+  },
+  {
+    "id": "home-mugs",
+    "name": "Mugs",
+    "slug": "mugs",
+    "parentId": "home"
+  }
+]
