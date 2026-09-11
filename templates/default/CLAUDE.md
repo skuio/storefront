@@ -86,6 +86,13 @@ Links use `routes.product()` / `routes.category()` so they follow the config.
 `images[].src` must match a filename in `src/assets/products/`. Product `sku`
 and `slug` must be unique — the build fails otherwise.
 
+**Migrate from WooCommerce.** `npm run migrate:woocommerce -- --origin https://old-site.com`
+reads the public Store API into `src/data/`, then `npm run migrate:images`
+pulls the pictures. Every product keeps its `legacyPath`; set `routes` in
+`storefront.config.ts` to the old URL shape (or add lines to `public/_redirects`)
+so nothing indexed moves. Variable products are flagged: the kit has no
+variants yet.
+
 **Connect to SKU.io.** Swap `jsonProvider(...)` for `skuioProvider(...)` in
 `storefront.config.ts`. See `.claude/skills/connect-skuio`. (The Storefront API
 is not live yet; the provider throws a clear error until it is.)

@@ -23,11 +23,19 @@ function stripeKey(): string | undefined {
   return readFileSync(envFile, 'utf8').match(/^STRIPE_SECRET_KEY=(.+)$/m)?.[1]?.trim()
 }
 
-test('home page lists categories and links into the catalogue', async ({ page }) => {
+test('home page lists categories and links into the catalogue', async ({ page, request }) => {
   await page.goto('/', { waitUntil: 'load' })
   await expect(page.locator('main h1').first()).toBeVisible({ timeout: 15_000 })
   const links = page.locator('a[href^="/collections/"], a[href^="/products/"]')
   expect(await links.count()).toBeGreaterThan(0)
+
+  // Links must resolve, not merely exist: a route file that does not match
+  // `routes` in storefront.config.ts produces links to pages that 404.
+  const hrefs = [...new Set(await links.evaluateAll((els) => els.map((e) => (e as HTMLAnchorElement).getAttribute('href')!)))]
+  for (const href of hrefs.slice(0, 6)) {
+    const res = await request.get(href)
+    expect(res.status(), `${href} should resolve`).toBe(200)
+  }
 })
 
 test('product page has a buy form that carries a SKU and no price', async ({ page }) => {

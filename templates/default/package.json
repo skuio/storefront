@@ -10,7 +10,9 @@
     "preview": "wrangler dev",
     "deploy": "astro build && wrangler deploy",
     "check": "astro check",
-    "e2e": "playwright test"
+    "e2e": "playwright test",
+    "migrate:woocommerce": "node scripts/export-woocommerce.mjs",
+    "migrate:images": "node scripts/fetch-images.mjs"
   },
   "dependencies": {
     "@astrojs/cloudflare": "^12.6.10",
