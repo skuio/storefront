@@ -167,12 +167,108 @@ paths:
                 completed: { $ref: '#/components/examples/CheckoutCompleted' }
         '404': { $ref: '#/components/responses/NotFound' }
 
+  /customers/session:
+    post:
+      operationId: requestCustomerSession
+      summary: Email the customer a single-use sign-in link
+      description: Always 202 so the endpoint cannot enumerate customers.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, return_url]
+              properties:
+                email: { type: string, format: email }
+                return_url: { type: string, format: uri, description: 'The store page that will receive ?token=…' }
+      responses:
+        '202': { description: Accepted }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+    delete:
+      operationId: revokeCustomerSession
+      summary: Sign out
+      security:
+        - storefrontToken: []
+          customerSession: []
+      responses:
+        '204': { description: Revoked }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /customers/session/exchange:
+    post:
+      operationId: exchangeCustomerToken
+      summary: Turn a magic-link token into a session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token: { type: string }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CustomerSession' }
+              examples:
+                default: { $ref: '#/components/examples/CustomerSession' }
+        '401':
+          description: Token expired, used, or unknown
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+
+  /customers/me:
+    get:
+      operationId: getCustomer
+      summary: The signed-in customer
+      security:
+        - storefrontToken: []
+          customerSession: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Customer' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /customers/me/orders:
+    get:
+      operationId: listCustomerOrders
+      summary: The signed-in customer's orders, newest first
+      security:
+        - storefrontToken: []
+          customerSession: []
+      parameters:
+        - $ref: '#/components/parameters/cursor'
+        - $ref: '#/components/parameters/limit'
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, next_cursor]
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/CustomerOrder' } }
+                  next_cursor: { type: [string, 'null'] }
+              examples:
+                default: { $ref: '#/components/examples/CustomerOrders' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
 components:
   securitySchemes:
     storefrontToken:
       type: http
       scheme: bearer
       bearerFormat: 'sf_live_… or sf_test_…'
+    customerSession:
+      type: apiKey
+      in: header
+      name: X-Customer-Session
+      description: Session token from /customers/session/exchange. Sent with the storefront bearer, never instead of it.
 
   parameters:
     cursor:
@@ -362,6 +458,81 @@ components:
         created_at: { type: string, format: date-time }
         expires_at: { type: [string, 'null'], format: date-time }
 
+    Customer:
+      type: object
+      required: [id, email]
+      properties:
+        id: { type: string }
+        email: { type: string, format: email }
+        name: { type: [string, 'null'] }
+        phone: { type: [string, 'null'] }
+        customer_group: { type: [string, 'null'], description: Price-list group, when the tenant uses them }
+        default_shipping_address:
+          type: [object, 'null']
+          properties:
+            name: { type: [string, 'null'] }
+            line1: { type: [string, 'null'] }
+            line2: { type: [string, 'null'] }
+            city: { type: [string, 'null'] }
+            state: { type: [string, 'null'] }
+            postal_code: { type: [string, 'null'] }
+            country: { type: [string, 'null'] }
+
+    CustomerSession:
+      type: object
+      required: [session_token, expires_at, customer]
+      properties:
+        session_token: { type: string, description: 'Opaque. Store in an httpOnly cookie; never expose to page JavaScript.' }
+        expires_at: { type: string, format: date-time }
+        customer: { $ref: '#/components/schemas/Customer' }
+
+    CustomerOrder:
+      type: object
+      required: [id, reference, status, fulfillment_status, currency, subtotal, shipping, total, lines, created_at]
+      properties:
+        id: { type: string, description: SKU.io sales order id }
+        reference: { type: string, description: Human-readable order number }
+        status: { type: string, enum: [open, completed, cancelled, refunded] }
+        fulfillment_status: { type: string, enum: [unfulfilled, partial, fulfilled] }
+        currency: { type: string }
+        subtotal: { $ref: '#/components/schemas/Money' }
+        shipping: { $ref: '#/components/schemas/Money' }
+        total: { $ref: '#/components/schemas/Money' }
+        lines:
+          type: array
+          items:
+            type: object
+            required: [sku, name, quantity, unit_price, total]
+            properties:
+              sku: { type: string }
+              name: { type: string }
+              quantity: { type: integer }
+              unit_price: { $ref: '#/components/schemas/Money' }
+              total: { $ref: '#/components/schemas/Money' }
+              image: { type: [string, 'null'], format: uri }
+        shipments:
+          type: array
+          items:
+            type: object
+            required: [carrier, tracking_number]
+            properties:
+              carrier: { type: string }
+              tracking_number: { type: string }
+              tracking_url: { type: [string, 'null'], format: uri }
+              shipped_at: { type: string, format: date-time }
+        shipping_address:
+          type: [object, 'null']
+          properties:
+            name: { type: [string, 'null'] }
+            line1: { type: [string, 'null'] }
+            line2: { type: [string, 'null'] }
+            city: { type: [string, 'null'] }
+            state: { type: [string, 'null'] }
+            postal_code: { type: [string, 'null'] }
+            country: { type: [string, 'null'] }
+        channel: { type: string, description: Which sales channel the order came through }
+        created_at: { type: string, format: date-time }
+
     Error:
       type: object
       required: [error]
@@ -478,6 +649,36 @@ components:
         metadata: {}
         created_at: '2026-09-11T02:10:00Z'
         expires_at: null
+    CustomerSession:
+      value:
+        session_token: cst_9f8e7d6c5b4a
+        expires_at: '2026-10-11T02:00:00Z'
+        customer:
+          id: cus_01J8
+          email: qa@example.com
+          name: QA Buyer
+          phone: '+17025550147'
+          customer_group: null
+          default_shipping_address: { name: QA Buyer, line1: 6185 Beesley Dr, line2: null, city: Las Vegas, state: NV, postal_code: '89115', country: US }
+    CustomerOrders:
+      value:
+        data:
+          - id: so_3992
+            reference: '3992'
+            status: completed
+            fulfillment_status: fulfilled
+            currency: usd
+            subtotal: { amount: 159900, currency: usd }
+            shipping: { amount: 0, currency: usd }
+            total: { amount: 159900, currency: usd }
+            lines:
+              - { sku: VDCCHEVYCORC60508, name: CHEVROLET CORVETTE C6 2005-2013 VERTICAL LAMBO DOORS, quantity: 1, unit_price: { amount: 159900, currency: usd }, total: { amount: 159900, currency: usd }, image: 'https://cdn.example.com/VDCCHEVYCORC60508.jpg' }
+            shipments:
+              - { carrier: FedEx, tracking_number: '123456789012', tracking_url: 'https://www.fedex.com/fedextrack/?trknbr=123456789012', shipped_at: '2026-09-02T17:00:00Z' }
+            shipping_address: { name: QA Buyer, line1: 6185 Beesley Dr, line2: null, city: Las Vegas, state: NV, postal_code: '89115', country: US }
+            channel: Example Doors
+            created_at: '2026-08-29T15:12:00Z'
+        next_cursor: null
     ErrorUnpurchasable:
       value:
         error:

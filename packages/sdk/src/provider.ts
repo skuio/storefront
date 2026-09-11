@@ -1,4 +1,4 @@
-import type { Category, Checkout, CheckoutRequest, Product } from './types.js'
+import type { Category, Checkout, CheckoutRequest, Customer, CustomerOrder, CustomerSession, Product } from './types.js'
 
 /**
  * A source of catalogue data.
@@ -20,4 +20,20 @@ export interface CatalogProvider {
    */
   createCheckout?(request: CheckoutRequest): Promise<Checkout>
   getCheckout?(id: string): Promise<Checkout>
+  /**
+   * Present when the provider can sign customers in and show their orders.
+   * The store keeps the session token in an httpOnly cookie and passes it
+   * back here; the browser never sees it.
+   */
+  customers?: CustomerProvider
+}
+
+export interface CustomerProvider {
+  /** Email a single-use sign-in link. Resolves whether or not the email is known. */
+  requestSession(email: string, returnUrl: string): Promise<void>
+  /** Turn the link's token into a session. Rejects when expired, used, or unknown. */
+  exchange(token: string): Promise<CustomerSession>
+  me(sessionToken: string): Promise<Customer>
+  orders(sessionToken: string): Promise<CustomerOrder[]>
+  revoke(sessionToken: string): Promise<void>
 }

@@ -1,0 +1,64 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro'
+import Breadcrumbs from '../../components/Breadcrumbs.astro'
+import { config } from '../../lib/catalog'
+import { readSession } from '../../lib/account'
+
+// Server-rendered so a signed-in customer goes straight to their orders.
+export const prerender = false
+
+const customers = config.provider.customers
+if (customers && readSession(Astro.cookies)) return Astro.redirect('/account/orders/', 303)
+
+const sent = Astro.url.searchParams.get('sent') === '1'
+const error = Astro.url.searchParams.get('error')
+const phone = config.contact?.phone
+---
+
+<BaseLayout title="Your account" noindex>
+  <div class="mx-auto max-w-xl px-5 py-10">
+    <Breadcrumbs items={[{ label: 'Home', href: '/' }, { label: 'Account' }]} />
+    <h1 class="display-heading mt-6 text-5xl">Your account</h1>
+
+    {
+      !customers ? (
+        <div class="mt-6 text-sm">
+          <p>
+            Sign-in is not available on this store yet. You can still check any order with
+            the email you used and the reference from your confirmation.
+          </p>
+          <a href="/account/order-lookup/" class="mt-6 inline-block rounded-md bg-accent px-6 py-3 text-sm font-bold tracking-wide text-white uppercase transition hover:bg-accent-dark">
+            Find my order
+          </a>
+        </div>
+      ) : sent ? (
+        <div class="mt-6 rounded-md border border-green-600/30 bg-green-50 p-4 text-sm text-green-800" role="status">
+          <p class="font-semibold">Check your email.</p>
+          <p class="mt-1">If that address has an account, a sign-in link is on its way. It works once and expires in 15 minutes.</p>
+        </div>
+      ) : (
+        <>
+          <p class="mt-3 text-sm">Enter your email and we will send you a sign-in link — no password needed.</p>
+          {error === 'link' && (
+            <p class="mt-4 rounded-md border border-accent/30 bg-accent/5 px-4 py-3 text-sm text-accent" role="alert">
+              That sign-in link has expired or was already used. Request a new one below.
+            </p>
+          )}
+          <form method="POST" action="/api/account/session" class="mt-6 space-y-4">
+            <div>
+              <label for="email" class="block text-xs font-semibold tracking-wide text-ink uppercase">Email address</label>
+              <input id="email" name="email" type="email" required autocomplete="email"
+                class="mt-1.5 w-full rounded-md border border-rule px-3 py-2.5 text-sm focus:border-accent focus:ring-2 focus:ring-accent/25 focus:outline-none" />
+            </div>
+            <button type="submit" class="w-full rounded-md bg-accent px-8 py-3 text-sm font-bold tracking-wide text-white uppercase transition hover:bg-accent-dark">
+              Email me a sign-in link
+            </button>
+          </form>
+          <p class="mt-6 text-xs text-body/70">
+            No account? Any order can be checked at <a href="/account/order-lookup/" class="font-semibold text-accent">order status</a>{phone ? `, or call ${phone}` : ''}.
+          </p>
+        </>
+      )
+    }
+  </div>
+</BaseLayout>

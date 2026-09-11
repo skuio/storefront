@@ -74,13 +74,47 @@ so it can run its own `onOrderCompleted`. `POST <url>` with body
 the webhook secret shown once at registration. Retried with backoff for 24h
 on non-2xx. Registration is done in the SKU.io admin, not via this API.
 
-## Deferred to v1.1
+## Customer sessions (v1.1) — the portal
 
-- **Customer sessions** (`POST /customers/session` by magic link, `GET
-  /customers/me/orders`, `POST /customers/me/reorder`) — the portal blocks.
+A customer signs in with nothing but an email address. No passwords are
+stored anywhere in the store or in SKU.io for this flow.
+
+1. `POST /customers/session` `{ email, return_url }` — SKU.io emails a
+   single-use link to `return_url?token=…` (valid 15 minutes). Always 202,
+   whether or not the email is known, so the endpoint cannot be used to
+   enumerate customers.
+2. The store's `/account/verify` page receives the token and calls
+   `POST /customers/session/exchange` `{ token }` → `{ session_token,
+   expires_at, customer }`. The store keeps `session_token` in an httpOnly,
+   Secure, SameSite=Lax cookie. It never reaches the browser's JavaScript.
+3. Authenticated customer calls send **both** the storefront bearer token and
+   `X-Customer-Session: <session_token>`:
+   - `GET /customers/me` — profile and default addresses
+   - `GET /customers/me/orders` — this customer's orders on this storefront
+     (and, when the tenant allows it, on the tenant's other channels), newest
+     first, with fulfilment status and tracking
+   - `DELETE /customers/session` — sign out (revokes the token)
+4. A 401 on any `X-Customer-Session` call means the session is expired or
+   revoked; the store clears the cookie and shows the sign-in form.
+
+Sessions last 30 days and are bound to the storefront that created them.
+Reorder is a store-side action — the order's lines go into the cart — so
+it needs no endpoint.
+
+| Method | Path | Auth | Purpose |
+|---|---|---|---|
+| POST | `/customers/session` | storefront | Send a magic link |
+| POST | `/customers/session/exchange` | storefront | Turn the link's token into a session |
+| GET | `/customers/me` | storefront + customer | Profile |
+| GET | `/customers/me/orders` | storefront + customer | Order history with fulfilment |
+| DELETE | `/customers/session` | storefront + customer | Sign out |
+
+## Deferred to v1.2
+
 - **Search** (`GET /products?q=`) — full-text over name/sku/attributes.
 - **Price lists by customer group on read** — v1 returns the storefront's
-  default group; logged-in B2B pricing arrives with customer sessions.
+  default group; B2B pricing for a signed-in customer arrives here.
+- **Saved payment methods / net terms at checkout** for B2B accounts.
 
 ## What SKU.io has to build (in order)
 

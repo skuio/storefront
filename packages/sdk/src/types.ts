@@ -142,3 +142,51 @@ export interface Checkout {
   createdAt: string
   expiresAt?: string
 }
+
+// ---------------------------------------------------------------------------
+// Customer sessions (the portal) — a provider capability
+// ---------------------------------------------------------------------------
+
+export interface Customer {
+  id: string
+  email: string
+  name?: string
+  phone?: string
+  /** Price-list group, when the tenant uses them. */
+  customerGroup?: string
+  defaultShippingAddress?: Address
+}
+
+export interface CustomerSession {
+  /** Opaque. Keep it in an httpOnly cookie; it must never reach page JavaScript. */
+  sessionToken: string
+  expiresAt: string
+  customer: Customer
+}
+
+export interface Shipment {
+  carrier: string
+  trackingNumber: string
+  trackingUrl?: string
+  shippedAt?: string
+}
+
+export type CustomerOrderStatus = 'open' | 'completed' | 'cancelled' | 'refunded'
+export type FulfillmentStatus = 'unfulfilled' | 'partial' | 'fulfilled'
+
+export interface CustomerOrder {
+  id: string
+  /** Human-readable order number. */
+  reference: string
+  status: CustomerOrderStatus
+  fulfillmentStatus: FulfillmentStatus
+  subtotal: Money
+  shipping: Money
+  total: Money
+  lines: (OrderLine & { image?: string })[]
+  shipments: Shipment[]
+  shippingAddress?: Address
+  /** Which sales channel the order came through. */
+  channel?: string
+  createdAt: string
+}

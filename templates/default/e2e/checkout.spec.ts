@@ -144,3 +144,22 @@ test('checkout opens one shipping region at a time', async ({ request }) => {
   expect(intl.shipping_options).toHaveLength(1)
   expect(intl.metadata.region).toBe('international')
 })
+
+test('account pages degrade honestly on a provider without customer sessions', async ({ request }) => {
+  // The json provider has no customers capability: the sign-in page explains and
+  // points at order lookup; protected pages and the session endpoints bounce home.
+  const account = await request.get('/account/')
+  expect(account.status()).toBe(200)
+  expect(await account.text()).toContain('/account/order-lookup/')
+
+  const orders = await request.get('/account/orders/', { maxRedirects: 0 })
+  expect(orders.status()).toBe(303)
+  expect(orders.headers()['location']).toBe('/account/')
+
+  const verify = await request.get('/account/verify/?token=anything', { maxRedirects: 0 })
+  expect(verify.status()).toBe(303)
+  expect(verify.headers()['location']).toBe('/account/?error=link')
+
+  const session = await request.post('/api/account/session', { form: { email: 'x@example.com' }, headers: browserHeaders, maxRedirects: 0 })
+  expect(session.status()).toBe(303)
+})

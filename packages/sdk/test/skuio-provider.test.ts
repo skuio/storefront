@@ -56,6 +56,23 @@ const checkoutCompleted = {
   sales_order_id: 'so_3992', expires_at: null,
 }
 
+const customer = {
+  id: 'cus_01J8', email: 'qa@example.com', name: 'QA Buyer', phone: '+17025550147', customer_group: null,
+  default_shipping_address: { name: 'QA Buyer', line1: '6185 Beesley Dr', line2: null, city: 'Las Vegas', state: 'NV', postal_code: '89115', country: 'US' },
+}
+const session = { session_token: 'cst_9f8e7d6c5b4a', expires_at: '2026-10-11T02:00:00Z', customer }
+const customerOrders = {
+  data: [{
+    id: 'so_3992', reference: '3992', status: 'completed', fulfillment_status: 'fulfilled', currency: 'usd',
+    subtotal: { amount: 159900, currency: 'usd' }, shipping: { amount: 0, currency: 'usd' }, total: { amount: 159900, currency: 'usd' },
+    lines: [{ sku: 'VDCCHEVYCORC60508', name: 'CHEVROLET CORVETTE C6 2005-2013 VERTICAL LAMBO DOORS', quantity: 1, unit_price: { amount: 159900, currency: 'usd' }, total: { amount: 159900, currency: 'usd' }, image: 'https://cdn.example.com/VDCCHEVYCORC60508.jpg' }],
+    shipments: [{ carrier: 'FedEx', tracking_number: '123456789012', tracking_url: 'https://www.fedex.com/fedextrack/?trknbr=123456789012', shipped_at: '2026-09-02T17:00:00Z' }],
+    shipping_address: { name: 'QA Buyer', line1: '6185 Beesley Dr', line2: null, city: 'Las Vegas', state: 'NV', postal_code: '89115', country: 'US' },
+    channel: 'Example Doors', created_at: '2026-08-29T15:12:00Z',
+  }],
+  next_cursor: null,
+}
+
 /** A tiny router standing in for the tenant. Records every request it sees. */
 function fakeTenant(overrides: Record<string, (init?: RequestInit) => Response> = {}) {
   const seen: { url: string; init?: RequestInit }[] = []
@@ -68,6 +85,10 @@ function fakeTenant(overrides: Record<string, (init?: RequestInit) => Response> 
     '/products?limit=100&cursor=c2Vjb25k': () => json(productPage2),
     '/checkouts': (init) => (init?.method === 'POST' ? json(checkoutCreated, 201) : json({ error: { code: 'method', message: 'nope' } }, 405)),
     '/checkouts/chk_01J8X': () => json(checkoutCompleted),
+    '/customers/session': (init) => (init?.method === 'POST' ? new Response(null, { status: 202 }) : init?.method === 'DELETE' ? new Response(null, { status: 204 }) : json({ error: { code: 'method', message: 'nope' } }, 405)),
+    '/customers/session/exchange': (init) => (JSON.parse(String(init?.body)).token === 'good' ? json(session) : json({ error: { code: 'invalid_token', message: 'Link expired' } }, 401)),
+    '/customers/me': () => json(customer),
+    '/customers/me/orders?limit=100': () => json(customerOrders),
     ...overrides,
   }
   const fetchImpl = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
@@ -167,5 +188,40 @@ describe('skuioProvider', () => {
     const err = await provider.createCheckout!({ items: [{ sku: 'VDCTOYSUP9302', quantity: 1 }], successUrl: 'https://x', cancelUrl: 'https://x' }).catch((e) => e)
     expect(err).toBeInstanceOf(SkuioApiError)
     expect(err).toMatchObject({ status: 422, code: 'unpurchasable_sku', details: { sku: 'VDCTOYSUP9302' } })
+  })
+})
+
+describe('skuioProvider.customers', () => {
+  it('requests a magic link and resolves on 202 with no body', async () => {
+    const { t, provider } = make()
+    await expect(provider.customers!.requestSession('qa@example.com', 'https://x/account/verify')).resolves.toBeUndefined()
+    const req = t.seen.find((s) => s.url.endsWith('/customers/session'))!
+    expect(JSON.parse(req.init!.body as string)).toEqual({ email: 'qa@example.com', return_url: 'https://x/account/verify' })
+  })
+
+  it('exchanges a token for a session and maps the customer', async () => {
+    const { provider } = make()
+    const s = await provider.customers!.exchange('good')
+    expect(s.sessionToken).toBe('cst_9f8e7d6c5b4a')
+    expect(s.customer).toMatchObject({ id: 'cus_01J8', email: 'qa@example.com', name: 'QA Buyer' })
+    expect(s.customer.defaultShippingAddress).toMatchObject({ line1: '6185 Beesley Dr', postalCode: '89115', line2: undefined })
+    expect(s.customer.customerGroup).toBeUndefined()
+    await expect(provider.customers!.exchange('stale')).rejects.toMatchObject({ status: 401, code: 'invalid_token' })
+  })
+
+  it('sends the session header alongside the bearer for customer calls', async () => {
+    const { t, provider } = make()
+    const orders = await provider.customers!.orders('cst_9f8e7d6c5b4a')
+    const req = t.seen.find((s) => s.url.includes('/customers/me/orders'))!
+    const h = req.init!.headers as Record<string, string>
+    expect(h.Authorization).toBe('Bearer sf_test_abc')
+    expect(h['X-Customer-Session']).toBe('cst_9f8e7d6c5b4a')
+    expect(orders[0]).toMatchObject({
+      id: 'so_3992', reference: '3992', status: 'completed', fulfillmentStatus: 'fulfilled',
+      total: { amount: 159900 }, channel: 'Example Doors',
+    })
+    expect(orders[0]!.lines[0]).toMatchObject({ sku: 'VDCCHEVYCORC60508', image: expect.stringContaining('.jpg') })
+    expect(orders[0]!.shipments[0]).toMatchObject({ carrier: 'FedEx', trackingNumber: '123456789012' })
+    await expect(provider.customers!.revoke('cst_9f8e7d6c5b4a')).resolves.toBeUndefined()
   })
 })

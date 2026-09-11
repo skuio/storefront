@@ -169,6 +169,41 @@
         "breadcrumbs",
         "checkout"
       ]
+    },
+    {
+      "name": "account",
+      "description": "Customer portal: passwordless sign-in by emailed link, order history with fulfilment and tracking, reorder into the cart. Needs a provider with the customers capability (SKU.io); degrades to order-lookup without one.",
+      "files": [
+        {
+          "from": "lib/account.ts",
+          "to": "src/lib/account.ts"
+        },
+        {
+          "from": "pages/account/index.astro",
+          "to": "src/pages/account/index.astro"
+        },
+        {
+          "from": "pages/account/verify.astro",
+          "to": "src/pages/account/verify.astro"
+        },
+        {
+          "from": "pages/account/orders/index.astro",
+          "to": "src/pages/account/orders/index.astro"
+        },
+        {
+          "from": "pages/api/account/session.ts",
+          "to": "src/pages/api/account/session.ts"
+        },
+        {
+          "from": "pages/api/account/sign-out.ts",
+          "to": "src/pages/api/account/sign-out.ts"
+        }
+      ],
+      "registryDependencies": [
+        "breadcrumbs",
+        "order-lookup",
+        "cart"
+      ]
     }
   ]
 }

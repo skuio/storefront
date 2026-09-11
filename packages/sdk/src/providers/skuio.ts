@@ -1,9 +1,13 @@
 import type { CatalogProvider } from '../provider.js'
 import type {
+  Address,
   Availability,
   Category,
   Checkout,
   CheckoutRequest,
+  Customer,
+  CustomerOrder,
+  CustomerSession,
   Money,
   Product,
 } from '../types.js'
@@ -105,6 +109,44 @@ interface WireCheckout {
   expires_at?: string | null
 }
 
+interface WireAddress {
+  name?: string | null
+  line1?: string | null
+  line2?: string | null
+  city?: string | null
+  state?: string | null
+  postal_code?: string | null
+  country?: string | null
+}
+interface WireCustomer {
+  id: string
+  email: string
+  name?: string | null
+  phone?: string | null
+  customer_group?: string | null
+  default_shipping_address?: WireAddress | null
+}
+interface WireCustomerSession {
+  session_token: string
+  expires_at: string
+  customer: WireCustomer
+}
+interface WireCustomerOrder {
+  id: string
+  reference: string
+  status: CustomerOrder['status']
+  fulfillment_status: CustomerOrder['fulfillmentStatus']
+  currency: string
+  subtotal: WireMoney
+  shipping: WireMoney
+  total: WireMoney
+  lines: { sku: string; name: string; quantity: number; unit_price: WireMoney; total: WireMoney; image?: string | null }[]
+  shipments?: { carrier: string; tracking_number: string; tracking_url?: string | null; shipped_at?: string }[]
+  shipping_address?: WireAddress | null
+  channel?: string
+  created_at: string
+}
+
 const orUndefined = <T>(v: T | null | undefined): T | undefined => (v === null ? undefined : v)
 
 /**
@@ -150,15 +192,16 @@ export function skuioProvider(opts: SkuioProviderOptions): CatalogProvider {
       }
       throw new SkuioApiError(res.status, code, message, details)
     }
+    if (res.status === 202 || res.status === 204) return undefined as T
     return (await res.json()) as T
   }
 
-  async function paginate<T>(path: string): Promise<T[]> {
+  async function paginate<T>(path: string, headers?: Record<string, string>): Promise<T[]> {
     const out: T[] = []
     let cursor: string | null = null
     do {
       const sep = path.includes('?') ? '&' : '?'
-      const page: WirePage<T> = await call(`${path}${sep}limit=${pageSize}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`)
+      const page: WirePage<T> = await call(`${path}${sep}limit=${pageSize}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`, headers ? { headers } : undefined)
       out.push(...page.data)
       cursor = page.next_cursor
     } while (cursor)
@@ -193,6 +236,28 @@ export function skuioProvider(opts: SkuioProviderOptions): CatalogProvider {
 
     async getCheckout(id: string) {
       return toCheckout(await call<WireCheckout>(`/checkouts/${encodeURIComponent(id)}`))
+    },
+
+    customers: {
+      async requestSession(email, returnUrl) {
+        await call<unknown>('/customers/session', {
+          method: 'POST',
+          body: JSON.stringify({ email, return_url: returnUrl }),
+        })
+      },
+      async exchange(token) {
+        return toSession(await call<WireCustomerSession>('/customers/session/exchange', { method: 'POST', body: JSON.stringify({ token }) }))
+      },
+      async me(sessionToken) {
+        return toCustomer(await call<WireCustomer>('/customers/me', { headers: { 'X-Customer-Session': sessionToken } }))
+      },
+      async orders(sessionToken) {
+        const rows = await paginate<WireCustomerOrder>('/customers/me/orders', { 'X-Customer-Session': sessionToken })
+        return rows.map(toCustomerOrder)
+      },
+      async revoke(sessionToken) {
+        await call<unknown>('/customers/session', { method: 'DELETE', headers: { 'X-Customer-Session': sessionToken } })
+      },
     },
   }
 }
@@ -281,5 +346,52 @@ export function toCheckout(w: WireCheckout): Checkout {
     metadata: { ...(w.metadata ?? {}) },
     createdAt: w.created_at,
     ...(w.expires_at ? { expiresAt: w.expires_at } : {}),
+  }
+}
+
+function toAddress(a: WireAddress | null | undefined): Address | undefined {
+  if (!a) return undefined
+  return {
+    name: orUndefined(a.name), line1: orUndefined(a.line1), line2: orUndefined(a.line2), city: orUndefined(a.city),
+    state: orUndefined(a.state), postalCode: orUndefined(a.postal_code), country: orUndefined(a.country),
+  }
+}
+
+export function toCustomer(c: WireCustomer): Customer {
+  return {
+    id: c.id,
+    email: c.email,
+    ...(c.name ? { name: c.name } : {}),
+    ...(c.phone ? { phone: c.phone } : {}),
+    ...(c.customer_group ? { customerGroup: c.customer_group } : {}),
+    ...(c.default_shipping_address ? { defaultShippingAddress: toAddress(c.default_shipping_address) } : {}),
+  }
+}
+
+export function toSession(s: WireCustomerSession): CustomerSession {
+  return { sessionToken: s.session_token, expiresAt: s.expires_at, customer: toCustomer(s.customer) }
+}
+
+export function toCustomerOrder(o: WireCustomerOrder): CustomerOrder {
+  return {
+    id: o.id,
+    reference: o.reference,
+    status: o.status,
+    fulfillmentStatus: o.fulfillment_status,
+    subtotal: toMoney(o.subtotal),
+    shipping: toMoney(o.shipping),
+    total: toMoney(o.total),
+    lines: o.lines.map((l) => ({
+      sku: l.sku, name: l.name, quantity: l.quantity, unitPrice: toMoney(l.unit_price), total: toMoney(l.total),
+      ...(l.image ? { image: l.image } : {}),
+    })),
+    shipments: (o.shipments ?? []).map((sh) => ({
+      carrier: sh.carrier, trackingNumber: sh.tracking_number,
+      ...(sh.tracking_url ? { trackingUrl: sh.tracking_url } : {}),
+      ...(sh.shipped_at ? { shippedAt: sh.shipped_at } : {}),
+    })),
+    ...(o.shipping_address ? { shippingAddress: toAddress(o.shipping_address) } : {}),
+    ...(o.channel ? { channel: o.channel } : {}),
+    createdAt: o.created_at,
   }
 }

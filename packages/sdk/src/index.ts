@@ -1,5 +1,5 @@
 export type * from './types.js'
-export type { CatalogProvider } from './provider.js'
+export type { CatalogProvider, CustomerProvider } from './provider.js'
 export { Catalog } from './catalog.js'
 export { defineRoutes, DEFAULT_ROUTES, type Routes, type RoutePatterns } from './routes.js'
 export { formatMoney, money, addMoney, multiplyMoney } from './money.js'

@@ -16,7 +16,8 @@ src/lib/orders.ts          what happens when an order is paid  <-- the integrati
 src/lib/cart.client.ts     browser cart (localStorage); client-only, import from <script> only
 src/components/            UI blocks — copied from the registry, now owned by this project
 src/pages/                 routes; Astro routes by filename
-src/pages/api/             the only code that runs on the server (checkout, webhook, forms)
+src/pages/api/             the only code that runs on the server (checkout, webhook, forms, account)
+src/pages/account/         portal: sign-in by emailed link, orders, verify; SSR, cookie-based
 src/data/*.json            the catalogue, when using the json provider
 src/assets/products/       product images, matched to products by filename
 src/styles/global.css      design tokens; change these and everything follows
@@ -110,6 +111,14 @@ session for everywhere else with only the other rates. Leave `countries` off
 every option for a single region. Stripe Checkout cannot filter rates by
 country by itself — this is how the store stops an international customer
 picking the domestic rate.
+
+**The customer portal.** `/account/` signs customers in with an emailed
+link — no passwords anywhere. The session token lives in one httpOnly cookie
+(`src/lib/account.ts`); page JavaScript never sees it. `/account/orders/`
+shows history with fulfilment and tracking and can reorder into the cart. It
+needs a provider with the `customers` capability (SKU.io); on the json
+provider the pages explain that and point at `/account/order-lookup/`, which
+works against Stripe alone.
 
 **Do something when an order is paid.** Extend `onOrderCompleted` in
 `src/lib/orders.ts`. It receives a processor-neutral `StorefrontOrder`.
