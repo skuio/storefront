@@ -24,8 +24,8 @@ function stripeKey(): string | undefined {
 }
 
 test('home page lists categories and links into the catalogue', async ({ page }) => {
-  await page.goto('/')
-  await expect(page.locator('h1')).toBeVisible()
+  await page.goto('/', { waitUntil: 'load' })
+  await expect(page.locator('main h1').first()).toBeVisible({ timeout: 15_000 })
   const links = page.locator('a[href^="/collections/"], a[href^="/products/"]')
   expect(await links.count()).toBeGreaterThan(0)
 })

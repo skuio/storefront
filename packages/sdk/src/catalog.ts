@@ -134,16 +134,19 @@ export class Catalog {
     }
 
     const byName = (a: CategoryNode, b: CategoryNode) => a.name.localeCompare(b.name)
-    const finish = (n: CategoryNode, parentPath: string[], depth: number): number => {
+    // productCount is the number of DISTINCT products in the subtree. A product
+    // assigned to both a parent and one of its children must count once, so the
+    // walk collects ids into a set rather than summing per-node sizes.
+    const finish = (n: CategoryNode, parentPath: string[], depth: number): Set<string> => {
       n.path = [...parentPath, n.slug]
       n.depth = depth
       n.children.sort(byName)
-      let count = (this.byCategoryId.get(n.id) ?? []).length
-      for (const child of n.children) count += finish(child, n.path, depth + 1)
-      n.productCount = count
+      const ids = new Set((this.byCategoryId.get(n.id) ?? []).map((p) => p.id))
+      for (const child of n.children) for (const id of finish(child, n.path, depth + 1)) ids.add(id)
+      n.productCount = ids.size
       this.nodeById.set(n.id, n)
       this.nodeByPath.set(n.path.join('/'), n)
-      return count
+      return ids
     }
     roots.sort(byName)
     for (const r of roots) finish(r, [], 0)

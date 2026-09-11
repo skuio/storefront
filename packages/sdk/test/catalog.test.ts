@@ -27,6 +27,14 @@ describe('Catalog', () => {
     expect(tacoma.productCount).toBe(1)
   })
 
+  it('counts a product assigned to both parent and child once', () => {
+    // WooCommerce exports do this: the product sits in "Acura" and in "Acura > CL 96-99".
+    const both = products.map((p) => (p.sku === 'VDCTOYTAC9504' ? { ...p, categoryIds: ['toyota-tacoma', 'toyota'] } : p))
+    const catalog = Catalog.fromData(both, categories)
+    expect(catalog.category('toyota')!.productCount).toBe(2)
+    expect(catalog.productsIn('toyota', { deep: true })).toHaveLength(2)
+  })
+
   it('distinguishes direct from deep membership', () => {
     const catalog = Catalog.fromData(products, categories)
     expect(catalog.productsIn('toyota')).toHaveLength(0)
