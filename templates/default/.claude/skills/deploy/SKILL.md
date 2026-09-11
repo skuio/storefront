@@ -27,5 +27,11 @@ npm run e2e       # guardrail
 npm run deploy    # astro build && wrangler deploy
 ```
 
+Two Cloudflare specifics the template already handles, so you know why they exist:
+- `public/.assetsignore` lists `_worker.js` — without it wrangler refuses to deploy,
+  because the server bundle would otherwise be uploaded as a public asset.
+- `public/_redirects` may only use status 200/301/302/303/307/308. There is no
+  410; let dead endpoints 404 from the Worker instead.
+
 Then attach the custom domain to the Worker in the Cloudflare dashboard (or
 `wrangler`), and confirm `public/_redirects` behaves on the live domain.

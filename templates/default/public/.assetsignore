@@ -1,0 +1,3 @@
+# Served-asset exclusions for Cloudflare Workers. The server bundle must never be public.
+_worker.js
+_routes.json

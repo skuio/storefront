@@ -42,11 +42,16 @@ Everything under `src/pages` is prerendered at build time except files that say
    idempotent: Stripe retries, so key any external write on
    `order.processorSessionId`.
 
-4. **Secrets are Worker secrets.** Never write a key into a committed file.
+4. **A header-less POST to `/api/*` gets a 403 — that is correct.** Astro's
+   `security.checkOrigin` rejects POSTs whose `Origin` does not match the site.
+   Browsers always send it on a same-origin form post; `curl` does not. Do not
+   disable it. Test with `-H "Origin: <site>"` or through the browser.
+
+5. **Secrets are Worker secrets.** Never write a key into a committed file.
    Locally they live in `.env` (gitignored); in production `wrangler secret put`.
    Read them with `readEnv(context, 'NAME')`, never `process.env`.
 
-5. **`src/lib/catalog.ts` must keep exporting `catalog`, `config`, `routes`**, and
+6. **`src/lib/catalog.ts` must keep exporting `catalog`, `config`, `routes`**, and
    `src/lib/images.ts` must keep exporting `resolveImage`. Registry blocks import
    those names.
 

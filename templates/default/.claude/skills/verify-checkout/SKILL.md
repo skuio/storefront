@@ -19,6 +19,10 @@ What it checks:
 If the last test is skipped, add a Stripe **test-mode** key to `.env` and rerun.
 Never run this against a live key.
 
+Against a deployed Worker, a bare `curl -X POST /api/checkout` returns 403 by
+design (CSRF origin check). Add `-H "Origin: https://<your-domain>"` to reproduce
+what a browser sends.
+
 If it fails after your change, the likely culprits in order: `BuyButton.astro`
 lost its hidden `sku` input; `src/pages/api/checkout.ts` no longer redirects
 with 303; `storefront.config.ts` changed `routes` without the page files moving.

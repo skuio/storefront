@@ -38,8 +38,12 @@ test('product page has a buy form that carries a SKU and no price', async ({ pag
   expect(await form.locator('input[name=price], input[name=amount]').count()).toBe(0)
 })
 
+// Astro's CSRF protection (security.checkOrigin) 403s a POST whose Origin does not
+// match the site — correct for production, so the tests send it like a browser would.
+const browserHeaders = { Origin: 'http://localhost:4321' }
+
 test('checkout endpoint refuses an unknown SKU', async ({ request }) => {
-  const res = await request.post('/api/checkout', { form: { sku: 'DOES-NOT-EXIST', quantity: '1' }, maxRedirects: 0 })
+  const res = await request.post('/api/checkout', { form: { sku: 'DOES-NOT-EXIST', quantity: '1' }, headers: browserHeaders, maxRedirects: 0 })
   expect(res.status()).toBe(400)
 })
 
@@ -47,7 +51,7 @@ test('checkout creates a Stripe session priced from the catalogue', async ({ req
   const key = stripeKey()
   test.skip(!key, 'STRIPE_SECRET_KEY not set — skipping live Stripe check')
 
-  const res = await request.post('/api/checkout', { form: { sku: sample.sku, quantity: '2' }, maxRedirects: 0 })
+  const res = await request.post('/api/checkout', { form: { sku: sample.sku, quantity: '2' }, headers: browserHeaders, maxRedirects: 0 })
   expect(res.status()).toBe(303)
   const location = res.headers()['location']!
   expect(location).toContain('checkout.stripe.com')
