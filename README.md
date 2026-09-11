@@ -44,9 +44,13 @@ underneath.
   No backend, no credentials. A store on this provider is fully static and
   runs anywhere. This is what the template ships with.
 - **`skuioProvider`** — reads the live SKU.io Storefront API: real stock,
-  real prices, and orders flowing back into SKU.io. *Not yet live* — the
-  Storefront API is being added to SKU.io. The provider throws a clear error
-  until it ships, so nothing fails silently.
+  live availability, and **checkout created by SKU.io on the tenant's own
+  processor**, so a connected store holds no Stripe key and every order is
+  born in SKU.io. The provider is implemented and tested against the v1
+  contract in [`docs/storefront-api.md`](docs/storefront-api.md) /
+  [`docs/api/storefront-v1.openapi.yaml`](docs/api/storefront-v1.openapi.yaml);
+  the endpoints are being added to SKU.io, and until then calls fail with a
+  clear `SkuioApiError` rather than an empty catalogue.
 
 Switching is one line in the config. Nothing that renders the catalogue knows
 which it is talking to.
@@ -79,7 +83,8 @@ Edit blocks under `registry/blocks/`, never directly in the template — CI runs
 ## Status
 
 Early. The SDK, CLI, registry and template work end to end against Stripe
-test mode with the JSON provider. The SKU.io provider is a stub pending the
-Storefront API. Not yet on npm.
+test mode with the JSON provider, and the first real store is deployed on
+Cloudflare Workers. The SKU.io provider is built to a written contract and
+fixture-tested; the SKU.io endpoints are pending. Not yet on npm.
 
 MIT.

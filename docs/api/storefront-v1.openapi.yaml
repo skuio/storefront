@@ -1,0 +1,482 @@
+openapi: 3.1.0
+info:
+  title: SKU.io Storefront API
+  version: 1.0.0
+  description: |
+    Read a storefront's catalogue and availability, and create hosted checkouts.
+    Authenticate with a storefront token (`sf_live_…` / `sf_test_…`) as a Bearer token.
+    Admin personal access tokens are rejected on every route.
+servers:
+  - url: https://{tenant}.sku.io/api/storefront/v1
+    variables:
+      tenant:
+        default: acme
+security:
+  - storefrontToken: []
+
+paths:
+  /storefront:
+    get:
+      operationId: getStorefront
+      summary: The storefront this token belongs to
+      responses:
+        '200':
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Storefront' }
+              examples:
+                default: { $ref: '#/components/examples/Storefront' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /categories:
+    get:
+      operationId: listCategories
+      summary: All categories visible to the storefront
+      parameters:
+        - $ref: '#/components/parameters/cursor'
+        - $ref: '#/components/parameters/limit'
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, next_cursor]
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/Category' } }
+                  next_cursor: { type: [string, 'null'] }
+              examples:
+                default: { $ref: '#/components/examples/CategoryPage' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /products:
+    get:
+      operationId: listProducts
+      summary: Products visible to the storefront
+      parameters:
+        - $ref: '#/components/parameters/cursor'
+        - $ref: '#/components/parameters/limit'
+        - name: updated_since
+          in: query
+          description: Only products changed at or after this instant (RFC 3339)
+          schema: { type: string, format: date-time }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, next_cursor]
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/Product' } }
+                  next_cursor: { type: [string, 'null'] }
+              examples:
+                page1: { $ref: '#/components/examples/ProductPage1' }
+                page2: { $ref: '#/components/examples/ProductPage2' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /products/{sku}:
+    get:
+      operationId: getProduct
+      summary: One product by SKU
+      parameters:
+        - name: sku
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Product' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /availability:
+    get:
+      operationId: getAvailability
+      summary: Live availability status for up to 100 SKUs
+      description: Status only — never a quantity. Safe to call from a public storefront on every product view.
+      parameters:
+        - name: skus
+          in: query
+          required: true
+          description: Comma-separated SKUs, max 100
+          schema: { type: string }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      required: [sku, availability]
+                      properties:
+                        sku: { type: string }
+                        availability: { $ref: '#/components/schemas/Availability' }
+              examples:
+                default: { $ref: '#/components/examples/AvailabilityPage' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+
+  /checkouts:
+    post:
+      operationId: createCheckout
+      summary: Create a hosted checkout for the given SKUs
+      description: |
+        SKU.io prices the lines from the storefront's price list, applies its shipping
+        options, creates the session on the tenant's connected processor and returns the
+        hosted URL. Unpurchasable SKUs are a 422 before anything is created.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CheckoutRequest' }
+            examples:
+              default: { $ref: '#/components/examples/CheckoutRequest' }
+      responses:
+        '201':
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Checkout' }
+              examples:
+                default: { $ref: '#/components/examples/CheckoutCreated' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /checkouts/{id}:
+    get:
+      operationId: getCheckout
+      summary: Status of a checkout this storefront created
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Checkout' }
+              examples:
+                completed: { $ref: '#/components/examples/CheckoutCompleted' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+components:
+  securitySchemes:
+    storefrontToken:
+      type: http
+      scheme: bearer
+      bearerFormat: 'sf_live_… or sf_test_…'
+
+  parameters:
+    cursor:
+      name: cursor
+      in: query
+      schema: { type: string }
+    limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 200, default: 100 }
+
+  responses:
+    Unauthorized:
+      description: Missing or invalid storefront token
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    Forbidden:
+      description: Token lacks the scope, or is an admin token
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    NotFound:
+      description: Not visible to this storefront
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    Unprocessable:
+      description: Validation failed
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          examples:
+            unpurchasable: { $ref: '#/components/examples/ErrorUnpurchasable' }
+    RateLimited:
+      description: Too many requests; honour Retry-After
+      headers:
+        Retry-After: { schema: { type: integer } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+
+  schemas:
+    Money:
+      type: object
+      required: [amount, currency]
+      properties:
+        amount: { type: integer, description: Minor units, e.g. 109900 for $1,099.00 }
+        currency: { type: string, description: ISO 4217 lower-case }
+
+    Availability:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [in_stock, low_stock, out_of_stock, backorder, preorder]
+        expected_at:
+          type: [string, 'null']
+          format: date-time
+          description: For backorder/preorder, when stock is expected
+        updated_at: { type: string, format: date-time }
+
+    Image:
+      type: object
+      required: [url]
+      properties:
+        url: { type: string, format: uri }
+        alt: { type: [string, 'null'] }
+
+    Category:
+      type: object
+      required: [id, name, slug, parent_id]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        slug: { type: string }
+        parent_id: { type: [string, 'null'] }
+        description_html: { type: [string, 'null'] }
+        image: { oneOf: [{ $ref: '#/components/schemas/Image' }, { type: 'null' }] }
+        position: { type: integer }
+
+    Product:
+      type: object
+      required: [id, sku, name, slug, price, category_ids, images, availability, updated_at]
+      properties:
+        id: { type: string }
+        sku: { type: string }
+        name: { type: string }
+        slug: { type: string }
+        description_html: { type: [string, 'null'] }
+        short_description_html: { type: [string, 'null'] }
+        price: { $ref: '#/components/schemas/Money' }
+        compare_at_price: { oneOf: [{ $ref: '#/components/schemas/Money' }, { type: 'null' }] }
+        category_ids:
+          type: array
+          items: { type: string }
+          description: Primary category first; the SDK builds the product URL from its chain
+        images: { type: array, items: { $ref: '#/components/schemas/Image' } }
+        availability: { $ref: '#/components/schemas/Availability' }
+        attributes:
+          type: object
+          additionalProperties: { type: string }
+        updated_at: { type: string, format: date-time }
+
+    Storefront:
+      type: object
+      required: [id, name, currency, locale, domains, checkout]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        currency: { type: string }
+        locale: { type: string }
+        domains: { type: array, items: { type: string } }
+        checkout:
+          type: object
+          required: [processor, max_quantity, allow_promotion_codes, collect_phone, ship_to_countries]
+          properties:
+            processor: { type: string, enum: [stripe, square] }
+            max_quantity: { type: integer }
+            allow_promotion_codes: { type: boolean }
+            collect_phone: { type: boolean }
+            ship_to_countries: { type: array, items: { type: string } }
+
+    CheckoutRequest:
+      type: object
+      required: [items, success_url, cancel_url]
+      properties:
+        items:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            required: [sku, quantity]
+            properties:
+              sku: { type: string }
+              quantity: { type: integer, minimum: 1 }
+        success_url: { type: string, format: uri, description: 'May contain {CHECKOUT_ID}' }
+        cancel_url: { type: string, format: uri }
+        customer_email: { type: [string, 'null'], format: email }
+        metadata:
+          type: object
+          additionalProperties: { type: string }
+
+    Checkout:
+      type: object
+      required: [id, status, url, processor, currency, subtotal, shipping, total, lines, created_at]
+      properties:
+        id: { type: string, description: 'chk_…' }
+        status: { type: string, enum: [open, completed, expired] }
+        url: { type: [string, 'null'], format: uri, description: Hosted checkout page; null once completed/expired }
+        processor: { type: string, enum: [stripe, square] }
+        processor_session_id: { type: [string, 'null'] }
+        currency: { type: string }
+        subtotal: { $ref: '#/components/schemas/Money' }
+        shipping: { $ref: '#/components/schemas/Money' }
+        total: { $ref: '#/components/schemas/Money' }
+        lines:
+          type: array
+          items:
+            type: object
+            required: [sku, name, quantity, unit_price, total]
+            properties:
+              sku: { type: string }
+              name: { type: string }
+              quantity: { type: integer }
+              unit_price: { $ref: '#/components/schemas/Money' }
+              total: { $ref: '#/components/schemas/Money' }
+        customer:
+          type: [object, 'null']
+          properties:
+            name: { type: [string, 'null'] }
+            email: { type: [string, 'null'] }
+            phone: { type: [string, 'null'] }
+        shipping_address:
+          type: [object, 'null']
+          properties:
+            name: { type: [string, 'null'] }
+            line1: { type: [string, 'null'] }
+            line2: { type: [string, 'null'] }
+            city: { type: [string, 'null'] }
+            state: { type: [string, 'null'] }
+            postal_code: { type: [string, 'null'] }
+            country: { type: [string, 'null'] }
+        sales_order_id:
+          type: [string, 'null']
+          description: The SKU.io sales order created on completion
+        metadata:
+          type: object
+          additionalProperties: { type: string }
+        created_at: { type: string, format: date-time }
+        expires_at: { type: [string, 'null'], format: date-time }
+
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: string }
+            message: { type: string }
+            details: { type: object }
+
+  examples:
+    Storefront:
+      value:
+        id: sf_01J8
+        name: Vertical Lambo Doors
+        currency: usd
+        locale: en-US
+        domains: [www.example-doors.com]
+        checkout:
+          processor: stripe
+          max_quantity: 10
+          allow_promotion_codes: true
+          collect_phone: true
+          ship_to_countries: [US, CA]
+    CategoryPage:
+      value:
+        data:
+          - { id: '81', name: Toyota, slug: toyota, parent_id: null, description_html: null, image: null, position: 1 }
+          - { id: '94', name: Tacoma 95-04, slug: tacoma-95-04, parent_id: '81', description_html: null, image: null, position: 1 }
+        next_cursor: null
+    ProductPage1:
+      value:
+        data:
+          - id: '2559'
+            sku: VDCTOYTAC9504
+            name: TOYOTA TACOMA TRUCK 1995-2004 VERTICAL LAMBO DOORS
+            slug: toyota-tacoma-truck-1995-2004-vertical-lambo-doors
+            description_html: '<p>Part number VDCTOYTAC9504 …</p>'
+            short_description_html: '<p>Bolt-on vertical lambo door kit …</p>'
+            price: { amount: 109900, currency: usd }
+            compare_at_price: { amount: 129500, currency: usd }
+            category_ids: ['94', '81']
+            images:
+              - { url: 'https://cdn.example.com/VDCTOYTAC9504.jpg', alt: Toyota Tacoma with vertical doors }
+            availability: { status: in_stock, expected_at: null, updated_at: '2026-09-10T18:00:00Z' }
+            attributes: { Fits: '1995-2004 Toyota Tacoma, all trims' }
+            updated_at: '2026-09-10T18:00:00Z'
+        next_cursor: c2Vjb25k
+    ProductPage2:
+      value:
+        data:
+          - id: '2560'
+            sku: VDCTOYSUP9302
+            name: TOYOTA SUPRA 1993-2002 VERTICAL LAMBO DOORS
+            slug: toyota-supra-1993-2002-vertical-lambo-doors
+            description_html: null
+            short_description_html: null
+            price: { amount: 119900, currency: usd }
+            compare_at_price: null
+            category_ids: ['95', '81']
+            images: []
+            availability: { status: out_of_stock, expected_at: null, updated_at: '2026-09-10T18:00:00Z' }
+            attributes: {}
+            updated_at: '2026-09-10T18:00:00Z'
+        next_cursor: null
+    AvailabilityPage:
+      value:
+        data:
+          - { sku: VDCTOYTAC9504, availability: { status: low_stock, expected_at: null, updated_at: '2026-09-11T02:00:00Z' } }
+          - { sku: VDCTOYSUP9302, availability: { status: backorder, expected_at: '2026-10-01T00:00:00Z', updated_at: '2026-09-11T02:00:00Z' } }
+    CheckoutRequest:
+      value:
+        items: [{ sku: VDCTOYTAC9504, quantity: 1 }]
+        success_url: 'https://www.example-doors.com/checkout/success/?checkout_id={CHECKOUT_ID}'
+        cancel_url: 'https://www.example-doors.com/shop/toyota/tacoma-95-04/toyota-tacoma-truck-1995-2004-vertical-lambo-doors/'
+        metadata: { product_url: 'https://www.example-doors.com/shop/toyota/tacoma-95-04/…' }
+    CheckoutCreated:
+      value:
+        id: chk_01J8X
+        status: open
+        url: 'https://checkout.stripe.com/c/pay/cs_live_…'
+        processor: stripe
+        processor_session_id: cs_live_a1b2
+        currency: usd
+        subtotal: { amount: 109900, currency: usd }
+        shipping: { amount: 0, currency: usd }
+        total: { amount: 109900, currency: usd }
+        lines:
+          - { sku: VDCTOYTAC9504, name: TOYOTA TACOMA TRUCK 1995-2004 VERTICAL LAMBO DOORS, quantity: 1, unit_price: { amount: 109900, currency: usd }, total: { amount: 109900, currency: usd } }
+        customer: null
+        shipping_address: null
+        sales_order_id: null
+        metadata: {}
+        created_at: '2026-09-11T02:10:00Z'
+        expires_at: '2026-09-12T02:10:00Z'
+    CheckoutCompleted:
+      value:
+        id: chk_01J8X
+        status: completed
+        url: null
+        processor: stripe
+        processor_session_id: cs_live_a1b2
+        currency: usd
+        subtotal: { amount: 109900, currency: usd }
+        shipping: { amount: 0, currency: usd }
+        total: { amount: 109900, currency: usd }
+        lines:
+          - { sku: VDCTOYTAC9504, name: TOYOTA TACOMA TRUCK 1995-2004 VERTICAL LAMBO DOORS, quantity: 1, unit_price: { amount: 109900, currency: usd }, total: { amount: 109900, currency: usd } }
+        customer: { name: QA Buyer, email: qa@example.com, phone: '+17025550147' }
+        shipping_address: { name: QA Buyer, line1: 6185 Beesley Dr, line2: null, city: Las Vegas, state: NV, postal_code: '89115', country: US }
+        sales_order_id: so_3992
+        metadata: {}
+        created_at: '2026-09-11T02:10:00Z'
+        expires_at: null
+    ErrorUnpurchasable:
+      value:
+        error:
+          code: unpurchasable_sku
+          message: 'VDCTOYSUP9302 is out of stock'
+          details: { sku: VDCTOYSUP9302, status: out_of_stock }

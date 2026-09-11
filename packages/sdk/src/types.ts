@@ -18,6 +18,16 @@ export interface ProductImage {
   alt?: string
 }
 
+export type AvailabilityStatus = 'in_stock' | 'low_stock' | 'out_of_stock' | 'backorder' | 'preorder'
+
+/** Status only, never a count — this data is served to the public internet. */
+export interface Availability {
+  status: AvailabilityStatus
+  /** For backorder/preorder, when stock is expected. */
+  expectedAt?: string
+  updatedAt?: string
+}
+
 export interface Product {
   id: string
   /** Stable merchant identifier. The key used for checkout and order lines. */
@@ -32,7 +42,9 @@ export interface Product {
   /** Categories this product belongs to. The first is treated as primary. */
   categoryIds: string[]
   images: ProductImage[]
+  /** Purchasable right now. Derived from `availability` when a provider supplies it. */
   available: boolean
+  availability?: Availability
   /** Free-form display attributes (fitment, material, ...). */
   attributes?: Record<string, string>
   /** Where this product lived on a previous platform, for redirects and canonicals. */
@@ -91,4 +103,40 @@ export interface StorefrontOrder {
   shippingAddress?: Address
   metadata: Record<string, string>
   createdAt: string
+}
+
+// ---------------------------------------------------------------------------
+// Provider-native checkout (SKU.io creates the session on the tenant's processor)
+// ---------------------------------------------------------------------------
+
+export interface CheckoutRequest {
+  items: { sku: string; quantity: number }[]
+  /** May contain {CHECKOUT_ID}, replaced by the provider. */
+  successUrl: string
+  cancelUrl: string
+  customerEmail?: string
+  metadata?: Record<string, string>
+}
+
+export type CheckoutStatus = 'open' | 'completed' | 'expired'
+
+/** A checkout as the provider reports it; on completion it carries the order. */
+export interface Checkout {
+  id: string
+  status: CheckoutStatus
+  /** Hosted checkout page; null once completed or expired. */
+  url: string | null
+  processor: 'stripe' | 'square'
+  processorSessionId?: string
+  subtotal: Money
+  shipping: Money
+  total: Money
+  lines: OrderLine[]
+  customer?: { name?: string; email?: string; phone?: string }
+  shippingAddress?: Address
+  /** The SKU.io sales order created on completion. */
+  salesOrderId?: string
+  metadata: Record<string, string>
+  createdAt: string
+  expiresAt?: string
 }

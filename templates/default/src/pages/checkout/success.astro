@@ -1,35 +1,39 @@
 ---
-import { formatMoney } from '@skuio/storefront'
+import { formatMoney, type Checkout, type StorefrontOrder } from '@skuio/storefront'
 import { orderFromSession } from '@skuio/storefront/stripe'
 import BaseLayout from '../../layouts/BaseLayout.astro'
 import { config, routes } from '../../lib/catalog'
 import { getStripe } from '../../lib/stripe'
 
-// Renders per request: the summary comes from the Stripe session.
+// Renders per request: the summary comes from the checkout that just completed.
+// Two arrival paths — ?checkout_id= when the provider created the checkout,
+// ?session_id= when this store created a Stripe session directly.
 export const prerender = false
 
-const sessionId = Astro.url.searchParams.get('session_id')
-let order = null
+type Summary = Pick<StorefrontOrder, 'reference' | 'total' | 'shipping' | 'lines' | 'customer'>
+
+let order: Summary | null = null
 let lookupFailed = false
 
-if (sessionId) {
-  const stripe = getStripe(Astro)
-  if (stripe) {
-    try {
-      const session = await stripe.checkout.sessions.retrieve(sessionId, {
-        expand: ['line_items', 'line_items.data.price.product'],
-      })
-      // Only acknowledge a session that actually paid.
-      if (session.payment_status === 'paid' || session.status === 'complete') {
-        order = orderFromSession(session)
-      }
-    } catch (error) {
-      console.error('success page: could not retrieve session', error)
-      lookupFailed = true
+const checkoutId = Astro.url.searchParams.get('checkout_id')
+const sessionId = Astro.url.searchParams.get('session_id')
+
+try {
+  if (checkoutId && config.provider.getCheckout) {
+    const c: Checkout = await config.provider.getCheckout(checkoutId)
+    if (c.status === 'completed') {
+      order = { reference: c.id.replace(/^chk_/, '').toUpperCase(), total: c.total, shipping: c.shipping, lines: c.lines, customer: c.customer ?? {} }
     }
-  } else {
-    lookupFailed = true
+  } else if (sessionId) {
+    const stripe = getStripe(Astro)
+    if (!stripe) throw new Error('Stripe is not configured')
+    const session = await stripe.checkout.sessions.retrieve(sessionId, { expand: ['line_items', 'line_items.data.price.product'] })
+    // Only acknowledge a session that actually paid.
+    if (session.payment_status === 'paid' || session.status === 'complete') order = orderFromSession(session)
   }
+} catch (error) {
+  console.error('success page: could not load the checkout', error)
+  lookupFailed = true
 }
 
 const phone = config.contact?.phone
