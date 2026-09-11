@@ -51,7 +51,14 @@ Everything under `src/pages` is prerendered at build time except files that say
    Locally they live in `.env` (gitignored); in production `wrangler secret put`.
    Read them with `readEnv(context, 'NAME')`, never `process.env`.
 
-6. **`src/lib/catalog.ts` must keep exporting `catalog`, `config`, `routes`**, and
+6. **No `<Image>` in the layout, header, or footer — use `<img src={asset.src}>`.**
+   Those render on `/checkout/success/`, which is server-rendered per request.
+   The build-time (`compile`) image service has no runtime transformer, so an
+   `<Image>` there emits `/_image?…` and returns 522 in production. `<Image>` is
+   fine on any prerendered page (products, collections, static pages). The e2e
+   asserts the success page contains no `/_image?` URL.
+
+7. **`src/lib/catalog.ts` must keep exporting `catalog`, `config`, `routes`**, and
    `src/lib/images.ts` must keep exporting `resolveImage`. Registry blocks import
    those names.
 

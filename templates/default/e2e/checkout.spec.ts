@@ -71,3 +71,12 @@ test('checkout creates a Stripe session priced from the catalogue', async ({ req
   expect(stripe.line_items.data[0]!.price.unit_amount).toBe(sample.price.amount)
   expect(stripe.amount_subtotal).toBe(sample.price.amount * 2)
 })
+
+test('server-rendered success page references no runtime image transforms', async ({ request }) => {
+  // /checkout/success/ is the one on-demand HTML route. With the compile image
+  // service, an <Image> anywhere in its layout emits /_image?… which cannot be
+  // served at runtime (522 in production). Layout images must be plain <img>.
+  const res = await request.get('/checkout/success/')
+  expect(res.status()).toBe(200)
+  expect(await res.text()).not.toContain('/_image?')
+})
