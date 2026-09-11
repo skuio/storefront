@@ -96,6 +96,14 @@ is not live yet; the provider throws a clear error until it is.)
 never trusted for money. `CartBadge` sits in the header's `end` slot. A store
 that wants Buy-Now only can delete these three files and the slot content.
 
+**Shipping regions.** Give a shipping option `countries: ['US']` and checkout
+becomes region-enforced: the default session takes only those addresses and
+rates; a second submit on the buy button (and a checkbox on the cart) opens a
+session for everywhere else with only the other rates. Leave `countries` off
+every option for a single region. Stripe Checkout cannot filter rates by
+country by itself — this is how the store stops an international customer
+picking the domestic rate.
+
 **Do something when an order is paid.** Extend `onOrderCompleted` in
 `src/lib/orders.ts`. It receives a processor-neutral `StorefrontOrder`.
 

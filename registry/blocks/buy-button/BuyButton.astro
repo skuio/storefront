@@ -1,5 +1,5 @@
 ---
-import { formatMoney, type Product } from '@skuio/storefront'
+import { formatMoney, hasInternationalRegion, shippingForRegion, type Product } from '@skuio/storefront'
 import { config } from '../lib/catalog'
 
 interface Props {
@@ -9,6 +9,14 @@ interface Props {
 const { product } = Astro.props
 const max = config.checkout.maxQuantity
 const phone = config.contact?.phone
+
+// When a shipping option names its countries, checkout is opened per region:
+// the default session takes only domestic addresses and rates, and this second
+// submit opens one that takes only the rest. Enforced by Stripe's address
+// validation, not by a label.
+const international = hasInternationalRegion(config.shipping, config.shipToCountries)
+const domestic = shippingForRegion(config.shipping, config.shipToCountries, 'domestic').countries
+const domesticLabel = domestic.length === 1 && domestic[0] === 'US' ? 'the United States' : domestic.join(', ')
 ---
 
 {/*
@@ -49,6 +57,17 @@ const phone = config.contact?.phone
   </div>
 
   <p class="mt-3 text-xs text-body/70">Secure checkout by Stripe. Card, Apple Pay and Google Pay accepted.</p>
+
+  {
+    international && (
+      <p class="mt-2 text-xs text-body/70">
+        Shipping outside {domesticLabel}?
+        <button type="submit" name="region" value="international" class="font-semibold text-accent underline-offset-2 hover:underline">
+          Check out with international shipping
+        </button>
+      </p>
+    )
+  }
 
   <p class="mt-3 hidden rounded-md border border-accent/30 bg-accent/5 px-3 py-2 text-xs text-accent" role="alert" data-buy-error></p>
 </form>

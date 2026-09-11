@@ -112,3 +112,27 @@ test('checkout refuses a cart containing an unknown SKU', async ({ request }) =>
   const res = await request.post('/api/checkout', { form: { items }, headers: browserHeaders, maxRedirects: 0 })
   expect(res.status()).toBe(400)
 })
+
+test('checkout opens one shipping region at a time', async ({ request }) => {
+  const key = stripeKey()
+  test.skip(!key, 'STRIPE_SECRET_KEY not set — skipping live Stripe check')
+  const auth = { Authorization: `Basic ${Buffer.from(`${key}:`).toString('base64')}` }
+  interface S { shipping_address_collection: { allowed_countries: string[] }; shipping_options: { shipping_rate: string }[]; metadata: Record<string, string> }
+  const open = async (region?: string) => {
+    const res = await request.post('/api/checkout', { form: { sku: sample.sku, quantity: '1', ...(region ? { region } : {}) }, headers: browserHeaders, maxRedirects: 0 })
+    expect(res.status()).toBe(303)
+    const id = res.headers()['location']!.match(/cs_(?:test|live)_[A-Za-z0-9]+/)![0]
+    return (await fetch(`https://api.stripe.com/v1/checkout/sessions/${id}`, { headers: auth }).then((r) => r.json())) as S
+  }
+
+  const domestic = await open()
+  expect(domestic.shipping_address_collection.allowed_countries).toEqual(['US'])
+  expect(domestic.shipping_options).toHaveLength(1)
+  expect(domestic.metadata.region).toBe('domestic')
+
+  const intl = await open('international')
+  expect(intl.shipping_address_collection.allowed_countries).not.toContain('US')
+  expect(intl.shipping_address_collection.allowed_countries.length).toBeGreaterThan(0)
+  expect(intl.shipping_options).toHaveLength(1)
+  expect(intl.metadata.region).toBe('international')
+})

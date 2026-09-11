@@ -305,6 +305,10 @@ components:
         success_url: { type: string, format: uri, description: 'May contain {CHECKOUT_ID}' }
         cancel_url: { type: string, format: uri }
         customer_email: { type: [string, 'null'], format: email }
+        ship_to_countries:
+          type: array
+          items: { type: string }
+          description: Restrict this checkout's destinations (region enforcement); a subset of the storefront's ship_to_countries
         metadata:
           type: object
           additionalProperties: { type: string }

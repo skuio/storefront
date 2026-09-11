@@ -1,4 +1,5 @@
 import type { APIContext } from 'astro'
+import { shippingForRegion, type ShippingRegion } from '@skuio/storefront'
 import { createStripeCheckout, CheckoutError } from '@skuio/storefront/stripe'
 import { catalog, config, routes } from '../../lib/catalog'
 import { getStripe, readEnv } from '../../lib/stripe'
@@ -44,6 +45,8 @@ export async function POST(context: APIContext): Promise<Response> {
   const read = readItems(form)
   if (!read) return new Response('Nothing to check out', { status: 400 })
   const { items, returnTo } = read
+  const region: ShippingRegion = form.get('region') === 'international' ? 'international' : 'domestic'
+  const shipping = shippingForRegion(config.shipping, config.shipToCountries, region)
 
   // Every SKU must exist before anything is created; a stale cart line is a 400, not a Stripe call.
   const unknown = items.find((i) => !catalog.product(i.sku))
@@ -62,7 +65,8 @@ export async function POST(context: APIContext): Promise<Response> {
         items: items.map((i) => ({ sku: i.sku, quantity: clamp(i.quantity, config.checkout.maxQuantity) })),
         successUrl: `${origin}/checkout/success/?checkout_id={CHECKOUT_ID}`,
         cancelUrl,
-        metadata,
+        ...(shipping.enforced ? { shipToCountries: shipping.countries } : {}),
+        metadata: { ...metadata, region },
       })
       if (!checkout.url) throw new Error(`checkout ${checkout.id} has no url`)
       return context.redirect(checkout.url, 303)
@@ -83,10 +87,13 @@ export async function POST(context: APIContext): Promise<Response> {
       successUrl: `${origin}/checkout/success/?session_id={CHECKOUT_SESSION_ID}`,
       cancelUrl,
       metadata,
+      region,
     })
     return context.redirect(session.url, 303)
   } catch (error) {
-    if (error instanceof CheckoutError && error.code === 'unavailable') return fail(context, returnTo, 'unavailable')
+    if (error instanceof CheckoutError && (error.code === 'unavailable' || error.code === 'no_shipping')) {
+      return fail(context, returnTo, 'unavailable')
+    }
     console.error('checkout: failed to create checkout', error)
     return fail(context, returnTo, 'error')
   }

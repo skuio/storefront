@@ -115,6 +115,8 @@ export interface CheckoutRequest {
   successUrl: string
   cancelUrl: string
   customerEmail?: string
+  /** Restrict the destination countries for this checkout (region enforcement). */
+  shipToCountries?: string[]
   metadata?: Record<string, string>
 }
 

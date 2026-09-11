@@ -29,9 +29,12 @@ export default defineStorefront({
     shop: '/shop/',
   },
 
+  // Naming countries on a rate turns on region enforcement: a checkout is
+  // opened for one region at a time, so an international customer can never
+  // pick the domestic rate. Options without countries cover everywhere else.
   shipping: [
-    freeShipping('us-standard', 'Free shipping (United States)', { min: 3, max: 7 }),
-    flatRate('intl', 'International shipping', { amount: 2500, currency: 'usd' }, { min: 7, max: 21 }),
+    freeShipping('us-standard', 'Free shipping (United States)', { estimate: { min: 3, max: 7 }, countries: ['US'] }),
+    flatRate('intl', 'International shipping', { amount: 2500, currency: 'usd' }, { estimate: { min: 7, max: 21 } }),
   ],
   shipToCountries: ['US', 'CA', 'GB', 'AU'],
 

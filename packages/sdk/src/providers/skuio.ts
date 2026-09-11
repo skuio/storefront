@@ -184,6 +184,7 @@ export function skuioProvider(opts: SkuioProviderOptions): CatalogProvider {
         success_url: request.successUrl,
         cancel_url: request.cancelUrl,
         ...(request.customerEmail ? { customer_email: request.customerEmail } : {}),
+        ...(request.shipToCountries ? { ship_to_countries: request.shipToCountries } : {}),
         ...(request.metadata ? { metadata: request.metadata } : {}),
       }
       const wire = await call<WireCheckout>('/checkouts', { method: 'POST', body: JSON.stringify(body) })

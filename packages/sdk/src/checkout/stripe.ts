@@ -1,6 +1,7 @@
 import type Stripe from 'stripe'
 import type { Catalog } from '../catalog.js'
 import type { StorefrontConfig } from '../config.js'
+import { shippingForRegion, type ShippingRegion } from '../shipping.js'
 
 export interface CheckoutItem {
   sku: string
@@ -16,6 +17,8 @@ export interface CreateStripeCheckoutOptions {
   successUrl: string
   cancelUrl: string
   metadata?: Record<string, string>
+  /** Which shipping region to open the session for. Default domestic. */
+  region?: ShippingRegion
 }
 
 export interface CheckoutResult {
@@ -26,7 +29,7 @@ export interface CheckoutResult {
 export class CheckoutError extends Error {
   constructor(
     message: string,
-    readonly code: 'unknown_sku' | 'unavailable' | 'empty' | 'no_url'
+    readonly code: 'unknown_sku' | 'unavailable' | 'empty' | 'no_url' | 'no_shipping'
   ) {
     super(message)
     this.name = 'CheckoutError'
@@ -76,7 +79,12 @@ export async function createStripeCheckout(opts: CreateStripeCheckoutOptions): P
     })
   }
 
-  const shippingOptions: Stripe.Checkout.SessionCreateParams.ShippingOption[] = config.shipping.map(
+  const resolved = shippingForRegion(config.shipping, config.shipToCountries, opts.region ?? 'domestic')
+  if (resolved.options.length === 0 || resolved.countries.length === 0) {
+    throw new CheckoutError(`No shipping available for the ${opts.region ?? 'domestic'} region`, 'no_shipping')
+  }
+
+  const shippingOptions: Stripe.Checkout.SessionCreateParams.ShippingOption[] = resolved.options.map(
     (s) => ({
       shipping_rate_data: {
         type: 'fixed_amount',
@@ -100,7 +108,7 @@ export async function createStripeCheckout(opts: CreateStripeCheckoutOptions): P
     line_items: lineItems,
     shipping_address_collection: {
       allowed_countries:
-        config.shipToCountries as Stripe.Checkout.SessionCreateParams.ShippingAddressCollection.AllowedCountry[],
+        resolved.countries as Stripe.Checkout.SessionCreateParams.ShippingAddressCollection.AllowedCountry[],
     },
     shipping_options: shippingOptions,
     phone_number_collection: { enabled: config.checkout.collectPhone },
@@ -110,6 +118,7 @@ export async function createStripeCheckout(opts: CreateStripeCheckoutOptions): P
     cancel_url: opts.cancelUrl,
     metadata: {
       storefront: config.name,
+      region: opts.region ?? 'domestic',
       skus: skus.join(','),
       ...opts.metadata,
     },

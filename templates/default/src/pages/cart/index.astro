@@ -1,9 +1,14 @@
 ---
 import BaseLayout from '../../layouts/BaseLayout.astro'
 import Breadcrumbs from '../../components/Breadcrumbs.astro'
+import { hasInternationalRegion, shippingForRegion } from '@skuio/storefront'
 import { config, routes } from '../../lib/catalog'
 
 export const prerender = true
+
+const international = hasInternationalRegion(config.shipping, config.shipToCountries)
+const domestic = shippingForRegion(config.shipping, config.shipToCountries, 'domestic').countries
+const domesticLabel = domestic.length === 1 && domestic[0] === 'US' ? 'the United States' : domestic.join(', ')
 ---
 
 <BaseLayout title="Your cart" noindex>
@@ -33,6 +38,14 @@ export const prerender = true
       {/* Nothing but SKUs and quantities leave the browser; the server re-prices. */}
       <form method="POST" action="/api/checkout" class="mt-6" data-cart-checkout>
         <input type="hidden" name="items" value="[]" data-cart-items />
+        {
+          international && (
+            <label class="mb-4 flex items-center gap-2 text-sm">
+              <input type="checkbox" name="region" value="international" class="h-4 w-4 rounded border-rule" />
+              I am shipping outside {domesticLabel}
+            </label>
+          )
+        }
         <button type="submit" class="w-full rounded-md bg-accent px-8 py-3.5 text-sm font-bold tracking-wide text-white uppercase transition hover:bg-accent-dark disabled:opacity-60">
           Checkout
         </button>

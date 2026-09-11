@@ -14,7 +14,7 @@ const config = defineStorefront({
   currency: 'usd',
   provider: jsonProvider({ products, categories }),
   shipping: [
-    freeShipping('us', 'Free shipping (US)', { min: 3, max: 10 }),
+    freeShipping('us', 'Free shipping (US)', { estimate: { min: 3, max: 10 } }),
     flatRate('intl', 'International', { amount: 40000, currency: 'usd' }),
   ],
   shipToCountries: ['US', 'CA'],
