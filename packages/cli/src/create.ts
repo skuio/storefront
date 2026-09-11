@@ -1,6 +1,6 @@
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { basename, join, resolve } from 'node:path'
+import { basename, join, relative, resolve } from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { resolveRegistrySource } from './registry.js'
 import { bold, dim, green } from './ui.js'
@@ -63,7 +63,19 @@ export async function create(opts: CreateOptions): Promise<void> {
   delete pkg.description
   const deps = (pkg.dependencies ?? {}) as Record<string, string>
   const sdkRange = deps['@skuio/storefront']
-  if (sdkRange === '*' || sdkRange?.startsWith('workspace')) deps['@skuio/storefront'] = '^0.1.0'
+  let linkedSdk: string | null = null
+  if (sdkRange === '*' || sdkRange?.startsWith('workspace')) {
+    if (source.kind === 'local') {
+      // Scaffolded from a checkout of the kit: link the SDK on disk so the
+      // store builds before the package is on npm. Swap for a range to publish.
+      linkedSdk = `file:${relative(target, join(source.root, 'packages', 'sdk')) || '.'}`
+      deps['@skuio/storefront'] = linkedSdk
+      // Astro pins vite 6; without this npm may hoist a second vite next to it.
+      pkg.overrides = { ...((pkg.overrides as Record<string, string>) ?? {}), vite: '^6.4.3' }
+    } else {
+      deps['@skuio/storefront'] = '^0.1.0'
+    }
+  }
   writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n')
 
   cleanup()
@@ -74,5 +86,9 @@ export async function create(opts: CreateOptions): Promise<void> {
   console.log(`  ${dim('$')} npm install`)
   console.log(`  ${dim('$')} cp .env.example .env     ${dim('# add a Stripe test key')}`)
   console.log(`  ${dim('$')} npm run dev`)
+  if (linkedSdk) {
+    console.log(`\n${dim('@skuio/storefront is linked from your kit checkout (' + linkedSdk + ').')}`)
+    console.log(dim('Run `npm run build` in the kit first, and replace the link with a version range before publishing.'))
+  }
   console.log(`\nThen open ${bold('CLAUDE.md')} — it tells your coding agent how the store is put together.\n`)
 }
