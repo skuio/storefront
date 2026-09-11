@@ -1,6 +1,16 @@
 import { defineStorefront, flatRate, freeShipping, jsonProvider, type Category, type Product } from '@skuio/storefront'
+import { withMockCustomers } from './src/lib/mock-customers'
 import products from './src/data/products.json'
 import categories from './src/data/categories.json'
+
+// Dev-only: SKUIO_MOCK_CUSTOMERS=1 fakes the customer-portal capability so the
+// account pages can be exercised before the store is connected to SKU.io.
+// Never active in a production build.
+// `process` is only touched when DEV is true, so a production bundle never references it.
+const maybeMock = <P extends { name: string }>(p: P): P =>
+  import.meta.env.DEV && typeof process !== 'undefined' && process.env.SKUIO_MOCK_CUSTOMERS === '1'
+    ? (withMockCustomers(p as never) as P)
+    : p
 
 /**
  * The one file that describes this store.
@@ -18,10 +28,12 @@ export default defineStorefront({
   currency: 'usd',
   locale: 'en-US',
 
-  provider: jsonProvider({
-    products: products as Product[],
-    categories: categories as Category[],
-  }),
+  provider: maybeMock(
+    jsonProvider({
+      products: products as Product[],
+      categories: categories as Category[],
+    })
+  ),
 
   routes: {
     product: '/products/:slug/',

@@ -145,21 +145,47 @@ test('checkout opens one shipping region at a time', async ({ request }) => {
   expect(intl.metadata.region).toBe('international')
 })
 
-test('account pages degrade honestly on a provider without customer sessions', async ({ request }) => {
-  // The json provider has no customers capability: the sign-in page explains and
-  // points at order lookup; protected pages and the session endpoints bounce home.
-  const account = await request.get('/account/')
-  expect(account.status()).toBe(200)
-  expect(await account.text()).toContain('/account/order-lookup/')
-
+test('account: protected pages bounce without a session; a bad link is refused', async ({ request }) => {
   const orders = await request.get('/account/orders/', { maxRedirects: 0 })
   expect(orders.status()).toBe(303)
   expect(orders.headers()['location']).toBe('/account/')
 
-  const verify = await request.get('/account/verify/?token=anything', { maxRedirects: 0 })
+  const verify = await request.get('/account/verify/?token=not-a-real-token', { maxRedirects: 0 })
   expect(verify.status()).toBe(303)
   expect(verify.headers()['location']).toBe('/account/?error=link')
+})
 
-  const session = await request.post('/api/account/session', { form: { email: 'x@example.com' }, headers: browserHeaders, maxRedirects: 0 })
-  expect(session.status()).toBe(303)
+test('account: sign in by link, see orders with tracking, reorder into the cart, sign out', async ({ page }) => {
+  // The dev server runs with a mock customers capability (src/lib/mock-customers.ts).
+  await page.goto('/account/', { waitUntil: 'load' })
+  await page.fill('#email', 'demo@example.com')
+  await page.click('form[action="/api/account/session"] button[type=submit]')
+  await expect(page).toHaveURL(/\/account\/\?sent=1/)
+  await expect(page.locator('[role=status]')).toContainText('Check your email')
+
+  // Follow the "emailed" link. The cookie it sets must be httpOnly.
+  await page.goto('/account/verify/?token=mock:demo@example.com')
+  await expect(page).toHaveURL(/\/account\/orders\//)
+  const cookie = (await page.context().cookies()).find((c) => c.name === 'skuio_customer_session')
+  expect(cookie?.httpOnly).toBe(true)
+  expect(cookie?.sameSite).toBe('Lax')
+
+  await expect(page.locator('main h1')).toContainText("Demo's orders")
+  await expect(page.getByText('Order 1002')).toBeVisible()
+  await expect(page.getByRole('link', { name: '1Z999AA10123456784' })).toHaveAttribute('href', /ups\.com/)
+  await expect(page.getByText('Being prepared')).toBeVisible()
+
+  // Reorder puts the lines in the cart and goes there.
+  await page.locator('[data-reorder]').first().click()
+  await expect(page).toHaveURL(/\/cart\//)
+  await expect(page.locator('[data-cart-lines] li')).toHaveCount(1)
+  await expect(page.locator('[data-cart-lines]')).toContainText('Ridge Daypack 22L')
+
+  // Signed-in visit to /account/ goes straight to orders; sign-out ends it.
+  await page.goto('/account/')
+  await expect(page).toHaveURL(/\/account\/orders\//)
+  await page.click('form[action="/api/account/sign-out"] button')
+  await expect(page).toHaveURL(/\/$/)
+  await page.goto('/account/orders/')
+  await expect(page).toHaveURL(/\/account\/$/)
 })
