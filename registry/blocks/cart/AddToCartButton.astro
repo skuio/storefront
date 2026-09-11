@@ -1,0 +1,57 @@
+---
+import type { Product } from '@skuio/storefront'
+import { catalog, config, routes } from '../lib/catalog'
+import { resolveImage } from '../lib/images'
+
+interface Props {
+  product: Product
+}
+
+const { product } = Astro.props
+const img = resolveImage(product.images[0])
+---
+
+{/*
+  Adds a snapshot of this product to the browser cart. Hidden without
+  JavaScript — the Buy Now form still works there — and the snapshot is for
+  display only: checkout re-prices every SKU on the server.
+*/}
+<button
+  type="button"
+  hidden
+  disabled={!product.available}
+  class="mt-3 w-full rounded-md border-2 border-ink px-8 py-3 text-sm font-bold tracking-wide text-ink uppercase transition hover:bg-ink hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+  data-add-to-cart
+  data-sku={product.sku}
+  data-name={product.name}
+  data-amount={product.price.amount}
+  data-currency={product.price.currency}
+  data-url={routes.product(product, catalog)}
+  data-image={img?.src ?? ''}
+  data-max={config.checkout.maxQuantity}
+>
+  <span data-label>Add to cart</span>
+</button>
+
+<script>
+  import { cartStore } from '../lib/cart.client'
+
+  document.querySelectorAll<HTMLButtonElement>('[data-add-to-cart]').forEach((button) => {
+    button.hidden = false
+    const label = button.querySelector<HTMLElement>('[data-label]')!
+    button.addEventListener('click', () => {
+      const d = button.dataset
+      // Respect the quantity input of the sibling Buy Now form when present.
+      const qtyInput = button.closest('form')?.querySelector<HTMLInputElement>('input[name=quantity]')
+        ?? document.querySelector<HTMLInputElement>(`#qty-${CSS.escape(d.sku!)}`)
+      const quantity = Number(qtyInput?.value ?? 1) || 1
+      cartStore.add(
+        { sku: d.sku!, name: d.name!, unitPrice: { amount: Number(d.amount), currency: d.currency! }, url: d.url, image: d.image || undefined },
+        quantity,
+        Number(d.max) || 10
+      )
+      label.textContent = 'Added ✓'
+      window.setTimeout(() => (label.textContent = 'Add to cart'), 1600)
+    })
+  })
+</script>

@@ -23,6 +23,8 @@ const nav = [
     <div class="mx-auto flex max-w-6xl items-center justify-between gap-6 px-5 py-4">
       <a href="/" class="text-lg font-bold tracking-tight text-white">{config.name}</a>
 
+      {/* `end` slot: stores that add the cart block drop <CartBadge slot="end" /> in here. */}
+      <div class="flex items-center gap-6">
       <nav class="hidden items-center gap-7 md:flex" aria-label="Primary">
         {
           nav.map((item) => {
@@ -42,6 +44,8 @@ const nav = [
           })
         }
       </nav>
+      <div class="text-white"><slot name="end" /></div>
+      </div>
 
       <button
         type="button"

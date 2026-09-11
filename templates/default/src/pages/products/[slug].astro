@@ -4,6 +4,7 @@ import Breadcrumbs from '../../components/Breadcrumbs.astro'
 import ProductCard from '../../components/ProductCard.astro'
 import ProductGallery from '../../components/ProductGallery.astro'
 import BuyButton from '../../components/BuyButton.astro'
+import AddToCartButton from '../../components/AddToCartButton.astro'
 import Price from '../../components/Price.astro'
 import { catalog, config, routes } from '../../lib/catalog'
 import { resolveImage } from '../../lib/images'
@@ -66,6 +67,7 @@ const schema = [
         {plainShort && <p class="mt-5 text-sm leading-relaxed">{plainShort}</p>}
 
         <BuyButton product={product} />
+        <AddToCartButton product={product} />
 
         {product.attributes && Object.keys(product.attributes).length > 0 && (
           <dl class="mt-7 grid grid-cols-[auto_1fr] gap-x-6 gap-y-2 border-t border-rule pt-6 text-sm">

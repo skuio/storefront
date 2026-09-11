@@ -80,3 +80,35 @@ test('server-rendered success page references no runtime image transforms', asyn
   expect(res.status()).toBe(200)
   expect(await res.text()).not.toContain('/_image?')
 })
+
+test('cart page renders and checks out several lines in one session', async ({ page, request }) => {
+  await page.goto('/cart/', { waitUntil: 'load' })
+  await expect(page.locator('main h1').first()).toHaveText(/cart/i)
+
+  const key = stripeKey()
+  test.skip(!key, 'STRIPE_SECRET_KEY not set — skipping live Stripe check')
+
+  const [a, b] = products.filter((p) => p.available).slice(0, 2)
+  const items = JSON.stringify([{ sku: a!.sku, quantity: 1 }, { sku: b!.sku, quantity: 3 }])
+  const res = await request.post('/api/checkout', { form: { items }, headers: browserHeaders, maxRedirects: 0 })
+  expect(res.status()).toBe(303)
+  const sessionId = res.headers()['location']!.match(/cs_(?:test|live)_[A-Za-z0-9]+/)![0]
+
+  interface SessionShape { amount_subtotal: number; line_items: { data: { quantity: number; price: { unit_amount: number; product: { metadata: { sku: string } } } }[] } }
+  const s = (await fetch(`https://api.stripe.com/v1/checkout/sessions/${sessionId}?expand[]=line_items&expand[]=line_items.data.price.product`, {
+    headers: { Authorization: `Basic ${Buffer.from(`${key}:`).toString('base64')}` },
+  }).then((r) => r.json())) as SessionShape
+
+  const bySku = Object.fromEntries(s.line_items.data.map((l) => [l.price.product.metadata.sku, l]))
+  expect(Object.keys(bySku).sort()).toEqual([a!.sku, b!.sku].sort())
+  expect(bySku[a!.sku]!.quantity).toBe(1)
+  expect(bySku[b!.sku]!.quantity).toBe(3)
+  expect(bySku[b!.sku]!.price.unit_amount).toBe(b!.price.amount)
+  expect(s.amount_subtotal).toBe(a!.price.amount + b!.price.amount * 3)
+})
+
+test('checkout refuses a cart containing an unknown SKU', async ({ request }) => {
+  const items = JSON.stringify([{ sku: sample.sku, quantity: 1 }, { sku: 'GONE-FROM-CATALOGUE', quantity: 1 }])
+  const res = await request.post('/api/checkout', { form: { items }, headers: browserHeaders, maxRedirects: 0 })
+  expect(res.status()).toBe(400)
+})

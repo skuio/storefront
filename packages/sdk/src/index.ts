@@ -7,3 +7,8 @@ export { freeShipping, flatRate, type ShippingOption } from './shipping.js'
 export { defineStorefront, type StorefrontConfig, type StorefrontConfigInput } from './config.js'
 export { jsonProvider, type JsonProviderOptions } from './providers/json.js'
 export { skuioProvider, SkuioApiError, type SkuioProviderOptions } from './providers/skuio.js'
+export {
+  addLine, setQuantity, removeLine, cartCount, cartSubtotal, cartToCheckoutItems,
+  parseCart, serializeCart, emptyCart, MAX_CART_LINES,
+  type Cart, type CartLine,
+} from './cart.js'

@@ -13,6 +13,7 @@ src/lib/images.ts          resolves a product image to its file in src/assets/pr
 src/lib/stripe.ts          Stripe client + readEnv (Worker binding or .env)
 src/lib/email.ts           SendGrid
 src/lib/orders.ts          what happens when an order is paid  <-- the integration seam
+src/lib/cart.client.ts     browser cart (localStorage); client-only, import from <script> only
 src/components/            UI blocks — copied from the registry, now owned by this project
 src/pages/                 routes; Astro routes by filename
 src/pages/api/             the only code that runs on the server (checkout, webhook, forms)
@@ -88,6 +89,12 @@ and `slug` must be unique — the build fails otherwise.
 **Connect to SKU.io.** Swap `jsonProvider(...)` for `skuioProvider(...)` in
 `storefront.config.ts`. See `.claude/skills/connect-skuio`. (The Storefront API
 is not live yet; the provider throws a clear error until it is.)
+
+**The cart.** `AddToCartButton` snapshots name/price into localStorage;
+`/cart/` renders from that and posts `items` (SKUs + quantities only) to
+`/api/checkout`, which re-prices everything from the catalogue. The snapshot is
+never trusted for money. `CartBadge` sits in the header's `end` slot. A store
+that wants Buy-Now only can delete these three files and the slot content.
 
 **Do something when an order is paid.** Extend `onOrderCompleted` in
 `src/lib/orders.ts`. It receives a processor-neutral `StorefrontOrder`.

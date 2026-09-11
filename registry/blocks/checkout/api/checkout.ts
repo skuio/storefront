@@ -12,18 +12,46 @@ function fail(context: APIContext, returnTo: string, reason: 'unavailable' | 'er
   return context.redirect(url.pathname + url.search, 303)
 }
 
+/**
+ * Two ways in, one shape out:
+ *   - Buy Now posts `sku` + `quantity` (one line, bounce back to the product)
+ *   - the cart posts `items` = JSON [{ sku, quantity }] (many lines, bounce back to /cart/)
+ * Either way only SKUs and quantities are read; prices come from the catalogue.
+ */
+function readItems(form: FormData): { items: { sku: string; quantity: number }[]; returnTo: string } | null {
+  const raw = form.get('items')
+  if (typeof raw === 'string' && raw.trim()) {
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(raw)
+    } catch {
+      return null
+    }
+    if (!Array.isArray(parsed) || parsed.length === 0) return null
+    const items = parsed
+      .map((x) => ({ sku: String((x as { sku?: unknown })?.sku ?? '').trim(), quantity: Number((x as { quantity?: unknown })?.quantity ?? 1) }))
+      .filter((x) => x.sku)
+    return items.length ? { items, returnTo: '/cart/' } : null
+  }
+  const sku = String(form.get('sku') ?? '').trim()
+  if (!sku) return null
+  const product = catalog.product(sku)
+  return { items: [{ sku, quantity: Number(form.get('quantity') ?? 1) }], returnTo: product ? routes.product(product, catalog) : '/cart/' }
+}
+
 export async function POST(context: APIContext): Promise<Response> {
   const form = await context.request.formData()
-  const sku = String(form.get('sku') ?? '').trim()
-  const quantity = Number(form.get('quantity') ?? 1)
+  const read = readItems(form)
+  if (!read) return new Response('Nothing to check out', { status: 400 })
+  const { items, returnTo } = read
 
-  const product = catalog.product(sku)
-  if (!product) return new Response('Unknown product', { status: 400 })
+  // Every SKU must exist before anything is created; a stale cart line is a 400, not a Stripe call.
+  const unknown = items.find((i) => !catalog.product(i.sku))
+  if (unknown) return new Response(`Unknown product ${unknown.sku}`, { status: 400 })
 
-  const returnTo = routes.product(product, catalog)
   const origin = readEnv(context, 'PUBLIC_SITE_URL') ?? context.url.origin
   const cancelUrl = `${origin}${returnTo}?checkout_error=cancelled`
-  const metadata = { product_url: `${origin}${returnTo}` }
+  const metadata = { return_url: `${origin}${returnTo}` }
 
   try {
     // Preferred: the provider creates the hosted checkout itself. SKU.io does —
@@ -31,7 +59,7 @@ export async function POST(context: APIContext): Promise<Response> {
     // session on the tenant's own processor, so this store holds no Stripe key.
     if (config.provider.createCheckout) {
       const checkout = await config.provider.createCheckout({
-        items: [{ sku, quantity: clamp(quantity, config.checkout.maxQuantity) }],
+        items: items.map((i) => ({ sku: i.sku, quantity: clamp(i.quantity, config.checkout.maxQuantity) })),
         successUrl: `${origin}/checkout/success/?checkout_id={CHECKOUT_ID}`,
         cancelUrl,
         metadata,
@@ -51,7 +79,7 @@ export async function POST(context: APIContext): Promise<Response> {
       stripe,
       catalog,
       config,
-      items: [{ sku, quantity }],
+      items,
       successUrl: `${origin}/checkout/success/?session_id={CHECKOUT_SESSION_ID}`,
       cancelUrl,
       metadata,

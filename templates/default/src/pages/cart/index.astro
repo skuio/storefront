@@ -1,0 +1,104 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro'
+import Breadcrumbs from '../../components/Breadcrumbs.astro'
+import { config, routes } from '../../lib/catalog'
+
+export const prerender = true
+---
+
+<BaseLayout title="Your cart" noindex>
+  <div class="mx-auto max-w-3xl px-5 py-10">
+    <Breadcrumbs items={[{ label: 'Home', href: '/' }, { label: 'Cart' }]} />
+    <h1 class="display-heading mt-6 text-5xl">Your cart</h1>
+
+    <noscript>
+      <p class="mt-6 rounded-md border border-rule bg-[#fafafa] p-4 text-sm">
+        The cart needs JavaScript. Every product page has a <strong>Buy now</strong> button that works without it.
+      </p>
+    </noscript>
+
+    <div hidden data-cart-empty class="mt-8 text-sm">
+      <p>Your cart is empty.</p>
+      <a href={routes.shop()} class="mt-6 inline-block rounded-full border-2 border-ink px-7 py-2.5 text-sm font-semibold transition hover:bg-ink hover:text-white">Browse the shop</a>
+    </div>
+
+    <div hidden data-cart-full>
+      <ul class="mt-8 divide-y divide-rule rounded-lg border border-rule" data-cart-lines></ul>
+
+      <div class="mt-6 flex items-baseline justify-between text-sm">
+        <span class="text-body/70">Subtotal — shipping and any promotions are applied at checkout</span>
+        <span class="text-xl font-bold text-ink" data-cart-subtotal></span>
+      </div>
+
+      {/* Nothing but SKUs and quantities leave the browser; the server re-prices. */}
+      <form method="POST" action="/api/checkout" class="mt-6" data-cart-checkout>
+        <input type="hidden" name="items" value="[]" data-cart-items />
+        <button type="submit" class="w-full rounded-md bg-accent px-8 py-3.5 text-sm font-bold tracking-wide text-white uppercase transition hover:bg-accent-dark disabled:opacity-60">
+          Checkout
+        </button>
+        <p class="mt-3 text-center text-xs text-body/70">Secure checkout. Card, Apple Pay and Google Pay accepted.</p>
+        <p class="mt-3 hidden rounded-md border border-accent/30 bg-accent/5 px-3 py-2 text-xs text-accent" role="alert" data-cart-error></p>
+      </form>
+    </div>
+  </div>
+</BaseLayout>
+
+<script define:vars={{ currency: config.currency, locale: config.locale, maxQuantity: config.checkout.maxQuantity }}>
+  window.__cartConfig = { currency, locale, maxQuantity }
+</script>
+<script>
+  import { cartStore } from '../../lib/cart.client'
+  import { cartToCheckoutItems, formatMoney } from '@skuio/storefront'
+
+  const cfg = (window as unknown as { __cartConfig: { currency: string; locale: string; maxQuantity: number } }).__cartConfig
+  const empty = document.querySelector<HTMLElement>('[data-cart-empty]')!
+  const full = document.querySelector<HTMLElement>('[data-cart-full]')!
+  const list = document.querySelector<HTMLUListElement>('[data-cart-lines]')!
+  const subtotal = document.querySelector<HTMLElement>('[data-cart-subtotal]')!
+  const itemsInput = document.querySelector<HTMLInputElement>('[data-cart-items]')!
+  const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!)
+
+  function render() {
+    const cart = cartStore.get()
+    const has = cart.lines.length > 0
+    empty.hidden = has
+    full.hidden = !has
+    if (!has) return
+    list.innerHTML = cart.lines.map((l) => `
+      <li class="flex items-center gap-4 p-4 text-sm" data-sku="${esc(l.sku)}">
+        ${l.image ? `<img src="${esc(l.image)}" alt="" width="72" height="54" class="h-14 w-[72px] shrink-0 rounded border border-rule object-contain bg-white">` : '<span class="h-14 w-[72px] shrink-0 rounded border border-rule"></span>'}
+        <div class="min-w-0 flex-1">
+          ${l.url ? `<a href="${esc(l.url)}" class="font-semibold text-ink hover:text-accent">${esc(l.name)}</a>` : `<span class="font-semibold text-ink">${esc(l.name)}</span>`}
+          <p class="mt-0.5 text-[11px] tracking-wide text-body/60 uppercase">SKU ${esc(l.sku)} · ${formatMoney(l.unitPrice, cfg.locale)} each</p>
+        </div>
+        <input type="number" inputmode="numeric" min="1" max="${cfg.maxQuantity}" value="${l.quantity}" aria-label="Quantity for ${esc(l.name)}" data-qty
+          class="w-16 rounded-md border border-rule px-2 py-2 text-center font-semibold text-ink">
+        <span class="w-20 text-right font-semibold text-ink">${formatMoney({ amount: l.unitPrice.amount * l.quantity, currency: l.unitPrice.currency }, cfg.locale)}</span>
+        <button type="button" aria-label="Remove ${esc(l.name)}" data-remove class="text-body/50 hover:text-accent">✕</button>
+      </li>`).join('')
+    subtotal.textContent = formatMoney(cartStore.subtotal(cfg.currency), cfg.locale)
+    itemsInput.value = JSON.stringify(cartToCheckoutItems(cart))
+  }
+
+  list.addEventListener('change', (e) => {
+    const input = (e.target as HTMLElement).closest<HTMLInputElement>('[data-qty]')
+    const sku = (e.target as HTMLElement).closest<HTMLElement>('[data-sku]')?.dataset.sku
+    if (input && sku) cartStore.setQuantity(sku, Number(input.value), cfg.maxQuantity)
+  })
+  list.addEventListener('click', (e) => {
+    const sku = (e.target as HTMLElement).closest<HTMLElement>('[data-remove]') && (e.target as HTMLElement).closest<HTMLElement>('[data-sku]')?.dataset.sku
+    if (sku) cartStore.remove(sku)
+  })
+
+  // Surface a bounced checkout (?checkout_error=) and clear the cart after a successful one is
+  // handled by the success page, which links back here.
+  const err = new URLSearchParams(location.search).get('checkout_error')
+  if (err) {
+    const box = document.querySelector<HTMLElement>('[data-cart-error]')!
+    box.textContent = err === 'cancelled' ? 'Checkout was cancelled — nothing was charged.' : 'Something went wrong starting checkout. Please try again.'
+    box.classList.remove('hidden')
+  }
+
+  render()
+  cartStore.subscribe(render)
+</script>
