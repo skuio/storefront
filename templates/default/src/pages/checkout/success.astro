@@ -1,59 +1,65 @@
 ---
-import { formatMoney, type Checkout, type StorefrontOrder } from '@skuio/storefront'
-import { orderFromSession } from '@skuio/storefront/stripe'
+import { formatMoney } from '@skuio/storefront'
+import { applyPaymentEvents } from '@skuio/storefront/payments'
 import BaseLayout from '../../layouts/BaseLayout.astro'
-import { config, routes } from '../../lib/catalog'
-import { getStripe } from '../../lib/stripe'
+import { config, payment, paymentContext, routes, store } from '../../lib/store'
 
-// Renders per request: the summary comes from the checkout that just completed.
-// Two arrival paths — ?checkout_id= when the provider created the checkout,
-// ?session_id= when this store created a Stripe session directly.
+/**
+ * Order confirmation. Looked up by the order id and the access key issued at
+ * checkout, so only the buyer who placed it lands here. If the processor's
+ * webhook has not arrived yet, the adapter's `verifyReturn` checks the return
+ * parameters so the page (and the confirmation email) do not lag behind.
+ */
 export const prerender = false
 
-type Summary = Pick<StorefrontOrder, 'reference' | 'total' | 'shipping' | 'lines' | 'customer'>
-
-let order: Summary | null = null
+const s = store(Astro)
+const id = Astro.url.searchParams.get('order') ?? ''
+const key = Astro.url.searchParams.get('key') ?? ''
+let order = id && key ? await s.orders.getWithKey(id, key) : null
 let lookupFailed = false
 
-const checkoutId = Astro.url.searchParams.get('checkout_id')
-const sessionId = Astro.url.searchParams.get('session_id')
-
-try {
-  if (checkoutId && config.provider.getCheckout) {
-    const c: Checkout = await config.provider.getCheckout(checkoutId)
-    if (c.status === 'completed') {
-      order = { reference: c.id.replace(/^chk_/, '').toUpperCase(), total: c.total, shipping: c.shipping, lines: c.lines, customer: c.customer ?? {} }
+// Not paid yet as far as the store knows — including an expired (cancelled) checkout the
+// buyer has just completed: the adapter's verdict reopens it, the same way the webhook would.
+if (order && order.payment.status !== 'paid') {
+  try {
+    const adapter = payment(Astro)
+    if (adapter.verifyReturn) {
+      const events = await adapter.verifyReturn(Astro.url.searchParams, order, paymentContext(Astro))
+      if (events.length) {
+        await applyPaymentEvents(s, events)
+        order = await s.orders.getWithKey(id, key)
+      }
     }
-  } else if (sessionId) {
-    const stripe = getStripe(Astro)
-    if (!stripe) throw new Error('Stripe is not configured')
-    const session = await stripe.checkout.sessions.retrieve(sessionId, { expand: ['line_items', 'line_items.data.price.product'] })
-    // Only acknowledge a session that actually paid.
-    if (session.payment_status === 'paid' || session.status === 'complete') order = orderFromSession(session)
+  } catch (error) {
+    console.error('success page: could not verify the payment', error)
+    lookupFailed = true
   }
-} catch (error) {
-  console.error('success page: could not load the checkout', error)
-  lookupFailed = true
 }
 
+const paid = order?.payment.status === 'paid'
+const number = order ? `${config.orders.numberPrefix}${order.number}` : ''
 const phone = config.contact?.phone
 const tel = config.contact?.phoneE164 ?? phone
 const fmt = (m: { amount: number; currency: string }) => formatMoney(m, config.locale)
 ---
 
-<BaseLayout title="Order confirmed" noindex>
+<BaseLayout title={paid ? 'Order confirmed' : 'Order received'} noindex>
   <div class="mx-auto max-w-2xl px-5 py-20">
     {
       order ? (
         <>
           <div class="flex items-center gap-3">
-            <span class="flex h-11 w-11 items-center justify-center rounded-full bg-green-600 text-xl text-white" aria-hidden="true">✓</span>
-            <h1 class="display-heading text-5xl">Thank you</h1>
+            <span class:list={['flex h-11 w-11 items-center justify-center rounded-full text-xl text-white', paid ? 'bg-green-600' : 'bg-accent']} aria-hidden="true">{paid ? '✓' : '…'}</span>
+            <h1 class="display-heading text-5xl">{paid ? 'Thank you' : 'Almost there'}</h1>
           </div>
 
-          <p class="mt-5 text-sm">
-            Your order is confirmed{order.customer.email ? ` and a receipt is on its way to ${order.customer.email}` : ''}.
-            Reference <strong class="text-ink">{order.reference}</strong>.
+          <p class="mt-5 text-sm" data-order-status={order.status}>
+            {paid
+              ? `Your order is confirmed and a receipt is on its way to ${order.customer.email}.`
+              : lookupFailed
+                ? 'We could not confirm your payment yet. If you completed it, your confirmation will arrive shortly — please do not pay again.'
+                : 'Your order has been placed. We will confirm it as soon as your payment is received.'}
+            {' '}Order number <strong class="text-ink">{number}</strong>.
           </p>
 
           <div class="mt-8 rounded-lg border border-rule">
@@ -64,16 +70,22 @@ const fmt = (m: { amount: number; currency: string }) => formatMoney(m, config.l
                     <span class="font-semibold text-ink">{line.name}</span>
                     {line.quantity > 1 && <span class="text-body/70"> × {line.quantity}</span>}
                   </span>
-                  <span class="shrink-0 font-semibold text-ink">{fmt(line.total)}</span>
+                  <span class="shrink-0 font-semibold text-ink">{fmt(line.totalAmount)}</span>
                 </li>
               ))}
             </ul>
             <div class="flex items-center justify-between border-t border-rule px-4 py-3 text-sm">
-              <span>Shipping</span>
+              <span>Shipping{order.shippingMethod ? ` — ${order.shippingMethod.name}` : ''}</span>
               <span class="font-semibold text-ink">{order.shipping.amount > 0 ? fmt(order.shipping) : 'Free'}</span>
             </div>
+            {order.discount.amount > 0 && (
+              <div class="flex items-center justify-between border-t border-rule px-4 py-3 text-sm">
+                <span>Discount</span>
+                <span class="font-semibold text-ink">−{fmt(order.discount)}</span>
+              </div>
+            )}
             <div class="flex items-center justify-between border-t border-rule bg-[#fafafa] p-4">
-              <span class="text-sm font-semibold text-ink">Total paid</span>
+              <span class="text-sm font-semibold text-ink">{paid ? 'Total paid' : 'Total'}</span>
               <span class="text-lg font-bold text-ink">{fmt(order.total)}</span>
             </div>
           </div>
@@ -81,9 +93,9 @@ const fmt = (m: { amount: number; currency: string }) => formatMoney(m, config.l
           <div class="mt-8 rounded-lg bg-[#fafafa] p-5 text-sm">
             <h2 class="font-semibold text-ink">What happens next</h2>
             <p class="mt-2">
-              We will confirm the details and send tracking as soon as your order ships. You can check its
-              status any time at <a href="/account/order-lookup/" class="font-semibold text-accent">order status</a>
-              with your email and reference {order.reference}.
+              We will send tracking as soon as your order ships. You can follow it any time in
+              <a href="/account/" class="font-semibold text-accent">your account</a> — sign in with {order.customer.email}, no password needed —
+              or at <a href="/account/order-lookup/" class="font-semibold text-accent">order status</a> with your email and order number {number}.
             </p>
             {phone && (
               <p class="mt-3">
@@ -94,11 +106,10 @@ const fmt = (m: { amount: number; currency: string }) => formatMoney(m, config.l
         </>
       ) : (
         <>
-          <h1 class="display-heading text-5xl">{lookupFailed ? 'We could not load your order' : 'Nothing to show here'}</h1>
+          <h1 class="display-heading text-5xl">Nothing to show here</h1>
           <p class="mt-4 text-sm">
-            {lookupFailed
-              ? 'Your payment may still have gone through. Please do not pay again — contact us and we will confirm the order.'
-              : 'This page confirms an order after checkout. It looks like you arrived without completing one.'}
+            This page confirms an order after checkout. It looks like you arrived without completing one, or the link has expired.
+            {phone ? ` If you have paid and are unsure, call ${phone} and we will confirm it.` : ''}
           </p>
         </>
       )
@@ -109,3 +120,9 @@ const fmt = (m: { amount: number; currency: string }) => formatMoney(m, config.l
     </a>
   </div>
 </BaseLayout>
+
+<script>
+  // The order exists on the server now; the browser cart has done its job.
+  import { cartStore } from '../../lib/cart.client'
+  if (document.querySelector('[data-order-status]')) cartStore.clear()
+</script>

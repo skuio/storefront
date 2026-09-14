@@ -1,22 +1,20 @@
 ---
-import { config } from '../../lib/catalog'
+import { store } from '../../lib/store'
 import { writeSession } from '../../lib/account'
 
 // The magic link lands here. Exchange the token, set the cookie, move on.
 // No HTML is ever rendered by this route: every path is a redirect.
 export const prerender = false
 
-const customers = config.provider.customers
 const token = Astro.url.searchParams.get('token')
-
-if (!customers || !token) return Astro.redirect('/account/?error=link', 303)
+if (!token) return Astro.redirect('/account/?error=link', 303)
 
 try {
-  const session = await customers.exchange(token)
-  writeSession(Astro.cookies, session.sessionToken, session.expiresAt, Astro.url.protocol === 'https:')
+  const session = await store(Astro).sessions.exchange(token)
+  writeSession(Astro.cookies, session.token, session.expiresAt, Astro.url.protocol === 'https:')
   return Astro.redirect('/account/orders/', 303)
 } catch (error) {
-  console.warn('account: token exchange failed', error)
+  console.warn('account: token exchange failed', error instanceof Error ? error.message : error)
   return Astro.redirect('/account/?error=link', 303)
 }
 ---

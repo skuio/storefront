@@ -1,6 +1,6 @@
 {
   "name": "@skuio/template-default",
-  "description": "Reference storefront: Astro + Stripe Checkout on Cloudflare Workers, catalogue from @skuio/storefront.",
+  "description": "Reference storefront: Astro on Cloudflare Workers + D1, the store platform from @skuio/storefront.",
   "private": true,
   "type": "module",
   "version": "0.1.0",
@@ -11,12 +11,15 @@
     "deploy": "astro build && wrangler deploy",
     "check": "astro check",
     "e2e": "playwright test",
+    "db:migrate:local": "node scripts/db-migrate.mjs --local",
+    "db:migrate": "node scripts/db-migrate.mjs --remote",
+    "seed": "node scripts/seed-store.mjs --local",
+    "seed:remote": "node scripts/seed-store.mjs --remote",
     "migrate:woocommerce": "node scripts/export-woocommerce.mjs",
     "migrate:images": "node scripts/fetch-images.mjs"
   },
   "dependencies": {
     "@astrojs/cloudflare": "^12.6.10",
-    "@astrojs/sitemap": "^3.6.0",
     "@skuio/storefront": "*",
     "astro": "^5.14.1",
     "stripe": "^19.3.0"

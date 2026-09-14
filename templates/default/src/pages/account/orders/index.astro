@@ -1,43 +1,47 @@
 ---
-import { formatMoney, type CustomerOrder } from '@skuio/storefront'
+import { formatMoney, type Order } from '@skuio/storefront'
 import BaseLayout from '../../../layouts/BaseLayout.astro'
 import Breadcrumbs from '../../../components/Breadcrumbs.astro'
-import { config, routes } from '../../../lib/catalog'
+import { config, routes, store } from '../../../lib/store'
+import { resolveImage } from '../../../lib/images'
 import { clearSession, readSession } from '../../../lib/account'
 
 export const prerender = false
 
-const customers = config.provider.customers
+const s = store(Astro)
 const token = readSession(Astro.cookies)
-if (!customers || !token) return Astro.redirect('/account/', 303)
-
-let orders: CustomerOrder[] = []
-let name: string | undefined
-try {
-  const [me, list] = await Promise.all([customers.me(token), customers.orders(token)])
-  name = me.name
-  orders = list
-} catch (error) {
+const customer = await s.sessions.resolve(token)
+if (!customer) {
   // An expired or revoked session: drop the cookie and start over.
-  console.warn('account: session rejected', error)
-  clearSession(Astro.cookies)
-  return Astro.redirect('/account/?error=link', 303)
+  if (token) clearSession(Astro.cookies)
+  return Astro.redirect('/account/', 303)
 }
+const orders = await s.orders.forCustomer(customer.id)
 
 const fmt = (m: { amount: number; currency: string }) => formatMoney(m, config.locale)
 const date = (iso: string) => new Date(iso).toLocaleDateString(config.locale, { year: 'numeric', month: 'short', day: 'numeric' })
-const statusLabel: Record<CustomerOrder['fulfillmentStatus'], string> = { unfulfilled: 'Being prepared', partial: 'Partially shipped', fulfilled: 'Shipped' }
+const badge = (o: Order): { label: string; cls: string } => {
+  switch (o.status) {
+    case 'cancelled': return { label: 'Cancelled', cls: 'bg-rule text-body' }
+    case 'refunded': return { label: 'Refunded', cls: 'bg-rule text-body' }
+    case 'fulfilled': return { label: 'Shipped', cls: 'bg-green-600 text-white' }
+    case 'partially_fulfilled': return { label: 'Partially shipped', cls: 'bg-accent/10 text-accent' }
+    case 'pending_payment': return { label: 'Awaiting payment', cls: 'bg-accent/10 text-accent' }
+    default: return { label: 'Being prepared', cls: 'bg-accent/10 text-accent' }
+  }
+}
 ---
 
 <BaseLayout title="Your orders" noindex>
   <div class="mx-auto max-w-3xl px-5 py-10">
     <Breadcrumbs items={[{ label: 'Home', href: '/' }, { label: 'Account', href: '/account/' }, { label: 'Orders' }]} />
     <div class="mt-6 flex flex-wrap items-baseline justify-between gap-4">
-      <h1 class="display-heading text-5xl">{name ? `${name.split(' ')[0]}'s orders` : 'Your orders'}</h1>
+      <h1 class="display-heading text-5xl">{customer.name ? `${customer.name.split(' ')[0]}'s orders` : 'Your orders'}</h1>
       <form method="POST" action="/api/account/sign-out">
         <button type="submit" class="text-xs font-semibold tracking-wide text-body/70 uppercase hover:text-accent">Sign out</button>
       </form>
     </div>
+    <p class="mt-2 text-sm text-body/70">Signed in as {customer.email}</p>
 
     {
       orders.length === 0 ? (
@@ -47,49 +51,61 @@ const statusLabel: Record<CustomerOrder['fulfillmentStatus'], string> = { unfulf
         </div>
       ) : (
         <ul class="mt-8 space-y-6">
-          {orders.map((o) => (
-            <li class="rounded-lg border border-rule">
-              <div class="flex flex-wrap items-baseline justify-between gap-3 border-b border-rule bg-[#fafafa] px-4 py-3 text-sm">
-                <span>
-                  <span class="font-semibold text-ink">Order {o.reference}</span>
-                  <span class="text-body/60"> · {date(o.createdAt)}</span>
-                </span>
-                <span class:list={['rounded-full px-2.5 py-0.5 text-[11px] font-bold tracking-wide uppercase', o.status === 'cancelled' || o.status === 'refunded' ? 'bg-rule text-body' : o.fulfillmentStatus === 'fulfilled' ? 'bg-green-600 text-white' : 'bg-accent/10 text-accent']}>
-                  {o.status === 'cancelled' ? 'Cancelled' : o.status === 'refunded' ? 'Refunded' : statusLabel[o.fulfillmentStatus]}
-                </span>
-              </div>
-              <ul class="divide-y divide-rule">
-                {o.lines.map((l) => (
-                  <li class="flex items-center gap-4 px-4 py-3 text-sm">
-                    {l.image ? <img src={l.image} alt="" width="56" height="42" class="h-[42px] w-14 shrink-0 rounded border border-rule bg-white object-contain" /> : <span class="h-[42px] w-14 shrink-0 rounded border border-rule" />}
-                    <span class="min-w-0 flex-1">
-                      <span class="font-semibold text-ink">{l.name}</span>
-                      <span class="block text-[11px] tracking-wide text-body/60 uppercase">SKU {l.sku}{l.quantity > 1 ? ` · × ${l.quantity}` : ''}</span>
-                    </span>
-                    <span class="font-semibold text-ink">{fmt(l.total)}</span>
-                  </li>
-                ))}
-              </ul>
-              {o.shipments.length > 0 && (
-                <div class="border-t border-rule px-4 py-3 text-sm">
-                  {o.shipments.map((s) => (
-                    <p>
-                      {s.carrier} tracking{' '}
-                      {s.trackingUrl ? <a href={s.trackingUrl} class="font-semibold text-accent hover:underline" rel="noopener">{s.trackingNumber}</a> : <strong class="text-ink">{s.trackingNumber}</strong>}
-                      {s.shippedAt && <span class="text-body/60"> · shipped {date(s.shippedAt)}</span>}
-                    </p>
-                  ))}
+          {orders.map((o) => {
+            const b = badge(o)
+            return (
+              <li class="rounded-lg border border-rule" data-order={o.number}>
+                <div class="flex flex-wrap items-baseline justify-between gap-3 border-b border-rule bg-[#fafafa] px-4 py-3 text-sm">
+                  <span>
+                    <a href={`/account/orders/${o.id}/`} class="font-semibold text-ink hover:text-accent">Order {config.orders.numberPrefix}{o.number}</a>
+                    <span class="text-body/60"> · {date(o.createdAt)}</span>
+                  </span>
+                  <span class:list={['rounded-full px-2.5 py-0.5 text-[11px] font-bold tracking-wide uppercase', b.cls]}>{b.label}</span>
                 </div>
-              )}
-              <div class="flex flex-wrap items-center justify-between gap-3 border-t border-rule px-4 py-3 text-sm">
-                <span>Total <strong class="text-ink">{fmt(o.total)}</strong>{o.shipping.amount > 0 ? ` · shipping ${fmt(o.shipping)}` : ' · free shipping'}</span>
-                <button type="button" class="rounded-md border-2 border-ink px-4 py-1.5 text-xs font-bold tracking-wide text-ink uppercase transition hover:bg-ink hover:text-white"
-                  data-reorder={JSON.stringify(o.lines.map((l) => ({ sku: l.sku, name: l.name, quantity: l.quantity, unitPrice: l.unitPrice, image: l.image })))}>
-                  Reorder
-                </button>
-              </div>
-            </li>
-          ))}
+                <ul class="divide-y divide-rule">
+                  {o.lines.map((l) => {
+                    const img = resolveImage(l.image ? { src: l.image } : null)
+                    return (
+                      <li class="flex items-center gap-4 px-4 py-3 text-sm">
+                        {img ? <img src={img.src} alt="" width="56" height="42" class="h-[42px] w-14 shrink-0 rounded border border-rule bg-white object-contain" /> : <span class="h-[42px] w-14 shrink-0 rounded border border-rule" />}
+                        <span class="min-w-0 flex-1">
+                          <span class="font-semibold text-ink">{l.name}</span>
+                          <span class="block text-[11px] tracking-wide text-body/60 uppercase">SKU {l.sku}{l.quantity > 1 ? ` · × ${l.quantity}` : ''}{l.fulfilledQuantity > 0 && l.fulfilledQuantity < l.quantity ? ` · ${l.fulfilledQuantity} shipped` : ''}</span>
+                        </span>
+                        <span class="font-semibold text-ink">{fmt(l.totalAmount)}</span>
+                      </li>
+                    )
+                  })}
+                </ul>
+                {o.fulfillments.length > 0 && (
+                  <div class="space-y-1 border-t border-rule px-4 py-3 text-sm">
+                    {o.fulfillments.map((f) => (
+                      <p>
+                        {[f.carrier, f.service].filter(Boolean).join(' ') || 'Shipment'}
+                        {f.trackingNumber && (
+                          <>
+                            {' '}tracking{' '}
+                            {f.trackingUrl ? <a href={f.trackingUrl} class="font-semibold text-accent hover:underline" rel="noopener">{f.trackingNumber}</a> : <strong class="text-ink">{f.trackingNumber}</strong>}
+                          </>
+                        )}
+                        {f.shippedAt && <span class="text-body/60"> · shipped {date(f.shippedAt)}</span>}
+                      </p>
+                    ))}
+                  </div>
+                )}
+                <div class="flex flex-wrap items-center justify-between gap-3 border-t border-rule px-4 py-3 text-sm">
+                  <span>Total <strong class="text-ink">{fmt(o.total)}</strong>{o.shipping.amount > 0 ? ` · shipping ${fmt(o.shipping)}` : ' · free shipping'}</span>
+                  <span class="flex items-center gap-3">
+                    <a href={`/account/orders/${o.id}/`} class="text-xs font-semibold tracking-wide text-accent uppercase hover:underline">Details</a>
+                    <button type="button" class="rounded-md border-2 border-ink px-4 py-1.5 text-xs font-bold tracking-wide text-ink uppercase transition hover:bg-ink hover:text-white"
+                      data-reorder={JSON.stringify(o.lines.map((l) => ({ sku: l.sku, name: l.name, quantity: l.quantity, unitPrice: l.unitAmount, image: resolveImage(l.image ? { src: l.image } : null)?.src })))}>
+                      Reorder
+                    </button>
+                  </span>
+                </div>
+              </li>
+            )
+          })}
         </ul>
       )
     }

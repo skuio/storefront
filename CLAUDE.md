@@ -6,7 +6,7 @@ it is; this file is for changing it.
 ## Layout and the one rule about it
 
 ```
-packages/sdk        @skuio/storefront — framework-agnostic; no Astro, no DOM
+packages/sdk        @skuio/storefront — store core, Store API, adapters; framework-agnostic; no Astro, no DOM
 packages/cli        @skuio/cli — node only, zero runtime deps
 registry/blocks     UI blocks (Astro) — SOURCE OF TRUTH for store components
 templates/default   the reference store — BUILT FROM the registry
@@ -26,14 +26,25 @@ only in the template (pages, layout, config, styles, data) are edited in place.
   Image resolution, `import.meta.glob`, components — all template-side.
 - **The SDK never holds a float price.** `Money.amount` is integer minor
   units. Tests enforce this; keep them.
-- **Stripe is an optional peer of the SDK**, imported only from
-  `@skuio/storefront/stripe`. A store on another processor must not pull
-  Stripe into its bundle.
+- **Stripe is an optional peer of the SDK.** `@skuio/storefront/payments/stripe`
+  only imports its types and takes a client from the caller; nothing else in
+  the SDK mentions it. A store on another processor writes its own
+  `PaymentAdapter` and drops the import from `src/lib/store.ts`.
+- **The store core never talks to a processor or an operations system.**
+  Processors come in through `PaymentAdapter`; SKU.io comes in through the
+  Store API (`docs/store-api.md`). Keep both seams thin.
+- **D1 semantics.** Bind values are string | number | null (never undefined
+  or boolean); `first()`/`all()` only on statements that return rows;
+  anything atomic goes through `batch()`. Tests run the same SQL on
+  better-sqlite3 behind the same interface (`packages/sdk/test/sqlite.ts`).
 - **The CLI has no runtime dependencies.** Node built-ins only.
-- **Blocks assume two template files:** `src/lib/catalog.ts` exporting
-  `catalog`, `config`, `routes`; `src/lib/images.ts` exporting `resolveImage`.
-  Noted in `registry.json` → `conventions`. Do not add more assumptions
-  without documenting them there.
+- **Blocks assume two template files:** `src/lib/store.ts` exporting `store`,
+  `config`, `routes`, `readEnv`, `payment`, `paymentContext`, `mail`, `siteUrl`;
+  `src/lib/images.ts` exporting `resolveImage`. Noted in `registry.json` →
+  `conventions`. Do not add more assumptions without documenting them there.
+- **Every page is server-rendered.** The header needs the category tree from
+  D1, so no page can be prerendered; `<Image>` from `astro:assets` has no
+  runtime transformer on Cloudflare — blocks use `<img>` with `resolveImage`.
 
 ## Adding a block
 
@@ -50,7 +61,7 @@ only in the template (pages, layout, config, styles, data) are edited in place.
 npm run build && npm test && npm run check
 node scripts/sync-template.mjs --check
 npm run template:build
-npm run template:e2e        # STRIPE_SECRET_KEY in templates/default/.env for the live step
+npm run template:e2e        # needs the template's local D1: cd templates/default && npm run db:migrate:local && npm run seed
 ```
 
 ## Versioning

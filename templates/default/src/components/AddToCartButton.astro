@@ -1,6 +1,6 @@
 ---
 import type { Product } from '@skuio/storefront'
-import { catalog, config, routes } from '../lib/catalog'
+import { config, routes, store } from '../lib/store'
 import { resolveImage } from '../lib/images'
 
 interface Props {
@@ -8,6 +8,7 @@ interface Props {
 }
 
 const { product } = Astro.props
+const catalog = await store(Astro).catalog.load()
 const img = resolveImage(product.images[0])
 ---
 

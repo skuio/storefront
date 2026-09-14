@@ -1,45 +1,66 @@
-import type { CatalogProvider } from './provider.js'
-import { defineRoutes, type RoutePatterns, type Routes } from './routes.js'
-import type { ShippingOption } from './shipping.js'
+import { defineRoutes, type RoutePatterns, type Routes } from './routes'
+import type { ShippingOption } from './shipping'
 
-export interface StorefrontConfigInput {
-  /** Display name, used in titles and schema.org markup. */
+export interface StorefrontInput {
+  /** Store name, used in titles, emails and the Store API health check. */
   name: string
-  /** Canonical origin, e.g. https://www.example.com — no trailing slash. */
+  /** Canonical public origin, e.g. https://www.example.com (no trailing slash). */
   url: string
+  /** ISO 4217, lower case: 'usd'. */
   currency: string
+  /** BCP 47 for formatting: 'en-US'. */
   locale?: string
-  provider: CatalogProvider
   routes?: Partial<RoutePatterns>
+  /** At least one option. Options that name `countries` are only offered to those countries. */
   shipping: ShippingOption[]
-  /** ISO 3166-1 alpha-2 codes checkout will ship to. */
+  /** ISO 3166-1 alpha-2 codes the store ships to. */
   shipToCountries: string[]
-  contact?: { phone?: string; phoneE164?: string; email?: string }
+  contact?: {
+    phone?: string
+    phoneE164?: string
+    email?: string
+  }
   checkout?: {
-    /** Upper bound on quantity per line. Default 10. */
+    /** Per line. */
     maxQuantity?: number
     allowPromotionCodes?: boolean
     collectPhone?: boolean
   }
+  inventory?: {
+    /** `available <= lowStockThreshold` shows as low stock. */
+    lowStockThreshold?: number
+  }
+  orders?: {
+    /** Prefix for human order numbers: 'VLD-' → VLD-1001. */
+    numberPrefix?: string
+  }
 }
 
-export interface StorefrontConfig extends Omit<StorefrontConfigInput, 'routes' | 'locale' | 'checkout'> {
+export interface StorefrontConfig extends Omit<StorefrontInput, 'routes' | 'locale' | 'checkout' | 'inventory' | 'orders'> {
   locale: string
   routes: Routes
-  checkout: Required<NonNullable<StorefrontConfigInput['checkout']>>
+  checkout: {
+    maxQuantity: number
+    allowPromotionCodes: boolean
+    collectPhone: boolean
+  }
+  inventory: {
+    lowStockThreshold: number
+  }
+  orders: {
+    numberPrefix: string
+  }
 }
 
-/** Validates and fills defaults. Throws early on the mistakes that are painful late. */
-export function defineStorefront(input: StorefrontConfigInput): StorefrontConfig {
-  if (input.url.endsWith('/')) {
-    throw new Error(`storefront.url must not end with '/': ${input.url}`)
-  }
-  if (!/^https?:\/\//.test(input.url)) {
-    throw new Error(`storefront.url must be an absolute origin: ${input.url}`)
-  }
-  if (input.shipping.length === 0) {
-    throw new Error('storefront.shipping needs at least one option')
-  }
+/**
+ * Validate and fill in a store's configuration. Every store has exactly one
+ * of these, exported from storefront.config.ts.
+ */
+export function defineStorefront(input: StorefrontInput): StorefrontConfig {
+  if (!/^https?:\/\//.test(input.url)) throw new Error(`storefront.url must be absolute, got ${input.url}`)
+  if (input.url.endsWith('/')) throw new Error('storefront.url must not end with a slash')
+  if (!input.shipping.length) throw new Error('storefront.shipping needs at least one option')
+  if (!input.shipToCountries.length) throw new Error('storefront.shipToCountries needs at least one country')
 
   return {
     ...input,
@@ -49,6 +70,12 @@ export function defineStorefront(input: StorefrontConfigInput): StorefrontConfig
       maxQuantity: input.checkout?.maxQuantity ?? 10,
       allowPromotionCodes: input.checkout?.allowPromotionCodes ?? true,
       collectPhone: input.checkout?.collectPhone ?? true,
+    },
+    inventory: {
+      lowStockThreshold: input.inventory?.lowStockThreshold ?? 3,
+    },
+    orders: {
+      numberPrefix: input.orders?.numberPrefix ?? '',
     },
   }
 }

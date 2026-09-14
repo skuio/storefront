@@ -1,10 +1,21 @@
 import { defineConfig } from 'tsup'
 
 export default defineConfig({
-  entry: { index: 'src/index.ts', stripe: 'src/stripe.ts' },
+  entry: {
+    index: 'src/index.ts',
+    store: 'src/store/index.ts',
+    api: 'src/api/index.ts',
+    payments: 'src/payments/index.ts',
+    'payments/stripe': 'src/payments/stripe.ts',
+    'payments/manual': 'src/payments/manual.ts',
+    mail: 'src/mail/index.ts',
+    'mail/sendgrid': 'src/mail/sendgrid.ts',
+    'mail/console': 'src/mail/console.ts',
+  },
   format: ['esm'],
   dts: true,
   clean: true,
   sourcemap: true,
+  splitting: true,
   external: ['stripe'],
 })

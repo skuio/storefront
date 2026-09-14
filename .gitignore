@@ -10,3 +10,9 @@ dist/
 test-results/
 playwright-report/
 *.tsbuildinfo
+
+# Browser-automation debris from local QA runs.
+.playwright-cli/
+
+# A store scaffolded in place must never commit its Store API key.
+.store-api-key

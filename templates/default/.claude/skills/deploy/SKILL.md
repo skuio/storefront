@@ -1,6 +1,6 @@
 ---
 name: deploy
-description: Build and deploy this store to Cloudflare Workers, and set its secrets.
+description: Create the D1 database, apply the schema, set secrets, and deploy this store to Cloudflare Workers.
 ---
 
 # Deploy
@@ -8,24 +8,45 @@ description: Build and deploy this store to Cloudflare Workers, and set its secr
 First time:
 1. `npx wrangler login`
 2. Set `name` in `wrangler.jsonc` to the Worker name you want.
-3. Set secrets — each prompts for the value, nothing is written to disk:
+3. Create the database and paste its id into `wrangler.jsonc` → `d1_databases[0].database_id`:
    ```
-   npx wrangler secret put STRIPE_SECRET_KEY
-   npx wrangler secret put STRIPE_WEBHOOK_SECRET
-   npx wrangler secret put SENDGRID_API_KEY
-   npx wrangler secret put MAIL_FROM
-   npx wrangler secret put ORDER_NOTIFICATION_EMAIL
+   npx wrangler d1 create <name>
+   ```
+4. Apply the schema and seed the catalogue:
+   ```
+   npm run db:migrate
+   npm run seed:remote
+   ```
+5. Set secrets — each prompts for the value, nothing is written to disk:
+   ```
+   openssl rand -hex 32 | npx wrangler secret put STORE_API_KEY
+   openssl rand -hex 32 | npx wrangler secret put SESSION_SECRET
+   npx wrangler secret put PUBLIC_SITE_URL          # https://<your-domain>
+   npx wrangler secret put PAYMENT_PROVIDER         # stripe | manual
+   npx wrangler secret put STRIPE_SECRET_KEY        # stripe only
+   npx wrangler secret put STRIPE_WEBHOOK_SECRET    # stripe only
+   npx wrangler secret put MAIL_PROVIDER            # sendgrid | console
+   npx wrangler secret put SENDGRID_API_KEY         # sendgrid only
+   npx wrangler secret put MAIL_FROM                # verified sender
+   npx wrangler secret put ORDER_NOTIFICATION_EMAIL # optional
    npx wrangler secret put CONTACT_NOTIFICATION_EMAIL
    ```
-4. In Stripe, add a webhook endpoint for `https://<your-domain>/api/stripe-webhook`
-   on the event `checkout.session.completed`; its signing secret is
-   `STRIPE_WEBHOOK_SECRET`.
+6. Stripe only: add a webhook endpoint for `https://<your-domain>/api/payments/webhook`
+   on `checkout.session.completed`, `checkout.session.async_payment_succeeded`,
+   `checkout.session.async_payment_failed` and `charge.refunded`; its signing
+   secret is `STRIPE_WEBHOOK_SECRET`.
 
 Every time:
 ```
 npm run e2e       # guardrail
+npm run db:migrate  # only after upgrading @skuio/storefront with a new migration
 npm run deploy    # astro build && wrangler deploy
 ```
+
+If the global `CF_API_KEY` / `CF_API_EMAIL` environment variables are set on
+your machine, D1 commands may fail with "Authentication error [code: 10000]";
+run wrangler as `env -u CF_API_KEY -u CF_API_EMAIL npx wrangler …` so its own
+login is used (`scripts/db-migrate.mjs` already does this).
 
 Two Cloudflare specifics the template already handles, so you know why they exist:
 - `public/.assetsignore` lists `_worker.js` — without it wrangler refuses to deploy,

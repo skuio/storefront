@@ -1,23 +1,34 @@
 # Architecture
 
-## Why a kit and not a platform
+## Why a platform of our own, and why it is not tied to a processor
 
 Merchants pick a storefront first and an inventory system second, and the
 storefront market is owned by players with fifteen-year moats in themes, apps
-and conversion tooling. Competing there is a losing frame. What SKU.io can do
-that a storefront platform structurally cannot is **run the store on the
-inventory system's own data** — no sync, no oversells, no price drift — and
-serve **several brands from one stock pool** with **B2B and B2C as one engine**.
+and conversion tooling. Competing there head-on is a losing frame. What SKU.io
+can do that a storefront platform structurally cannot is **run operations on
+the store's real orders and push the truth back** — stock, tracking, products —
+through one small contract, for any number of stores, with **B2B and B2C as
+one engine**.
 
-The kit is the thin presentation layer that makes that possible without
-becoming a platform. It ships one good reference store and the blocks it is
-made of, and expects a coding agent to do the design.
+So the kit is a **self-contained e-commerce platform** (think WooCommerce
+without WordPress): an Astro site on Cloudflare Workers with its own D1
+database that owns catalogue, customers, orders, payments and the buyer
+portal, plus a **Store API** the operations system talks to. Payments and mail
+are adapters. Nothing in the platform depends on Stripe, on SKU.io, or on any
+other vendor; each is a plug.
+
+The earlier design (v1) pulled orders out of the payment processor. That is
+the wrong system of record: a processor only knows about money, every
+processor is different, and it knows nothing about the SKU, the customer's
+account, the shipping choice or the fulfilment. The store already holds the
+complete order the moment it is created, so the operations system reads the
+store. See `store-platform.md`.
 
 ## Three ways code is reused, and why each piece uses the one it does
 
 | Mechanism | Used for | Why |
 |---|---|---|
-| npm dependency | `@skuio/storefront` (SDK) | API contract and checkout logic must update under every store without touching its design |
+| npm dependency | `@skuio/storefront` (SDK: store core, Store API, adapters) | contract and order logic must update under every store without touching its design |
 | copy-and-own | blocks, template | design must be the store's to bend; a fork would fight every merge |
 | git fork | nothing | forks of a public repo cannot be private, and sites must be |
 
@@ -28,51 +39,41 @@ package and contains copies of files. `skuio add` refreshes a copy on request.
 
 ```
 skuio/storefront (public, MIT)      this repo — SDK, CLI, registry, template
-<merchant>/<store> (private)        a site: depends on the SDK, owns its UI
-sku.io (private)                    Storefront API, storefront token, hosted portal
+<merchant>/<store> (private)        a site: depends on the SDK, owns its UI and its database
+sku.io (private)                    the "Storefront" sales-channel integration: a Store API client
 ```
-
-## Providers
-
-`CatalogProvider` is the seam. `jsonProvider` makes a store fully static and
-is the top of the funnel — a store can be built, designed and deployed before
-SKU.io is ever involved. `skuioProvider` is the upgrade: live stock, live
-prices, orders into SKU.io, a customer portal. Same components, one config
-line.
 
 ## What runs where
 
-Every catalogue page is prerendered and served as static assets. The Worker
-runs only for `src/pages/api/*` and the success page. Card data goes to
-Stripe's hosted page and never touches the store. The buy form carries a SKU
-and a quantity; the server prices it.
+Every page is **server-rendered in the Worker from D1** — the header alone
+needs the category tree, so nothing can be prerendered — and one catalogue
+snapshot is shared by every component in a request (cached briefly per
+isolate). Static assets (images, CSS, JS) are served by the assets binding.
+Card data goes to the processor's hosted page and never touches the store.
+The buy form carries a SKU and a quantity; the server prices it from the
+database.
 
-## The customer portal
+## Payments
 
-Split in two:
+`PaymentAdapter` is the seam: `start(order)` takes a complete, priced,
+addressed order and returns a redirect or instructions; `handleWebhook`
+decodes what the processor reports; `verifyReturn` covers the buyer coming
+back before the webhook lands. `stripe` (hosted Checkout in payment-only
+mode) and `manual` (pay later, marked paid by the operations system) ship;
+`manual` is the proof that the pipeline needs no processor at all.
 
-- **Hosted by SKU.io** — auth, PII, order history, saved payment methods. Every
-  merchant gets a secure account area on day one regardless of what their
-  storefront looks like. This is the floor.
-- **Blocks in this repo** — `/account/*` pages calling the customer API, so an
-  agent can render accounts natively in the store's own design. This is the
-  ceiling. `order-lookup` is the first of these and works today against
-  Stripe alone.
+## The buyer portal
 
-## What SKU.io has to build
+Lives in the store. Sign-in is an emailed single-use link (`sessions`), the
+session is a hashed token in D1 behind one httpOnly cookie, and order history
+with fulfilments and tracking reads the store's own tables. Guest lookup by
+order number + email works without an account.
 
-In order:
+## What SKU.io builds
 
-1. A **storefront token type** — scoped to one storefront: read catalogue,
-   read availability (as in/low/out, not counts), create checkout. Never an
-   admin PAT.
-2. **Storefront API v1** — catalogue with visibility rules, live stock,
-   customer-group pricing, checkout session creation, order webhook.
-3. A **`storefront` sales channel type** — each tenant has N storefronts with a
-   domain, token, catalogue subset, customer groups → price lists, and a
-   processor. Modelling it as a channel gives order attribution and
-   per-storefront reporting from existing machinery.
-4. **Customer API + hosted portal.**
-
-The kit is built so that (1)–(3) are a config flip for a store, not a
-migration.
+A **Storefront** sales-channel integration that is a client of the Store API:
+poll `GET /orders?updated_since=…` into sales orders, stamp `external_reference`,
+push stock with `PUT /inventory`, push shipments with
+`POST /orders/{id}/fulfillments`, and optionally own the catalogue with
+`PUT /products` / `PUT /categories`. The contract is `store-api.md` +
+`api/store-api-v1.openapi.yaml`.

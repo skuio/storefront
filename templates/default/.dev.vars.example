@@ -1,0 +1,26 @@
+# Local development only: copy to .dev.vars (gitignored). The Cloudflare platform
+# proxy hands these to the Worker under `astro dev`, alongside the local D1 database.
+# In production every one of these is a Worker secret (`wrangler secret put NAME`).
+
+# Bearer key SKU.io uses to call the Store API. Generate with `openssl rand -hex 32`.
+STORE_API_KEY=
+# Signs buyer session hashes. Generate with `openssl rand -hex 32`.
+SESSION_SECRET=
+
+# stripe (hosted Checkout) or manual (pay later; the operations system marks the order paid).
+PAYMENT_PROVIDER=manual
+STRIPE_SECRET_KEY=
+STRIPE_WEBHOOK_SECRET=
+
+# console (log every email — fine for development) or sendgrid.
+MAIL_PROVIDER=console
+SENDGRID_API_KEY=
+MAIL_FROM=
+MAIL_FROM_NAME=
+
+# Absolute public origin for links in emails and processor return URLs.
+PUBLIC_SITE_URL=http://localhost:4321
+
+# Who hears about paid orders and contact-form messages (optional).
+ORDER_NOTIFICATION_EMAIL=
+CONTACT_NOTIFICATION_EMAIL=

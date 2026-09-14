@@ -2,7 +2,7 @@ import type { AstroCookies } from 'astro'
 
 /**
  * The customer session lives in one httpOnly cookie. Page JavaScript can
- * never read it; only server code passes it back to the provider.
+ * never read it; only server code exchanges it with the store.
  */
 export const SESSION_COOKIE = 'skuio_customer_session'
 

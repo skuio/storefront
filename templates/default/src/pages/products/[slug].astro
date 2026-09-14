@@ -6,21 +6,23 @@ import ProductGallery from '../../components/ProductGallery.astro'
 import BuyButton from '../../components/BuyButton.astro'
 import AddToCartButton from '../../components/AddToCartButton.astro'
 import Price from '../../components/Price.astro'
-import { catalog, config, routes } from '../../lib/catalog'
+import { config, routes, store } from '../../lib/store'
 import { resolveImage } from '../../lib/images'
 
-export const prerender = true
+// Rendered per request, so price and availability are always the store's current ones.
+export const prerender = false
 
-export function getStaticPaths() {
-  return catalog.products.map((product) => ({ params: { slug: product.slug }, props: { product } }))
-}
+const catalog = await store(Astro).catalog.load()
+const product = catalog.productBySlug(Astro.params.slug ?? '')
+if (!product) return new Response(null, { status: 404 })
 
-const { product } = Astro.props
 const chain = catalog.breadcrumbs(product)
 const leaf = chain.at(-1)
 const related = leaf ? catalog.productsIn(leaf.id, { deep: true }).filter((p) => p.id !== product.id).slice(0, 4) : []
 const hero = resolveImage(product.images[0])
 const plainShort = (product.shortDescription ?? '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
+const stock = product.availability
+const stockLabel = !product.available ? 'Sold out' : stock?.status === 'low_stock' ? `Only ${stock.quantity} left` : stock?.status === 'backorder' ? 'Backorder' : 'In stock'
 
 const crumbs = [
   { label: 'Home', href: '/' },
@@ -40,7 +42,7 @@ const schema = [
       '@type': 'Offer',
       price: (product.price.amount / 100).toFixed(2),
       priceCurrency: product.price.currency.toUpperCase(),
-      availability: product.available ? 'https://schema.org/InStock' : 'https://schema.org/OutOfStock',
+      availability: product.available ? (stock?.status === 'backorder' ? 'https://schema.org/BackOrder' : 'https://schema.org/InStock') : 'https://schema.org/OutOfStock',
       url: new URL(routes.product(product, catalog), config.url).href,
     },
   },
@@ -63,7 +65,7 @@ const schema = [
         {leaf && <p class="text-[11px] font-semibold tracking-widest text-body/60 uppercase">{chain.map((c) => c.name).join(' · ')}</p>}
         <h1 class="mt-2 text-2xl leading-tight font-bold text-ink sm:text-3xl">{product.name}</h1>
         <p class="mt-4"><Price price={product.price} compareAt={product.compareAtPrice} size="lg" /></p>
-        <p class="mt-1 text-xs text-body/70">SKU {product.sku} · {product.available ? 'In stock' : 'Sold out'}</p>
+        <p class="mt-1 text-xs text-body/70">SKU {product.sku} · {stockLabel}</p>
         {plainShort && <p class="mt-5 text-sm leading-relaxed">{plainShort}</p>}
 
         <BuyButton product={product} />

@@ -1,7 +1,6 @@
 import type { APIContext } from 'astro'
-import { config } from '../../lib/catalog'
-import { sendEmail } from '../../lib/email'
-import { readEnv } from '../../lib/stripe'
+import { escapeHtml } from '@skuio/storefront/mail'
+import { config, mail, readEnv } from '../../lib/store'
 
 export const prerender = false
 
@@ -30,12 +29,18 @@ export async function POST(context: APIContext): Promise<Response> {
     return json({ ok: false, error: 'not_configured' }, 500)
   }
 
-  const sent = await sendEmail(context, {
-    to,
-    replyTo: email,
-    subject: `Website enquiry — ${name}`,
-    text: [`Name:  ${name}`, `Email: ${email}`, '', message, '', '--', `Sent from ${context.url.origin}/contact/`].join('\n'),
-  })
-
-  return sent ? json({ ok: true }) : json({ ok: false, error: 'send_failed' }, 502)
+  const text = [`Name:  ${name}`, `Email: ${email}`, '', message, '', '--', `Sent from ${context.url.origin}/contact/`].join('\n')
+  try {
+    await mail(context).send({
+      to,
+      replyTo: email,
+      subject: `Website enquiry — ${name}`,
+      text,
+      html: `<pre style="font-family:ui-monospace,Menlo,monospace;font-size:13px;white-space:pre-wrap">${escapeHtml(text)}</pre>`,
+    })
+    return json({ ok: true })
+  } catch (error) {
+    console.error('contact: send failed', error)
+    return json({ ok: false, error: 'send_failed' }, 502)
+  }
 }

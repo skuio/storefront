@@ -1,109 +1,143 @@
 import type { APIContext } from 'astro'
-import { shippingForRegion, type ShippingRegion } from '@skuio/storefront'
-import { createStripeCheckout, CheckoutError } from '@skuio/storefront/stripe'
-import { catalog, config, routes } from '../../lib/catalog'
-import { getStripe, readEnv } from '../../lib/stripe'
+import { StoreError, type CheckoutInput } from '@skuio/storefront/store'
+import { payment, paymentContext, store } from '../../lib/store'
 
 export const prerender = false
 
-/** Bounce the customer back where they came from with a message they can act on. */
-function fail(context: APIContext, returnTo: string, reason: 'unavailable' | 'error') {
-  const url = new URL(returnTo, context.url.origin)
-  url.searchParams.set('checkout_error', reason)
+/**
+ * Create the order, then hand it to the payment adapter.
+ *
+ * Accepts the checkout page's form (application/x-www-form-urlencoded) or
+ * JSON. Only SKUs and quantities are read from the client; every price comes
+ * from the store. A form post answers with a 303 (to the processor, to the
+ * pending page, or back to /checkout/ with an error); JSON answers with
+ * `{ ok, redirect }` or `{ ok: false, error: { code, message, details } }`.
+ */
+export async function POST(context: APIContext): Promise<Response> {
+  const wantsJson = (context.request.headers.get('content-type') ?? '').includes('application/json')
+  let input: CheckoutInput
+  let direct: { sku: string; quantity: string } | null = null
+  try {
+    if (wantsJson) input = fromJson(await context.request.json())
+    else {
+      const form = await context.request.formData()
+      input = fromForm(form)
+      const sku = form.get('sku')
+      if (typeof sku === 'string' && sku) direct = { sku, quantity: String(form.get('quantity') ?? '1') }
+    }
+  } catch {
+    return wantsJson ? json({ ok: false, error: { code: 'validation_failed', message: 'Malformed request', details: null } }, 422) : bounce(context, 'invalid', null, direct)
+  }
+
+  const s = store(context)
+  // Lazy housekeeping: processor checkouts abandoned for 24h become cancelled (cheap, indexed).
+  await s.orders.expireAbandoned().catch((e) => console.warn('checkout: expireAbandoned failed', e))
+  try {
+    const order = await s.checkout.createOrder(input)
+    const adapter = payment(context)
+    const start = await adapter.start(order, paymentContext(context))
+    await s.orders.startPayment(order.id, { provider: adapter.id, kind: start.kind })
+    let redirect: string
+    if (start.kind === 'redirect') {
+      redirect = start.url
+    } else {
+      // Pay-later adapters: the order is placed, the buyer gets a receipt and instructions.
+      await s.orders.notifyReceived(order)
+      redirect = `/checkout/pending/?order=${encodeURIComponent(order.id)}&key=${encodeURIComponent(order.accessKey)}`
+    }
+    return wantsJson ? json({ ok: true, redirect, order: { id: order.id, number: order.number } }) : context.redirect(redirect, 303)
+  } catch (error) {
+    if (error instanceof StoreError) {
+      return wantsJson
+        ? json({ ok: false, error: { code: error.code, message: error.message, details: error.details } }, error.status)
+        : bounce(context, 'validation', error.details, direct)
+    }
+    console.error('checkout: failed', error)
+    return wantsJson ? json({ ok: false, error: { code: 'checkout_failed', message: 'Checkout is temporarily unavailable', details: null } }, 502) : bounce(context, 'unavailable', null, direct)
+  }
+}
+
+/** GET is not a checkout action; send stray visitors to the checkout page. */
+export function GET(context: APIContext): Response {
+  return context.redirect('/checkout/', 303)
+}
+
+const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
+
+/** No-JavaScript fallback: back to the form with the reason. The page re-fills Buy Now from the query. */
+function bounce(context: APIContext, reason: string, details: Record<string, string> | null, direct: { sku: string; quantity: string } | null): Response {
+  const url = new URL('/checkout/', context.url.origin)
+  url.searchParams.set('error', reason)
+  if (details) url.searchParams.set('fields', Object.keys(details).join(','))
+  if (direct) {
+    url.searchParams.set('sku', direct.sku)
+    url.searchParams.set('quantity', direct.quantity)
+  }
   return context.redirect(url.pathname + url.search, 303)
 }
 
-/**
- * Two ways in, one shape out:
- *   - Buy Now posts `sku` + `quantity` (one line, bounce back to the product)
- *   - the cart posts `items` = JSON [{ sku, quantity }] (many lines, bounce back to /cart/)
- * Either way only SKUs and quantities are read; prices come from the catalogue.
- */
-function readItems(form: FormData): { items: { sku: string; quantity: number }[]; returnTo: string } | null {
-  const raw = form.get('items')
+function items(raw: unknown, sku?: string | null, quantity?: string | number | null): { sku: string; quantity: number }[] {
+  let list: unknown = raw
   if (typeof raw === 'string' && raw.trim()) {
-    let parsed: unknown
     try {
-      parsed = JSON.parse(raw)
+      list = JSON.parse(raw)
     } catch {
-      return null
+      list = []
     }
-    if (!Array.isArray(parsed) || parsed.length === 0) return null
-    const items = parsed
-      .map((x) => ({ sku: String((x as { sku?: unknown })?.sku ?? '').trim(), quantity: Number((x as { quantity?: unknown })?.quantity ?? 1) }))
-      .filter((x) => x.sku)
-    return items.length ? { items, returnTo: '/cart/' } : null
   }
-  const sku = String(form.get('sku') ?? '').trim()
-  if (!sku) return null
-  const product = catalog.product(sku)
-  return { items: [{ sku, quantity: Number(form.get('quantity') ?? 1) }], returnTo: product ? routes.product(product, catalog) : '/cart/' }
+  const out = Array.isArray(list)
+    ? list
+        .map((x) => ({ sku: String((x as { sku?: unknown })?.sku ?? '').trim(), quantity: Number((x as { quantity?: unknown })?.quantity ?? 1) }))
+        .filter((x) => x.sku)
+    : []
+  if (out.length === 0 && sku) out.push({ sku: String(sku).trim(), quantity: Number(quantity ?? 1) })
+  return out
 }
 
-export async function POST(context: APIContext): Promise<Response> {
-  const form = await context.request.formData()
-  const read = readItems(form)
-  if (!read) return new Response('Nothing to check out', { status: 400 })
-  const { items, returnTo } = read
-  const region: ShippingRegion = form.get('region') === 'international' ? 'international' : 'domestic'
-  const shipping = shippingForRegion(config.shipping, config.shipToCountries, region)
-
-  // Every SKU must exist before anything is created; a stale cart line is a 400, not a Stripe call.
-  const unknown = items.find((i) => !catalog.product(i.sku))
-  if (unknown) return new Response(`Unknown product ${unknown.sku}`, { status: 400 })
-
-  const origin = readEnv(context, 'PUBLIC_SITE_URL') ?? context.url.origin
-  const cancelUrl = `${origin}${returnTo}?checkout_error=cancelled`
-  const metadata = { return_url: `${origin}${returnTo}` }
-
-  try {
-    // Preferred: the provider creates the hosted checkout itself. SKU.io does —
-    // it prices the lines from the storefront's price list and opens the
-    // session on the tenant's own processor, so this store holds no Stripe key.
-    if (config.provider.createCheckout) {
-      const checkout = await config.provider.createCheckout({
-        items: items.map((i) => ({ sku: i.sku, quantity: clamp(i.quantity, config.checkout.maxQuantity) })),
-        successUrl: `${origin}/checkout/success/?checkout_id={CHECKOUT_ID}`,
-        cancelUrl,
-        ...(shipping.enforced ? { shipToCountries: shipping.countries } : {}),
-        metadata: { ...metadata, region },
-      })
-      if (!checkout.url) throw new Error(`checkout ${checkout.id} has no url`)
-      return context.redirect(checkout.url, 303)
-    }
-
-    // Otherwise the store talks to Stripe directly. The price still comes from
-    // the catalogue inside createStripeCheckout — the form only carries a SKU.
-    const stripe = getStripe(context)
-    if (!stripe) {
-      console.error('checkout: no provider checkout and STRIPE_SECRET_KEY is not configured')
-      return fail(context, returnTo, 'unavailable')
-    }
-    const session = await createStripeCheckout({
-      stripe,
-      catalog,
-      config,
-      items,
-      successUrl: `${origin}/checkout/success/?session_id={CHECKOUT_SESSION_ID}`,
-      cancelUrl,
-      metadata,
-      region,
-    })
-    return context.redirect(session.url, 303)
-  } catch (error) {
-    if (error instanceof CheckoutError && (error.code === 'unavailable' || error.code === 'no_shipping')) {
-      return fail(context, returnTo, 'unavailable')
-    }
-    console.error('checkout: failed to create checkout', error)
-    return fail(context, returnTo, 'error')
+function fromForm(form: FormData): CheckoutInput {
+  const get = (k: string) => {
+    const v = form.get(k)
+    return typeof v === 'string' ? v : ''
+  }
+  return {
+    items: items(get('items'), get('sku'), get('quantity')),
+    email: get('email'),
+    name: get('name') || null,
+    phone: get('phone') || null,
+    shippingAddress: {
+      name: get('ship_name') || get('name'),
+      line1: get('ship_line1'),
+      line2: get('ship_line2'),
+      city: get('ship_city'),
+      state: get('ship_state'),
+      postalCode: get('ship_postal_code'),
+      country: get('ship_country'),
+    },
+    shippingOptionId: get('shipping_option'),
+    notes: get('notes') || null,
   }
 }
 
-/** GET is not a checkout action; send stray visitors to the catalogue. */
-export function GET(context: APIContext): Response {
-  return context.redirect(routes.shop(), 303)
-}
-
-function clamp(n: number, max: number): number {
-  return Number.isFinite(n) ? Math.min(Math.max(Math.trunc(n), 1), max) : 1
+function fromJson(body: unknown): CheckoutInput {
+  const b = (body && typeof body === 'object' ? body : {}) as Record<string, unknown>
+  const a = (b.shipping_address && typeof b.shipping_address === 'object' ? b.shipping_address : {}) as Record<string, unknown>
+  const str = (v: unknown) => (typeof v === 'string' ? v : '')
+  return {
+    items: items(b.items, str(b.sku), typeof b.quantity === 'number' ? b.quantity : str(b.quantity)),
+    email: str(b.email),
+    name: str(b.name) || null,
+    phone: str(b.phone) || null,
+    shippingAddress: {
+      name: str(a.name) || str(b.name),
+      line1: str(a.line1),
+      line2: str(a.line2),
+      city: str(a.city),
+      state: str(a.state),
+      postalCode: str(a.postal_code),
+      country: str(a.country),
+    },
+    shippingOptionId: str(b.shipping_option),
+    notes: str(b.notes) || null,
+    ...(b.metadata && typeof b.metadata === 'object' ? { metadata: b.metadata as Record<string, string> } : {}),
+  }
 }

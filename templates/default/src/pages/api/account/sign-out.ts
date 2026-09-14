@@ -1,5 +1,5 @@
 import type { APIContext } from 'astro'
-import { config } from '../../../lib/catalog'
+import { store } from '../../../lib/store'
 import { clearSession, readSession } from '../../../lib/account'
 
 export const prerender = false
@@ -7,9 +7,7 @@ export const prerender = false
 export async function POST(context: APIContext): Promise<Response> {
   const token = readSession(context.cookies)
   clearSession(context.cookies)
-  if (token && config.provider.customers) {
-    // Best effort: the cookie is gone either way.
-    await config.provider.customers.revoke(token).catch((e) => console.warn('account: revoke failed', e))
-  }
+  // Best effort: the cookie is gone either way.
+  await store(context).sessions.signOut(token).catch((e) => console.warn('account: sign-out failed', e))
   return context.redirect('/', 303)
 }

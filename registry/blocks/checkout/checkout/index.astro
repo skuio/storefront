@@ -1,0 +1,311 @@
+---
+import { formatMoney, hasInternationalRegion, shippingForRegion } from '@skuio/storefront'
+import BaseLayout from '../../layouts/BaseLayout.astro'
+import Breadcrumbs from '../../components/Breadcrumbs.astro'
+import { config, store } from '../../lib/store'
+import { resolveImage } from '../../lib/images'
+
+/**
+ * The store's own checkout: contact, shipping address, shipping method. The
+ * order is created from this form, then the payment adapter takes over —
+ * which is what lets the platform work with any processor, or none.
+ *
+ * Two ways in: Buy Now arrives with ?sku=&quantity= (works without JavaScript,
+ * summary rendered here); the cart arrives empty-handed and the script fills
+ * the summary and the hidden `items` field from localStorage.
+ */
+export const prerender = false
+
+const s = store(Astro)
+const catalog = await s.catalog.load()
+const params = Astro.url.searchParams
+const sku = params.get('sku')
+const quantity = Math.min(Math.max(Number(params.get('quantity') ?? 1) || 1, 1), config.checkout.maxQuantity)
+const direct = sku ? catalog.product(sku) : undefined
+const directLine = direct && direct.available ? { sku: direct.sku, name: direct.name, quantity, unitPrice: direct.price, image: resolveImage(direct.images[0])?.src ?? null } : null
+const error = params.get('error')
+const failedFields = (params.get('fields') ?? '').split(',').filter(Boolean)
+
+const fmt = (m: { amount: number; currency: string }) => formatMoney(m, config.locale)
+const directSubtotal = directLine ? directLine.unitPrice.amount * directLine.quantity : 0
+const domestic = shippingForRegion(config.shipping, config.shipToCountries, 'domestic')
+const international = hasInternationalRegion(config.shipping, config.shipToCountries)
+const options = config.shipping.map((o) => ({
+  id: o.id,
+  label: o.label,
+  price: o.price,
+  estimate: o.estimate ? `${o.estimate.min}–${o.estimate.max} business days` : '',
+  countries: domestic.enforced ? (o.countries && o.countries.length ? o.countries : []) : config.shipToCountries,
+  scoped: !!(o.countries && o.countries.length),
+}))
+const countryNames = new Intl.DisplayNames([config.locale], { type: 'region' })
+const countries = config.shipToCountries.map((code) => ({ code, name: countryNames.of(code) ?? code })).sort((a, b) => a.name.localeCompare(b.name))
+const defaultCountry = domestic.countries[0] ?? config.shipToCountries[0]!
+const inputClass = 'mt-1.5 w-full rounded-md border border-rule px-3 py-2.5 text-sm focus:border-accent focus:ring-2 focus:ring-accent/25 focus:outline-none'
+const labelClass = 'block text-xs font-semibold tracking-wide text-ink uppercase'
+---
+
+<BaseLayout title="Checkout" noindex>
+  <div class="mx-auto max-w-5xl px-5 py-10">
+    <Breadcrumbs items={[{ label: 'Home', href: '/' }, { label: 'Cart', href: '/cart/' }, { label: 'Checkout' }]} />
+    <h1 class="display-heading mt-6 text-5xl">Checkout</h1>
+
+    {
+      error && (
+        <p class="mt-6 rounded-md border border-accent/30 bg-accent/5 px-4 py-3 text-sm text-accent" role="alert" data-checkout-error>
+          {error === 'unavailable'
+            ? `Checkout is temporarily unavailable.${config.contact?.phone ? ` Call ${config.contact.phone} and we will take your order by phone.` : ''}`
+            : error === 'validation'
+              ? `Please check ${failedFields.length ? failedFields.map((f) => f.replace(/^shipping_address\./, 'shipping ').replace(/^items\./, '')).join(', ') : 'the form'} and try again.`
+              : 'Something went wrong. Please try again.'}
+        </p>
+      )
+    }
+
+    <div class="mt-8 grid gap-10 lg:grid-cols-[1.2fr_1fr]">
+      <form method="POST" action="/api/checkout" class="space-y-8" data-checkout-form novalidate>
+        <input type="hidden" name="items" value={directLine ? JSON.stringify([{ sku: directLine.sku, quantity: directLine.quantity }]) : '[]'} data-items />
+        {directLine && <input type="hidden" name="sku" value={directLine.sku} />}
+        {directLine && <input type="hidden" name="quantity" value={directLine.quantity} />}
+
+        <section>
+          <h2 class="text-sm font-bold tracking-wide text-ink uppercase">Contact</h2>
+          <div class="mt-4 grid gap-4 sm:grid-cols-2">
+            <div class="sm:col-span-2">
+              <label for="email" class={labelClass}>Email address</label>
+              <input id="email" name="email" type="email" required autocomplete="email" class={inputClass} />
+              <p class="mt-1 hidden text-xs text-accent" data-error-for="email"></p>
+            </div>
+            <div>
+              <label for="name" class={labelClass}>Full name</label>
+              <input id="name" name="name" type="text" required autocomplete="name" class={inputClass} />
+              <p class="mt-1 hidden text-xs text-accent" data-error-for="shipping_address.name"></p>
+            </div>
+            <div>
+              <label for="phone" class={labelClass}>Phone{config.checkout.collectPhone ? '' : ' (optional)'}</label>
+              <input id="phone" name="phone" type="tel" required={config.checkout.collectPhone} autocomplete="tel" class={inputClass} />
+              <p class="mt-1 hidden text-xs text-accent" data-error-for="phone"></p>
+            </div>
+          </div>
+        </section>
+
+        <section>
+          <h2 class="text-sm font-bold tracking-wide text-ink uppercase">Shipping address</h2>
+          <div class="mt-4 grid gap-4 sm:grid-cols-2">
+            <div class="sm:col-span-2">
+              <label for="ship_country" class={labelClass}>Country</label>
+              <select id="ship_country" name="ship_country" required autocomplete="country" class={inputClass} data-country>
+                {countries.map((c) => <option value={c.code} selected={c.code === defaultCountry}>{c.name}</option>)}
+              </select>
+              <p class="mt-1 hidden text-xs text-accent" data-error-for="shipping_address.country"></p>
+            </div>
+            <div class="sm:col-span-2">
+              <label for="ship_line1" class={labelClass}>Address</label>
+              <input id="ship_line1" name="ship_line1" type="text" required autocomplete="shipping address-line1" class={inputClass} />
+              <p class="mt-1 hidden text-xs text-accent" data-error-for="shipping_address.line1"></p>
+            </div>
+            <div class="sm:col-span-2">
+              <label for="ship_line2" class={labelClass}>Apartment, suite, etc. (optional)</label>
+              <input id="ship_line2" name="ship_line2" type="text" autocomplete="shipping address-line2" class={inputClass} />
+            </div>
+            <div>
+              <label for="ship_city" class={labelClass}>City</label>
+              <input id="ship_city" name="ship_city" type="text" required autocomplete="shipping address-level2" class={inputClass} />
+              <p class="mt-1 hidden text-xs text-accent" data-error-for="shipping_address.city"></p>
+            </div>
+            <div>
+              <label for="ship_state" class={labelClass}>State / province</label>
+              <input id="ship_state" name="ship_state" type="text" autocomplete="shipping address-level1" class={inputClass} />
+            </div>
+            <div>
+              <label for="ship_postal_code" class={labelClass}>Postal code</label>
+              <input id="ship_postal_code" name="ship_postal_code" type="text" autocomplete="shipping postal-code" class={inputClass} />
+            </div>
+          </div>
+        </section>
+
+        <section>
+          <h2 class="text-sm font-bold tracking-wide text-ink uppercase">Shipping method</h2>
+          {international && <p class="mt-1 text-xs text-body/70">Rates depend on the destination country.</p>}
+          <ul class="mt-4 space-y-2" data-shipping-options>
+            {options.map((o, i) => (
+              <li data-countries={o.countries.join(',')} data-scoped={o.scoped ? '1' : '0'}>
+                <label class="flex cursor-pointer items-center gap-3 rounded-md border border-rule px-4 py-3 text-sm has-checked:border-accent has-checked:bg-accent/5">
+                  <input type="radio" name="shipping_option" value={o.id} checked={i === 0} data-amount={o.price.amount} data-currency={o.price.currency} class="h-4 w-4" />
+                  <span class="flex-1">
+                    <span class="font-semibold text-ink">{o.label}</span>
+                    {o.estimate && <span class="block text-xs text-body/70">{o.estimate}</span>}
+                  </span>
+                  <span class="font-semibold text-ink">{o.price.amount ? fmt(o.price) : 'Free'}</span>
+                </label>
+              </li>
+            ))}
+          </ul>
+          <p class="mt-1 hidden text-xs text-accent" data-error-for="shipping_option"></p>
+        </section>
+
+        <section>
+          <label for="notes" class={labelClass}>Order notes (optional)</label>
+          <textarea id="notes" name="notes" rows="3" maxlength="2000" class={inputClass}></textarea>
+        </section>
+
+        <div>
+          <button type="submit" class="w-full rounded-md bg-accent px-8 py-3.5 text-sm font-bold tracking-wide text-white uppercase transition hover:bg-accent-dark disabled:opacity-60" data-submit>
+            <span data-submit-label>Continue to payment</span>
+          </button>
+          <p class="mt-3 hidden rounded-md border border-accent/30 bg-accent/5 px-3 py-2 text-xs text-accent" role="alert" data-form-error></p>
+          <p class="mt-3 text-center text-xs text-body/70">You will not be charged until the next step.</p>
+        </div>
+      </form>
+
+      <aside class="h-fit rounded-lg border border-rule bg-[#fafafa] p-5 lg:sticky lg:top-24" data-summary>
+        <h2 class="text-sm font-bold tracking-wide text-ink uppercase">Your order</h2>
+        <ul class="mt-4 divide-y divide-rule" data-summary-lines>
+          {directLine && (
+            <li class="flex items-center gap-3 py-3 text-sm">
+              {directLine.image ? <img src={directLine.image} alt="" width="56" height="42" class="h-[42px] w-14 shrink-0 rounded border border-rule bg-white object-contain" /> : <span class="h-[42px] w-14 shrink-0 rounded border border-rule" />}
+              <span class="min-w-0 flex-1"><span class="font-semibold text-ink">{directLine.name}</span><span class="block text-[11px] tracking-wide text-body/60 uppercase">SKU {directLine.sku} · × {directLine.quantity}</span></span>
+              <span class="font-semibold text-ink">{fmt({ amount: directLine.unitPrice.amount * directLine.quantity, currency: directLine.unitPrice.currency })}</span>
+            </li>
+          )}
+        </ul>
+        <p hidden class="mt-4 text-sm" data-summary-empty>
+          Your cart is empty. <a href="/cart/" class="font-semibold text-accent">Back to the cart</a>
+        </p>
+        <dl class="mt-4 space-y-1 border-t border-rule pt-4 text-sm">
+          <div class="flex justify-between"><dt>Subtotal</dt><dd class="font-semibold text-ink" data-summary-subtotal data-amount={directSubtotal}>{directLine ? fmt({ amount: directSubtotal, currency: config.currency }) : '—'}</dd></div>
+          <div class="flex justify-between"><dt>Shipping</dt><dd class="font-semibold text-ink" data-summary-shipping>{options[0]?.price.amount ? fmt(options[0].price) : 'Free'}</dd></div>
+          <div class="flex justify-between border-t border-rule pt-2 text-base"><dt class="font-semibold text-ink">Total</dt><dd class="font-bold text-ink" data-summary-total>{directLine ? fmt({ amount: directSubtotal + (options[0]?.price.amount ?? 0), currency: config.currency }) : '—'}</dd></div>
+        </dl>
+      </aside>
+    </div>
+  </div>
+</BaseLayout>
+
+<script define:vars={{ currency: config.currency, locale: config.locale, direct: !!directLine }}>
+  window.__checkoutConfig = { currency, locale, direct }
+</script>
+<script>
+  import { cartStore } from '../../lib/cart.client'
+  import { cartToCheckoutItems, formatMoney } from '@skuio/storefront'
+
+  const cfg = (window as unknown as { __checkoutConfig: { currency: string; locale: string; direct: boolean } }).__checkoutConfig
+  const form = document.querySelector<HTMLFormElement>('[data-checkout-form]')!
+  const itemsInput = form.querySelector<HTMLInputElement>('[data-items]')!
+  const country = form.querySelector<HTMLInputElement>('[data-country]')!
+  const optionItems = [...form.querySelectorAll<HTMLLIElement>('[data-shipping-options] > li')]
+  const lines = document.querySelector<HTMLElement>('[data-summary-lines]')!
+  const emptyNote = document.querySelector<HTMLElement>('[data-summary-empty]')!
+  const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!)
+  const fmt = (amount: number) => formatMoney({ amount, currency: cfg.currency }, cfg.locale)
+  let subtotal = 0
+
+  // Cart path: the lines come from localStorage; only SKUs and quantities are posted.
+  function renderCart() {
+    if (cfg.direct) {
+      subtotal = Number(document.querySelector<HTMLElement>('[data-summary-subtotal]')!.dataset.amount ?? 0)
+      return
+    }
+    const cart = cartStore.get()
+    itemsInput.value = JSON.stringify(cartToCheckoutItems(cart))
+    emptyNote.hidden = cart.lines.length > 0
+    lines.innerHTML = cart.lines.map((l) => `
+      <li class="flex items-center gap-3 py-3 text-sm">
+        ${l.image ? `<img src="${esc(l.image)}" alt="" width="56" height="42" class="h-[42px] w-14 shrink-0 rounded border border-rule bg-white object-contain">` : '<span class="h-[42px] w-14 shrink-0 rounded border border-rule"></span>'}
+        <span class="min-w-0 flex-1"><span class="font-semibold text-ink">${esc(l.name)}</span><span class="block text-[11px] tracking-wide text-body/60 uppercase">SKU ${esc(l.sku)} · × ${l.quantity}</span></span>
+        <span class="font-semibold text-ink">${fmt(l.unitPrice.amount * l.quantity)}</span>
+      </li>`).join('')
+    subtotal = cartStore.subtotal(cfg.currency).amount
+  }
+
+  // Shipping options follow the destination: scoped options for their countries, the rest for everyone else.
+  function applyCountry() {
+    const code = country.value
+    const scopedMatch = optionItems.some((li) => li.dataset.scoped === '1' && (li.dataset.countries ?? '').split(',').includes(code))
+    let first: HTMLInputElement | null = null
+    for (const li of optionItems) {
+      const scoped = li.dataset.scoped === '1'
+      const show = scopedMatch ? scoped && (li.dataset.countries ?? '').split(',').includes(code) : !scoped
+      li.hidden = !show
+      const radio = li.querySelector<HTMLInputElement>('input[type=radio]')!
+      radio.disabled = !show
+      if (show && !first) first = radio
+      if (!show) radio.checked = false
+    }
+    if (first && !optionItems.some((li) => !li.hidden && li.querySelector<HTMLInputElement>('input')!.checked)) first.checked = true
+    renderTotals()
+  }
+
+  function renderTotals() {
+    const chosen = form.querySelector<HTMLInputElement>('input[name=shipping_option]:checked')
+    const shipping = Number(chosen?.dataset.amount ?? 0)
+    document.querySelector<HTMLElement>('[data-summary-subtotal]')!.textContent = fmt(subtotal)
+    document.querySelector<HTMLElement>('[data-summary-shipping]')!.textContent = shipping ? fmt(shipping) : 'Free'
+    document.querySelector<HTMLElement>('[data-summary-total]')!.textContent = fmt(subtotal + shipping)
+  }
+
+  function showErrors(details: Record<string, string> | null, message: string) {
+    form.querySelectorAll<HTMLElement>('[data-error-for]').forEach((el) => { el.hidden = true; el.classList.add('hidden') })
+    let firstField: HTMLElement | null = null
+    const leftovers: string[] = []
+    for (const [field, text] of Object.entries(details ?? {})) {
+      const el = form.querySelector<HTMLElement>(`[data-error-for="${CSS.escape(field)}"]`)
+      if (el) {
+        el.textContent = text.charAt(0).toUpperCase() + text.slice(1)
+        el.classList.remove('hidden')
+        el.hidden = false
+        firstField ??= el
+      } else leftovers.push(`${field.replace(/^items\./, '')} ${text}`)
+    }
+    const box = form.querySelector<HTMLElement>('[data-form-error]')!
+    box.textContent = leftovers.length ? leftovers.join('. ') : message
+    box.classList.toggle('hidden', !(leftovers.length || !firstField))
+    ;(firstField ?? box).scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }
+
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault()
+    const button = form.querySelector<HTMLButtonElement>('[data-submit]')!
+    const label = form.querySelector<HTMLElement>('[data-submit-label]')!
+    button.disabled = true
+    label.textContent = 'One moment…'
+    const data = new FormData(form)
+    const body = {
+      items: JSON.parse(String(data.get('items') || '[]')),
+      email: data.get('email'),
+      name: data.get('name'),
+      phone: data.get('phone'),
+      shipping_address: {
+        name: data.get('name'),
+        line1: data.get('ship_line1'),
+        line2: data.get('ship_line2'),
+        city: data.get('ship_city'),
+        state: data.get('ship_state'),
+        postal_code: data.get('ship_postal_code'),
+        country: data.get('ship_country'),
+      },
+      shipping_option: data.get('shipping_option'),
+      notes: data.get('notes'),
+    }
+    try {
+      const res = await fetch(form.action, { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json' }, body: JSON.stringify(body) })
+      const result = (await res.json()) as { ok: boolean; redirect?: string; error?: { code: string; message: string; details: Record<string, string> | null } }
+      if (result.ok && result.redirect) {
+        window.location.href = result.redirect
+        return
+      }
+      showErrors(result.error?.details ?? null, result.error?.message ?? 'Something went wrong. Please try again.')
+    } catch {
+      showErrors(null, 'We could not reach the store. Please try again.')
+    } finally {
+      button.disabled = false
+      label.textContent = 'Continue to payment'
+    }
+  })
+
+  country.addEventListener('change', applyCountry)
+  form.addEventListener('change', (e) => { if ((e.target as HTMLElement).matches('input[name=shipping_option]')) renderTotals() })
+  renderCart()
+  applyCountry()
+  if (!cfg.direct) cartStore.subscribe(() => { renderCart(); renderTotals() })
+</script>

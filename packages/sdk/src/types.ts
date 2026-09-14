@@ -1,53 +1,50 @@
 /**
- * Core catalogue types.
+ * Shared types for the store platform.
  *
- * Money is always integer minor units (cents). Nothing in this package ever
- * holds a float price — Stripe wants minor units too, so a float has no reason
- * to exist anywhere in the pipeline.
+ * Money is always integer minor units: `{ amount: 109900, currency: 'usd' }`
+ * is $1,099.00. Nothing in this package ever holds a float price.
  */
 export interface Money {
-  /** Integer minor units, e.g. 109900 for $1,099.00. */
   amount: number
-  /** ISO 4217, lower or upper case; normalised to upper on format. */
   currency: string
 }
 
 export interface ProductImage {
-  /** Path or URL. The rendering layer decides how to resolve it. */
+  /** Absolute URL or a basename a store resolves against its own assets. */
   src: string
   alt?: string
 }
 
 export type AvailabilityStatus = 'in_stock' | 'low_stock' | 'out_of_stock' | 'backorder' | 'preorder'
 
-/** Status only, never a count — this data is served to the public internet. */
 export interface Availability {
   status: AvailabilityStatus
-  /** For backorder/preorder, when stock is expected. */
+  /** Units available when the store tracks stock for this SKU; undefined when it does not. */
+  quantity?: number
   expectedAt?: string
   updatedAt?: string
 }
 
 export interface Product {
+  /** Same value as `sku` in the store database; kept for backwards compatibility with blocks keyed on `id`. */
   id: string
-  /** Stable merchant identifier. The key used for checkout and order lines. */
   sku: string
   name: string
   slug: string
+  /** HTML. */
   description?: string
+  /** HTML. */
   shortDescription?: string
   price: Money
-  /** Strike-through price when on sale. Only meaningful if greater than price. */
   compareAtPrice?: Money
-  /** Categories this product belongs to. The first is treated as primary. */
   categoryIds: string[]
   images: ProductImage[]
-  /** Purchasable right now. Derived from `availability` when a provider supplies it. */
+  /** Purchasable right now. Derived from availability. */
   available: boolean
   availability?: Availability
-  /** Free-form display attributes (fitment, material, ...). */
   attributes?: Record<string, string>
-  /** Where this product lived on a previous platform, for redirects and canonicals. */
+  position?: number
+  /** URL the product had on a previous platform, when a store reproduces it. */
   legacyPath?: string
 }
 
@@ -57,16 +54,16 @@ export interface Category {
   slug: string
   parentId: string | null
   description?: string
-  image?: string
+  image?: ProductImage
+  position?: number
 }
 
-/** A category placed in its tree, with the derived fields pages need. */
 export interface CategoryNode extends Category {
   children: CategoryNode[]
-  /** Slugs from the root down to and including this node. */
+  /** Slugs from the root to this node. */
   path: string[]
   depth: number
-  /** Products in this node or any descendant. */
+  /** Distinct products in this node and every descendant. */
   productCount: number
 }
 
@@ -80,113 +77,115 @@ export interface Address {
   country?: string
 }
 
+export type OrderStatus =
+  | 'pending_payment'
+  | 'paid'
+  | 'processing'
+  | 'partially_fulfilled'
+  | 'fulfilled'
+  | 'cancelled'
+  | 'refunded'
+
+export type PaymentStatus = 'unpaid' | 'paid' | 'refunded' | 'failed'
+
+export interface OrderPayment {
+  status: PaymentStatus
+  /** Adapter id: `stripe`, `manual`, … */
+  provider: string | null
+  /** Processor reference (a PaymentIntent id, a bank transfer note, …). */
+  reference: string | null
+  methodLabel: string | null
+  paidAt: string | null
+}
+
+export interface OrderCustomer {
+  id: string
+  email: string
+  name: string | null
+  phone: string | null
+}
+
 export interface OrderLine {
+  id: string
   sku: string
   name: string
   quantity: number
-  unitPrice: Money
-  total: Money
+  unitAmount: Money
+  totalAmount: Money
+  fulfilledQuantity: number
+  /** Snapshot of the product's primary image at order time, for the portal. */
+  image?: string
 }
 
-/** A completed, paid order as the storefront understands it — processor-neutral. */
-export interface StorefrontOrder {
-  /** Short human-readable reference derived from the processor id. */
-  reference: string
-  processor: 'stripe'
-  processorSessionId: string
-  processorPaymentId?: string
-  subtotal: Money
-  shipping: Money
-  total: Money
-  lines: OrderLine[]
-  customer: { name?: string; email?: string; phone?: string }
-  shippingAddress?: Address
-  metadata: Record<string, string>
-  createdAt: string
+export interface FulfillmentLine {
+  sku: string
+  quantity: number
 }
 
-// ---------------------------------------------------------------------------
-// Provider-native checkout (SKU.io creates the session on the tenant's processor)
-// ---------------------------------------------------------------------------
-
-export interface CheckoutRequest {
-  items: { sku: string; quantity: number }[]
-  /** May contain {CHECKOUT_ID}, replaced by the provider. */
-  successUrl: string
-  cancelUrl: string
-  customerEmail?: string
-  /** Restrict the destination countries for this checkout (region enforcement). */
-  shipToCountries?: string[]
-  metadata?: Record<string, string>
-}
-
-export type CheckoutStatus = 'open' | 'completed' | 'expired'
-
-/** A checkout as the provider reports it; on completion it carries the order. */
-export interface Checkout {
+export interface Fulfillment {
   id: string
-  status: CheckoutStatus
-  /** Hosted checkout page; null once completed or expired. */
-  url: string | null
-  processor: 'stripe' | 'square'
-  processorSessionId?: string
-  subtotal: Money
-  shipping: Money
-  total: Money
-  lines: OrderLine[]
-  customer?: { name?: string; email?: string; phone?: string }
-  shippingAddress?: Address
-  /** The SKU.io sales order created on completion. */
-  salesOrderId?: string
-  metadata: Record<string, string>
+  /** The operations system's shipment id; makes a push idempotent. */
+  externalId: string
+  carrier: string | null
+  service: string | null
+  trackingNumber: string | null
+  trackingUrl: string | null
+  shippedAt: string | null
+  lines: FulfillmentLine[]
   createdAt: string
-  expiresAt?: string
 }
 
-// ---------------------------------------------------------------------------
-// Customer sessions (the portal) — a provider capability
-// ---------------------------------------------------------------------------
+export interface ShippingMethod {
+  code: string
+  name: string
+}
+
+export interface Order {
+  id: string
+  /** Human order number, e.g. "1042". Sequential from 1001. */
+  number: string
+  status: OrderStatus
+  payment: OrderPayment
+  currency: string
+  subtotal: Money
+  shipping: Money
+  tax: Money
+  discount: Money
+  total: Money
+  customer: OrderCustomer
+  shippingAddress: Address
+  billingAddress: Address | null
+  shippingMethod: ShippingMethod | null
+  lines: OrderLine[]
+  fulfillments: Fulfillment[]
+  /** The operations system's own order number, stamped back through the Store API. */
+  externalReference: string | null
+  notes: string | null
+  metadata: Record<string, string>
+  /**
+   * Random secret that lets the buyer who placed the order see its confirmation
+   * page without signing in. Never exposed through the Store API.
+   */
+  accessKey: string
+  createdAt: string
+  updatedAt: string
+  paidAt: string | null
+  cancelledAt: string | null
+}
 
 export interface Customer {
   id: string
   email: string
-  name?: string
-  phone?: string
-  /** Price-list group, when the tenant uses them. */
-  customerGroup?: string
-  defaultShippingAddress?: Address
+  name: string | null
+  phone: string | null
+  createdAt: string
+  updatedAt: string
 }
 
-export interface CustomerSession {
-  /** Opaque. Keep it in an httpOnly cookie; it must never reach page JavaScript. */
-  sessionToken: string
-  expiresAt: string
-  customer: Customer
-}
-
-export interface Shipment {
-  carrier: string
-  trackingNumber: string
-  trackingUrl?: string
-  shippedAt?: string
-}
-
-export type CustomerOrderStatus = 'open' | 'completed' | 'cancelled' | 'refunded'
-export type FulfillmentStatus = 'unfulfilled' | 'partial' | 'fulfilled'
-
-export interface CustomerOrder {
-  id: string
-  /** Human-readable order number. */
-  reference: string
-  status: CustomerOrderStatus
-  fulfillmentStatus: FulfillmentStatus
-  subtotal: Money
-  shipping: Money
-  total: Money
-  lines: (OrderLine & { image?: string })[]
-  shipments: Shipment[]
-  shippingAddress?: Address
-  /** Which sales channel the order came through. */
-  channel?: string
+export interface OrderEvent {
+  id: number
+  orderId: string
+  type: string
+  data: Record<string, unknown> | null
   createdAt: string
 }

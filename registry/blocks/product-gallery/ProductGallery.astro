@@ -1,7 +1,6 @@
 ---
-import { Image } from 'astro:assets'
 import type { Product } from '@skuio/storefront'
-import { resolveImage } from '../lib/images'
+import { resolveImage, type ResolvedImage } from '../lib/images'
 
 interface Props {
   product: Product
@@ -10,22 +9,23 @@ interface Props {
 const { product } = Astro.props
 const gallery = product.images
   .map((i) => ({ image: resolveImage(i), alt: i.alt ?? product.name }))
-  .filter((g): g is { image: ImageMetadata; alt: string } => g.image !== null)
+  .filter((g): g is { image: ResolvedImage; alt: string } => g.image !== null)
 const hero = gallery[0]
-const heroId = `gallery-hero-${product.id}`
+const heroId = `gallery-hero-${product.sku.replace(/[^a-zA-Z0-9_-]/g, '-')}`
 ---
 
 {
   hero ? (
     <div>
       <div class="overflow-hidden rounded-lg border border-rule bg-white">
-        <Image
-          src={hero.image}
+        <img
+          src={hero.image.src}
+          width={hero.image.width}
+          height={hero.image.height}
           alt={hero.alt}
-          widths={[600, 900, 1200]}
-          sizes="(min-width: 1024px) 560px, 92vw"
           loading="eager"
           fetchpriority="high"
+          decoding="async"
           id={heroId}
           class="h-full w-full object-contain"
         />
@@ -43,7 +43,7 @@ const heroId = `gallery-hero-${product.id}`
                 data-full={g.image.src}
                 data-alt={g.alt}
               >
-                <Image src={g.image} alt="" width={120} height={90} loading="lazy" class="aspect-4/3 w-full object-contain" />
+                <img src={g.image.src} width={g.image.width} height={g.image.height} alt="" loading="lazy" decoding="async" class="aspect-4/3 w-full object-contain" />
               </button>
             </li>
           ))}
@@ -63,7 +63,6 @@ const heroId = `gallery-hero-${product.id}`
       const button = (event.target as HTMLElement).closest<HTMLButtonElement>('button[data-full]')
       if (!button || !hero) return
       hero.src = button.dataset.full!
-      hero.srcset = ''
       hero.alt = button.dataset.alt ?? ''
       gallery.querySelectorAll<HTMLButtonElement>('button[data-full]').forEach((b) =>
         b.setAttribute('aria-pressed', String(b === button))

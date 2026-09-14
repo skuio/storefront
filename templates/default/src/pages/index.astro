@@ -1,10 +1,12 @@
 ---
 import BaseLayout from '../layouts/BaseLayout.astro'
 import ProductCard from '../components/ProductCard.astro'
-import { catalog, config, routes } from '../lib/catalog'
+import { config, routes, store } from '../lib/store'
 
-export const prerender = true
+// Rendered per request from the store database.
+export const prerender = false
 
+const catalog = await store(Astro).catalog.load()
 const tops = catalog.tree().filter((n) => n.productCount > 0)
 const featured = catalog.products.filter((p) => p.available).slice(0, 8)
 

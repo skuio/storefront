@@ -1,23 +1,11 @@
-import { defineStorefront, flatRate, freeShipping, jsonProvider, type Category, type Product } from '@skuio/storefront'
-import { withMockCustomers } from './src/lib/mock-customers'
-import products from './src/data/products.json'
-import categories from './src/data/categories.json'
-
-// Dev-only: SKUIO_MOCK_CUSTOMERS=1 fakes the customer-portal capability so the
-// account pages can be exercised before the store is connected to SKU.io.
-// Never active in a production build.
-// `process` is only touched when DEV is true, so a production bundle never references it.
-const maybeMock = <P extends { name: string }>(p: P): P =>
-  import.meta.env.DEV && typeof process !== 'undefined' && process.env.SKUIO_MOCK_CUSTOMERS === '1'
-    ? (withMockCustomers(p as never) as P)
-    : p
+import { defineStorefront, flatRate, freeShipping } from '@skuio/storefront'
 
 /**
  * The one file that describes this store.
  *
- * `provider` is where the catalogue comes from. jsonProvider reads the two
- * files above and needs no backend. When the store is connected to SKU.io,
- * swap it for skuioProvider({...}) and delete src/data — nothing else changes.
+ * The catalogue itself lives in the store's database (Cloudflare D1): seed it
+ * from src/data/*.json with `npm run seed`, or let SKU.io push it through the
+ * Store API. Nothing here changes when the catalogue does.
  *
  * `routes` are URL patterns. If you change them, move the files under
  * src/pages to match (they are just files; Astro routes by filename).
@@ -28,22 +16,15 @@ export default defineStorefront({
   currency: 'usd',
   locale: 'en-US',
 
-  provider: maybeMock(
-    jsonProvider({
-      products: products as Product[],
-      categories: categories as Category[],
-    })
-  ),
-
   routes: {
     product: '/products/:slug/',
     category: '/collections/:path/',
     shop: '/shop/',
   },
 
-  // Naming countries on a rate turns on region enforcement: a checkout is
-  // opened for one region at a time, so an international customer can never
-  // pick the domestic rate. Options without countries cover everywhere else.
+  // Naming countries on a rate scopes it: those countries see only the scoped
+  // rates, every other ship-to country sees the rest. Leave `countries` off
+  // every option for one set of rates everywhere.
   shipping: [
     freeShipping('us-standard', 'Free shipping (United States)', { estimate: { min: 3, max: 7 }, countries: ['US'] }),
     flatRate('intl', 'International shipping', { amount: 2500, currency: 'usd' }, { estimate: { min: 7, max: 21 } }),
@@ -60,5 +41,10 @@ export default defineStorefront({
     maxQuantity: 10,
     allowPromotionCodes: true,
     collectPhone: true,
+  },
+
+  inventory: {
+    // Stock at or below this shows "only N left". Only SKUs SKU.io tracks are affected.
+    lowStockThreshold: 3,
   },
 })

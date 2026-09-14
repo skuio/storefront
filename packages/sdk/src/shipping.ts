@@ -66,3 +66,22 @@ export function hasInternationalRegion(shipping: ShippingOption[], shipToCountri
   const r = shippingForRegion(shipping, shipToCountries, 'international')
   return r.enforced && r.options.length > 0 && r.countries.length > 0
 }
+
+/** Which region a destination country falls in; null when the store does not ship there. */
+export function regionForCountry(
+  shipping: ShippingOption[],
+  shipToCountries: string[],
+  country: string
+): ShippingRegion | null {
+  const code = country.toUpperCase()
+  if (!shipToCountries.includes(code)) return null
+  const domestic = shippingForRegion(shipping, shipToCountries, 'domestic')
+  if (!domestic.enforced) return 'domestic'
+  return domestic.countries.includes(code) ? 'domestic' : 'international'
+}
+
+/** The options a destination country may choose from. Empty when the store does not ship there. */
+export function shippingForCountry(shipping: ShippingOption[], shipToCountries: string[], country: string): ShippingOption[] {
+  const region = regionForCountry(shipping, shipToCountries, country)
+  return region ? shippingForRegion(shipping, shipToCountries, region).options : []
+}

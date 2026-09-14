@@ -1,6 +1,8 @@
 ---
-import { catalog, config, routes } from '../lib/catalog'
+import { config, routes, store } from '../lib/store'
 
+// Server-rendered per request from the store; the snapshot is shared across the page.
+const catalog = await store(Astro).catalog.load()
 const tops = catalog.tree().filter((n) => n.productCount > 0)
 const year = new Date().getFullYear()
 const { phone, phoneE164, email } = config.contact ?? {}

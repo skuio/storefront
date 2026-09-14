@@ -5,7 +5,9 @@ dist/
 .env
 .env.*
 !.env.example
+!.dev.vars.example
 .dev.vars
 .DS_Store
 test-results/
 playwright-report/
+migrations/

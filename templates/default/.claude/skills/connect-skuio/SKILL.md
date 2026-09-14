@@ -1,62 +1,45 @@
 ---
 name: connect-skuio
-description: Switch this store from the committed JSON catalogue to the live SKU.io catalogue, with checkout and orders handled by SKU.io.
+description: Connect this store to SKU.io as a Storefront sales channel — SKU.io pulls orders and pushes inventory, tracking and products through the Store API.
 ---
 
 # Connect to SKU.io
 
-> Status: the provider is implemented and tested against the v1 contract
-> (`docs/storefront-api.md` in the kit). The endpoints are being added to
-> SKU.io. Until they ship, `skuioProvider` calls fail with a `SkuioApiError`
-> from the tenant — never silently with an empty catalogue.
-
-## What changes when you connect
-
-| | `jsonProvider` (today) | `skuioProvider` |
-|---|---|---|
-| Catalogue | `src/data/*.json` | live from SKU.io at build time |
-| Availability | `available` in the JSON | live status: in stock / low / out / backorder / preorder |
-| Checkout | this store creates a Stripe session | **SKU.io creates it** on the tenant's processor |
-| Stripe key on the store | required | **not needed** — remove it |
-| Orders | your `src/lib/orders.ts` | born in SKU.io on the storefront channel; `orders.ts` optional |
+The store is the system of record for the buyer; SKU.io is the operations
+system. They meet at the **Store API** (`/api/skuio/v1/*`, contract in the
+kit's `docs/store-api.md`). Nothing about the store's design changes.
 
 ## Steps
 
-1. In SKU.io, create a **Storefront** for this site and copy its **storefront
-   token** (`sf_live_…` / `sf_test_…`). It can read the catalogue and create
-   checkouts, nothing else. Never use an admin personal access token here —
-   the provider refuses one before making a request, and the API rejects it.
-
-2. `storefront.config.ts` — replace the provider:
-   ```ts
-   import { skuioProvider } from '@skuio/storefront'
-
-   provider: skuioProvider({
-     tenant: 'https://<tenant>.sku.io',
-     storefrontToken: import.meta.env.SKUIO_STOREFRONT_TOKEN,
-   }),
+1. Generate the key and set it as a Worker secret (nothing is printed or committed):
    ```
-   Keep `routes`, `shipping` and `contact` — routes and contact still drive
-   this store; shipping options come from SKU.io at checkout but the values
-   here still feed the product-page copy.
+   openssl rand -hex 32 | npx wrangler secret put STORE_API_KEY
+   ```
+   For local development put the same or another value in `.dev.vars`.
 
-3. Secrets: add `SKUIO_STOREFRONT_TOKEN` to `.env` and as a Worker secret.
-   `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET` can be removed — the
-   checkout endpoint prefers the provider and never calls Stripe when one is
-   present.
+2. Check the API answers from the outside:
+   ```
+   curl -H "Authorization: Bearer $KEY" https://<your-domain>/api/skuio/v1/health
+   ```
+   `200` with `data.counts`; `401` without the header.
 
-4. Delete `src/data/` and the two JSON imports. Product images: SKU.io
-   returns URLs; keep `src/assets/products/` only if you want local copies
-   (`resolveImage` matches by filename either way).
+3. In SKU.io: Integrations → add **Storefront** → enter the site URL and the
+   key → **Test connection** (it calls `/health`). Then choose what SKU.io
+   owns: orders (polled from `GET /orders?updated_since`), inventory
+   (`PUT /inventory`), fulfilments (`POST /orders/{id}/fulfillments`), and
+   optionally the catalogue (`PUT /products`, `PUT /categories`).
 
-5. `npm run build` — every page regenerates from live data — then
-   `npm run e2e`. The checkout test asserts the redirect goes to a hosted
-   checkout page; with the provider it is SKU.io's, not Stripe's.
+4. If SKU.io owns the catalogue, `src/data/*.json` becomes history: keep it
+   or delete it. Product images pushed by SKU.io are URLs; `resolveImage`
+   uses them as-is (keep `src/assets/products/` only for local copies).
 
-## Orders
+## What SKU.io does with the contract
 
-Completed checkouts become sales orders in SKU.io on this storefront's channel
-with no code on your side. If you also want something to happen here (an
-email, a Slack ping), register a storefront webhook in SKU.io pointing at
-`/api/skuio-webhook` and extend `src/lib/orders.ts` — see the contract's
-"Storefront webhooks" section.
+- Every paid order appears as a sales order on the storefront channel; SKU.io
+  stamps its number back with `PATCH /orders/{id}` (`external_reference`).
+- Stock pushed with `PUT /inventory` drives availability: `available <= 0` is
+  sold out (or backorder when allowed), at or under `lowStockThreshold` shows
+  "only N left".
+- A shipment pushed with `POST /orders/{id}/fulfillments` moves the order to
+  partially/fully fulfilled and emails the buyer tracking once.
+- A `manual` order is marked paid with `PATCH /orders/{id}` `payment.status = paid`.

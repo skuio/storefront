@@ -1,0 +1,116 @@
+---
+import { formatMoney } from '@skuio/storefront'
+import BaseLayout from '../../../layouts/BaseLayout.astro'
+import Breadcrumbs from '../../../components/Breadcrumbs.astro'
+import { config, store } from '../../../lib/store'
+import { resolveImage } from '../../../lib/images'
+import { clearSession, readSession } from '../../../lib/account'
+
+export const prerender = false
+
+const s = store(Astro)
+const token = readSession(Astro.cookies)
+const customer = await s.sessions.resolve(token)
+if (!customer) {
+  if (token) clearSession(Astro.cookies)
+  return Astro.redirect('/account/', 303)
+}
+// Scoped to the signed-in customer: another customer's order id is a 404, not a leak.
+const order = await s.orders.getForCustomer(Astro.params.id ?? '', customer.id)
+if (!order) return new Response(null, { status: 404 })
+
+const number = `${config.orders.numberPrefix}${order.number}`
+const fmt = (m: { amount: number; currency: string }) => formatMoney(m, config.locale)
+const date = (iso: string) => new Date(iso).toLocaleString(config.locale, { year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+const a = order.shippingAddress
+const statusText: Record<typeof order.status, string> = {
+  pending_payment: 'Awaiting payment',
+  paid: 'Paid — being prepared',
+  processing: 'Being prepared',
+  partially_fulfilled: 'Partially shipped',
+  fulfilled: 'Shipped',
+  cancelled: 'Cancelled',
+  refunded: 'Refunded',
+}
+---
+
+<BaseLayout title={`Order ${number}`} noindex>
+  <div class="mx-auto max-w-3xl px-5 py-10">
+    <Breadcrumbs items={[{ label: 'Home', href: '/' }, { label: 'Account', href: '/account/' }, { label: 'Orders', href: '/account/orders/' }, { label: `Order ${number}` }]} />
+    <div class="mt-6 flex flex-wrap items-baseline justify-between gap-4">
+      <h1 class="display-heading text-5xl">Order {number}</h1>
+      <span class="rounded-full bg-accent/10 px-3 py-1 text-[11px] font-bold tracking-wide text-accent uppercase" data-order-status={order.status}>{statusText[order.status]}</span>
+    </div>
+    <p class="mt-2 text-sm text-body/70">Placed {date(order.createdAt)}{order.paidAt ? ` · paid ${date(order.paidAt)}` : ''}{order.externalReference ? ` · reference ${order.externalReference}` : ''}</p>
+
+    <div class="mt-8 rounded-lg border border-rule">
+      <ul class="divide-y divide-rule">
+        {order.lines.map((l) => {
+          const img = resolveImage(l.image ? { src: l.image } : null)
+          return (
+            <li class="flex items-center gap-4 px-4 py-3 text-sm">
+              {img ? <img src={img.src} alt="" width="56" height="42" class="h-[42px] w-14 shrink-0 rounded border border-rule bg-white object-contain" /> : <span class="h-[42px] w-14 shrink-0 rounded border border-rule" />}
+              <span class="min-w-0 flex-1">
+                <span class="font-semibold text-ink">{l.name}</span>
+                <span class="block text-[11px] tracking-wide text-body/60 uppercase">SKU {l.sku} · × {l.quantity} · {l.fulfilledQuantity >= l.quantity ? 'shipped' : l.fulfilledQuantity > 0 ? `${l.fulfilledQuantity} of ${l.quantity} shipped` : 'not shipped yet'}</span>
+              </span>
+              <span class="font-semibold text-ink">{fmt(l.totalAmount)}</span>
+            </li>
+          )
+        })}
+      </ul>
+      <dl class="space-y-1 border-t border-rule bg-[#fafafa] px-4 py-3 text-sm">
+        <div class="flex justify-between"><dt>Subtotal</dt><dd>{fmt(order.subtotal)}</dd></div>
+        <div class="flex justify-between"><dt>Shipping{order.shippingMethod ? ` — ${order.shippingMethod.name}` : ''}</dt><dd>{order.shipping.amount ? fmt(order.shipping) : 'Free'}</dd></div>
+        {order.discount.amount > 0 && <div class="flex justify-between"><dt>Discount</dt><dd>−{fmt(order.discount)}</dd></div>}
+        {order.tax.amount > 0 && <div class="flex justify-between"><dt>Tax</dt><dd>{fmt(order.tax)}</dd></div>}
+        <div class="flex justify-between border-t border-rule pt-2 font-semibold text-ink"><dt>Total</dt><dd>{fmt(order.total)}</dd></div>
+      </dl>
+    </div>
+
+    <div class="mt-8 grid gap-8 sm:grid-cols-2">
+      <section>
+        <h2 class="text-[11px] font-semibold tracking-widest text-body/60 uppercase">Shipping to</h2>
+        <p class="mt-2 text-sm">
+          {[a.name, a.line1, a.line2, [a.city, a.state, a.postalCode].filter(Boolean).join(', '), a.country].filter(Boolean).map((line) => <>{line}<br /></>)}
+        </p>
+      </section>
+      <section>
+        <h2 class="text-[11px] font-semibold tracking-widest text-body/60 uppercase">Payment</h2>
+        <p class="mt-2 text-sm">
+          {order.payment.status === 'paid' ? `Paid${order.payment.methodLabel ? ` by ${order.payment.methodLabel.toLowerCase()}` : ''}` : order.payment.status === 'refunded' ? 'Refunded' : order.payment.status === 'failed' ? 'Payment failed' : 'Not paid yet'}
+        </p>
+      </section>
+    </div>
+
+    <section class="mt-8">
+      <h2 class="text-[11px] font-semibold tracking-widest text-body/60 uppercase">Shipments</h2>
+      {
+        order.fulfillments.length === 0 ? (
+          <p class="mt-2 text-sm">Nothing has shipped yet. We will email you tracking as soon as it does.</p>
+        ) : (
+          <ul class="mt-2 space-y-3">
+            {order.fulfillments.map((f) => (
+              <li class="rounded-lg border border-rule p-4 text-sm" data-fulfillment={f.externalId}>
+                <p class="font-semibold text-ink">
+                  {[f.carrier, f.service].filter(Boolean).join(' ') || 'Shipment'}
+                  {f.shippedAt && <span class="font-normal text-body/60"> · shipped {date(f.shippedAt)}</span>}
+                </p>
+                {f.trackingNumber && (
+                  <p class="mt-1">
+                    Tracking {f.trackingUrl ? <a href={f.trackingUrl} class="font-semibold text-accent hover:underline" rel="noopener">{f.trackingNumber}</a> : <strong class="text-ink">{f.trackingNumber}</strong>}
+                  </p>
+                )}
+                <p class="mt-1 text-body/70">{f.lines.map((l) => `${l.quantity} × ${order.lines.find((ol) => ol.sku === l.sku)?.name ?? l.sku}`).join(', ')}</p>
+              </li>
+            ))}
+          </ul>
+        )
+      }
+    </section>
+
+    {order.notes && <section class="mt-8"><h2 class="text-[11px] font-semibold tracking-widest text-body/60 uppercase">Your notes</h2><p class="mt-2 text-sm">{order.notes}</p></section>}
+
+    <a href="/account/orders/" class="mt-10 inline-block rounded-full border-2 border-ink px-7 py-2.5 text-sm font-semibold transition hover:bg-ink hover:text-white">All orders</a>
+  </div>
+</BaseLayout>

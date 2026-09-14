@@ -1,7 +1,7 @@
 {
   "name": "@skuio/storefront",
-  "version": "0.1.0",
-  "description": "Typed catalogue, checkout and order primitives for SKU.io-powered storefronts. Framework-agnostic; pairs with the Astro reference template.",
+  "version": "0.3.0",
+  "description": "The store platform behind SKU.io storefronts: catalogue, checkout, orders, buyer portal and the Store API on Cloudflare D1. Framework-agnostic; pairs with the Astro reference template.",
   "license": "MIT",
   "type": "module",
   "repository": {
@@ -14,13 +14,44 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
-    "./stripe": {
-      "types": "./dist/stripe.d.ts",
-      "import": "./dist/stripe.js"
-    }
+    "./store": {
+      "types": "./dist/store.d.ts",
+      "import": "./dist/store.js"
+    },
+    "./api": {
+      "types": "./dist/api.d.ts",
+      "import": "./dist/api.js"
+    },
+    "./payments": {
+      "types": "./dist/payments.d.ts",
+      "import": "./dist/payments.js"
+    },
+    "./payments/stripe": {
+      "types": "./dist/payments/stripe.d.ts",
+      "import": "./dist/payments/stripe.js"
+    },
+    "./payments/manual": {
+      "types": "./dist/payments/manual.d.ts",
+      "import": "./dist/payments/manual.js"
+    },
+    "./mail": {
+      "types": "./dist/mail.d.ts",
+      "import": "./dist/mail.js"
+    },
+    "./mail/sendgrid": {
+      "types": "./dist/mail/sendgrid.d.ts",
+      "import": "./dist/mail/sendgrid.js"
+    },
+    "./mail/console": {
+      "types": "./dist/mail/console.d.ts",
+      "import": "./dist/mail/console.js"
+    },
+    "./db/migrations/*": "./db/migrations/*",
+    "./package.json": "./package.json"
   },
   "files": [
-    "dist"
+    "dist",
+    "db"
   ],
   "scripts": {
     "build": "tsup",
@@ -37,6 +68,8 @@
     }
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
+    "better-sqlite3": "^12.11.1",
     "stripe": "^19.3.0",
     "tsup": "^8.5.0",
     "typescript": "^5.9.3",

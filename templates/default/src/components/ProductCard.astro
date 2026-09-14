@@ -1,7 +1,6 @@
 ---
-import { Image } from 'astro:assets'
 import type { Product } from '@skuio/storefront'
-import { catalog, routes } from '../lib/catalog'
+import { routes, store } from '../lib/store'
 import { resolveImage } from '../lib/images'
 import Price from './Price.astro'
 
@@ -11,6 +10,8 @@ interface Props {
 }
 
 const { product, loading = 'lazy' } = Astro.props
+// One catalogue snapshot per request: store(Astro) is memoised on Astro.locals.
+const catalog = await store(Astro).catalog.load()
 const img = resolveImage(product.images[0])
 const href = routes.product(product, catalog)
 const onSale = product.compareAtPrice && product.compareAtPrice.amount > product.price.amount
@@ -21,12 +22,13 @@ const onSale = product.compareAtPrice && product.compareAtPrice.amount > product
     <div class="relative aspect-4/3 overflow-hidden bg-white">
       {
         img ? (
-          <Image
-            src={img}
+          <img
+            src={img.src}
+            width={img.width}
+            height={img.height}
             alt={product.images[0]?.alt ?? product.name}
-            widths={[300, 600]}
-            sizes="(min-width: 1024px) 300px, (min-width: 640px) 45vw, 90vw"
             loading={loading}
+            decoding="async"
             class="h-full w-full object-contain p-3 transition duration-300 group-hover:scale-105"
           />
         ) : (

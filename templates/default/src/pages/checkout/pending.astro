@@ -1,0 +1,69 @@
+---
+import { formatMoney } from '@skuio/storefront'
+import BaseLayout from '../../layouts/BaseLayout.astro'
+import { config, payment, paymentContext, routes, store } from '../../lib/store'
+
+/**
+ * Where a pay-later order lands: the adapter's instructions, or a way back to
+ * the processor for one that redirects. A paid order goes on to the success page.
+ */
+export const prerender = false
+
+const s = store(Astro)
+const id = Astro.url.searchParams.get('order') ?? ''
+const key = Astro.url.searchParams.get('key') ?? ''
+const order = id && key ? await s.orders.getWithKey(id, key) : null
+if (order && order.payment.status === 'paid') return Astro.redirect(`/checkout/success/?order=${encodeURIComponent(id)}&key=${encodeURIComponent(key)}`, 303)
+
+let start: Awaited<ReturnType<ReturnType<typeof payment>['start']>> | null = null
+if (order && order.status === 'pending_payment') {
+  try {
+    start = await payment(Astro).start(order, paymentContext(Astro))
+  } catch (error) {
+    console.error('pending page: adapter start failed', error)
+  }
+}
+const number = order ? `${config.orders.numberPrefix}${order.number}` : ''
+---
+
+<BaseLayout title="Order received" noindex>
+  <div class="mx-auto max-w-2xl px-5 py-20">
+    {
+      order ? (
+        <>
+          <h1 class="display-heading text-5xl">Order {number} received</h1>
+          <p class="mt-4 text-sm" data-order-status={order.status}>
+            Total <strong class="text-ink">{formatMoney(order.total, config.locale)}</strong> · {order.customer.email}
+          </p>
+          <div class="prose-store mt-8 rounded-lg border border-rule p-5 text-sm">
+            {start?.kind === 'instructions' ? (
+              <Fragment set:html={start.html} />
+            ) : start?.kind === 'redirect' ? (
+              <p>
+                Your payment has not been completed yet.{' '}
+                <a href={start.url} class="font-semibold text-accent">Continue to payment</a>
+              </p>
+            ) : order.status === 'cancelled' ? (
+              <p>This order was cancelled.</p>
+            ) : (
+              <p>We will be in touch about payment shortly.</p>
+            )}
+          </div>
+        </>
+      ) : (
+        <>
+          <h1 class="display-heading text-5xl">Nothing to show here</h1>
+          <p class="mt-4 text-sm">This page follows a checkout. It looks like you arrived without one, or the link has expired.</p>
+        </>
+      )
+    }
+    <a href={routes.shop()} class="mt-10 inline-block rounded-full border-2 border-ink px-7 py-2.5 text-sm font-semibold transition hover:bg-ink hover:text-white">
+      Back to the shop
+    </a>
+  </div>
+</BaseLayout>
+
+<script>
+  import { cartStore } from '../../lib/cart.client'
+  if (document.querySelector('[data-order-status]')) cartStore.clear()
+</script>

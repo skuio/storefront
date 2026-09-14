@@ -1,11 +1,5 @@
-import { describe, expect, it, vi } from 'vitest'
-import type Stripe from 'stripe'
-import { flatRate, freeShipping, hasInternationalRegion, shippingForRegion } from '../src/shipping.js'
-import { Catalog } from '../src/catalog.js'
-import { defineStorefront } from '../src/config.js'
-import { jsonProvider } from '../src/providers/json.js'
-import { createStripeCheckout } from '../src/checkout/stripe.js'
-import { categories, products } from './fixtures.js'
+import { describe, expect, it } from 'vitest'
+import { flatRate, freeShipping, hasInternationalRegion, regionForCountry, shippingForCountry, shippingForRegion } from '../src/shipping.js'
 
 const us = freeShipping('us', 'Free (US)', { countries: ['US'] })
 const intl = flatRate('intl', 'International', { amount: 40000, currency: 'usd' })
@@ -30,40 +24,19 @@ describe('shippingForRegion', () => {
   })
 })
 
-describe('createStripeCheckout with regions', () => {
-  const catalog = Catalog.fromData(products, categories)
-  const input = {
-    name: 'T', url: 'https://t.example', currency: 'usd',
-    provider: jsonProvider({ products, categories }),
-    shipping: [us, intl], shipToCountries: ship,
-  }
-  const config = defineStorefront(input)
-  const fake = () => {
-    const create = vi.fn(async (params: Stripe.Checkout.SessionCreateParams) => ({ id: 'cs_test_x', url: 'https://checkout.stripe.com/x', params }))
-    return { stripe: { checkout: { sessions: { create } } } as unknown as Stripe, create }
-  }
-  const base = { catalog, config, items: [{ sku: 'VDCTOYTAC9504', quantity: 1 }], successUrl: 'https://t/ok', cancelUrl: 'https://t/no' }
-
-  it('opens a domestic session with only domestic rates and countries by default', async () => {
-    const { stripe, create } = fake()
-    await createStripeCheckout({ ...base, stripe })
-    const p = create.mock.calls[0]![0]
-    expect(p.shipping_address_collection!.allowed_countries).toEqual(['US'])
-    expect(p.shipping_options!.map((o) => o.shipping_rate_data!.display_name)).toEqual(['Free (US)'])
-    expect(p.metadata).toMatchObject({ region: 'domestic' })
+describe('regionForCountry / shippingForCountry', () => {
+  it('routes a destination to its region and rates', () => {
+    expect(regionForCountry([us, intl], ship, 'US')).toBe('domestic')
+    expect(regionForCountry([us, intl], ship, 'gb')).toBe('international')
+    expect(regionForCountry([us, intl], ship, 'FR')).toBeNull()
+    expect(shippingForCountry([us, intl], ship, 'CA')).toEqual([intl])
+    expect(shippingForCountry([us, intl], ship, 'US')).toEqual([us])
+    expect(shippingForCountry([us, intl], ship, 'FR')).toEqual([])
   })
 
-  it('opens an international session that cannot take a domestic address or rate', async () => {
-    const { stripe, create } = fake()
-    await createStripeCheckout({ ...base, stripe, region: 'international' })
-    const p = create.mock.calls[0]![0]
-    expect(p.shipping_address_collection!.allowed_countries).toEqual(['CA', 'GB', 'AU'])
-    expect(p.shipping_options!.map((o) => o.shipping_rate_data!.display_name)).toEqual(['International'])
-  })
-
-  it('refuses a region with nothing to offer', async () => {
-    const { stripe } = fake()
-    const usOnly = defineStorefront({ ...input, shipping: [us], shipToCountries: ['US'] })
-    await expect(createStripeCheckout({ ...base, stripe, config: usOnly, region: 'international' })).rejects.toMatchObject({ code: 'no_shipping' })
+  it('treats every ship-to country as domestic when no option names countries', () => {
+    const plain = [freeShipping('a', 'A')]
+    expect(regionForCountry(plain, ship, 'GB')).toBe('domestic')
+    expect(shippingForCountry(plain, ship, 'GB')).toEqual(plain)
   })
 })

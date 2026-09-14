@@ -3,10 +3,11 @@ import BaseLayout from '../../layouts/BaseLayout.astro'
 import Breadcrumbs from '../../components/Breadcrumbs.astro'
 import ProductCard from '../../components/ProductCard.astro'
 import CategoryNav from '../../components/CategoryNav.astro'
-import { catalog, config, routes } from '../../lib/catalog'
+import { config, routes, store } from '../../lib/store'
 
-export const prerender = true
+export const prerender = false
 
+const catalog = await store(Astro).catalog.load()
 const tops = catalog.tree().filter((n) => n.productCount > 0)
 ---
 

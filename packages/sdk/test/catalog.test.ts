@@ -1,11 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { Catalog } from '../src/catalog.js'
-import { jsonProvider } from '../src/providers/json.js'
 import { categories, products } from './fixtures.js'
 
 describe('Catalog', () => {
-  it('loads from a provider and indexes by sku and slug', async () => {
-    const catalog = await Catalog.load(jsonProvider({ products, categories }))
+  it('indexes by sku and slug', () => {
+    const catalog = Catalog.fromData(products, categories)
     expect(catalog.product('VDCTOYTAC9504')?.name).toBe('Toyota Tacoma 1995-2004')
     expect(catalog.productBySlug('honda-civic-2006-2011')?.sku).toBe('VDCHCIV0611')
     expect(catalog.product('nope')).toBeUndefined()
@@ -53,8 +52,8 @@ describe('Catalog', () => {
     expect(catalog.nonEmptyCategories().map((c) => c.id)).not.toContain('empty')
   })
 
-  it('rejects duplicate skus at load', async () => {
+  it('rejects duplicate skus', () => {
     const dupes = [...products, { ...products[0]!, id: 'x', slug: 'other' }]
-    await expect(Catalog.load(jsonProvider({ products: dupes, categories }))).rejects.toThrow(/Duplicate product sku/)
+    expect(() => Catalog.fromData(dupes, categories)).toThrow(/Duplicate product sku/)
   })
 })

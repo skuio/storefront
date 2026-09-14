@@ -1,5 +1,5 @@
 ---
-import { catalog, config, routes } from '../lib/catalog'
+import { config, routes, store } from '../lib/store'
 
 interface Props {
   /** Float the header over a full-bleed hero instead of a solid bar. */
@@ -8,6 +8,8 @@ interface Props {
 
 const { overlay = false } = Astro.props
 const path = Astro.url.pathname
+// Server-rendered per request from the store; the snapshot is shared across the page.
+const catalog = await store(Astro).catalog.load()
 const tops = catalog.tree().filter((n) => n.productCount > 0)
 
 const nav = [

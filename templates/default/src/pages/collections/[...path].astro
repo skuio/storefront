@@ -3,18 +3,14 @@ import BaseLayout from '../../layouts/BaseLayout.astro'
 import Breadcrumbs from '../../components/Breadcrumbs.astro'
 import ProductCard from '../../components/ProductCard.astro'
 import CategoryNav from '../../components/CategoryNav.astro'
-import { catalog, config, routes } from '../../lib/catalog'
+import { config, routes, store } from '../../lib/store'
 
-export const prerender = true
+// Rendered per request: the path is the category slug chain (routes.category).
+export const prerender = false
 
-export function getStaticPaths() {
-  return catalog.nonEmptyCategories().map((node) => ({
-    params: { path: node.path.join('/') },
-    props: { node },
-  }))
-}
-
-const { node } = Astro.props
+const catalog = await store(Astro).catalog.load()
+const node = catalog.categoryByPath((Astro.params.path ?? '').split('/').filter(Boolean))
+if (!node || node.productCount === 0) return new Response(null, { status: 404 })
 const items = catalog.productsIn(node.id, { deep: true })
 
 // Root-first chain to this node, for breadcrumbs and schema.

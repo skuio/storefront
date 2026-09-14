@@ -5,8 +5,20 @@
   "compatibility_date": "2026-09-09",
   "compatibility_flags": ["nodejs_compat"],
   "assets": { "directory": "./dist", "binding": "ASSETS" },
-  "observability": { "enabled": true }
-  // Secrets are never committed. Set them with `wrangler secret put <NAME>`:
-  //   STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET,
-  //   SENDGRID_API_KEY, MAIL_FROM, ORDER_NOTIFICATION_EMAIL, CONTACT_NOTIFICATION_EMAIL
+  "observability": { "enabled": true },
+  // The store's database. Create it with `wrangler d1 create <name>` and paste the id here;
+  // `npm run db:migrate:local` / `npm run db:migrate` copy the SDK's migrations into ./migrations and apply them.
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "my-store",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ]
+  // Secrets are never committed. Locally they live in .dev.vars (see .dev.vars.example);
+  // in production set them with `wrangler secret put <NAME>`:
+  //   STORE_API_KEY, SESSION_SECRET, PAYMENT_PROVIDER, STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET,
+  //   MAIL_PROVIDER, SENDGRID_API_KEY, MAIL_FROM, MAIL_FROM_NAME, PUBLIC_SITE_URL,
+  //   ORDER_NOTIFICATION_EMAIL, CONTACT_NOTIFICATION_EMAIL
 }

@@ -1,0 +1,339 @@
+openapi: 3.1.0
+info:
+  title: Store API
+  version: "1.0"
+  description: |
+    The contract between a store built on the SKU.io storefront kit and its operations system.
+    Base path `/api/skuio/v1`, bearer `STORE_API_KEY`. Money is integer minor units + ISO currency.
+servers:
+  - url: https://{store}/api/skuio/v1
+    variables: { store: { default: www.example.com } }
+security: [{ bearer: [] }]
+paths:
+  /health:
+    get:
+      operationId: health
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/HealthEnvelope' } } } }
+  /orders:
+    get:
+      operationId: listOrders
+      parameters:
+        - { name: updated_since, in: query, schema: { type: string, format: date-time }, description: Inclusive watermark }
+        - { name: cursor, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+      responses:
+        '200':
+          description: Orders oldest-updated first
+          content: { application/json: { schema: { type: object, properties: { data: { type: array, items: { $ref: '#/components/schemas/Order' } }, next_cursor: { type: [string, 'null'] } } } } }
+  /orders/{id}:
+    get:
+      operationId: getOrder
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/OrderEnvelope' } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      operationId: updateOrder
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                external_reference: { type: [string, 'null'], maxLength: 64 }
+                status: { type: string, enum: [cancelled] }
+                payment:
+                  type: object
+                  properties:
+                    status: { type: string, enum: [paid, refunded, failed] }
+                    provider: { type: string }
+                    reference: { type: [string, 'null'] }
+                    paid_at: { type: string, format: date-time }
+      responses:
+        '200': { description: Updated, content: { application/json: { schema: { $ref: '#/components/schemas/OrderEnvelope' } } } }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+  /orders/{id}/fulfillments:
+    post:
+      operationId: createFulfillment
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/FulfillmentInput' } } }
+      responses:
+        '201': { description: Recorded, content: { application/json: { schema: { $ref: '#/components/schemas/FulfillmentEnvelope' } } } }
+        '200': { description: Already recorded (same external_id), content: { application/json: { schema: { $ref: '#/components/schemas/FulfillmentEnvelope' } } } }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+  /inventory:
+    put:
+      operationId: putInventory
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [items]
+              properties:
+                items:
+                  type: array
+                  maxItems: 500
+                  items:
+                    type: object
+                    required: [sku, available]
+                    properties:
+                      sku: { type: string }
+                      available: { type: integer, minimum: 0 }
+                      allow_backorder: { type: boolean }
+      responses:
+        '200': { description: Applied, content: { application/json: { schema: { type: object, properties: { data: { type: object, properties: { updated: { type: integer }, unknown_skus: { type: array, items: { type: string } } } } } } } } }
+  /products:
+    get:
+      operationId: listProducts
+      description: |
+        The store's catalogue, oldest-updated first, for an operations system importing
+        or reconciling it. Includes inactive products so a withdrawal is visible.
+      parameters:
+        - { name: updated_since, in: query, schema: { type: string, format: date-time }, description: Inclusive watermark }
+        - { name: cursor, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+        - { name: active, in: query, schema: { type: boolean }, description: Omit for every product }
+      responses:
+        '200':
+          description: Products oldest-updated first
+          content: { application/json: { schema: { type: object, properties: { data: { type: array, items: { $ref: '#/components/schemas/Product' } }, next_cursor: { type: [string, 'null'] } } } } }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+    put:
+      operationId: putProducts
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [products]
+              properties:
+                products: { type: array, maxItems: 200, items: { $ref: '#/components/schemas/ProductInput' } }
+      responses:
+        '200': { description: Upserted, content: { application/json: { schema: { type: object, properties: { data: { type: object, properties: { upserted: { type: integer } } } } } } } }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+  /products/{sku}:
+    get:
+      operationId: getProduct
+      parameters: [{ name: sku, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: object, properties: { data: { $ref: '#/components/schemas/Product' } } } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      operationId: deactivateProduct
+      parameters: [{ name: sku, in: path, required: true, schema: { type: string } }]
+      responses:
+        '204': { description: Deactivated }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /categories:
+    get:
+      operationId: listCategories
+      description: The category tree as a flat list, parents before children within a branch.
+      parameters:
+        - { name: cursor, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 1000, default: 500 } }
+      responses:
+        '200':
+          description: Categories ordered by (parent_id, position, id)
+          content: { application/json: { schema: { type: object, properties: { data: { type: array, items: { $ref: '#/components/schemas/Category' } }, next_cursor: { type: [string, 'null'] } } } } }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+    put:
+      operationId: putCategories
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [categories]
+              properties:
+                categories: { type: array, maxItems: 500, items: { $ref: '#/components/schemas/CategoryInput' } }
+      responses:
+        '200': { description: Upserted, content: { application/json: { schema: { type: object, properties: { data: { type: object, properties: { upserted: { type: integer } } } } } } } }
+components:
+  securitySchemes:
+    bearer: { type: http, scheme: bearer }
+  responses:
+    NotFound: { description: Not found, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    Conflict: { description: Conflict, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    Unprocessable: { description: Validation failed, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+  schemas:
+    Error:
+      type: object
+      properties: { error: { type: object, properties: { code: { type: string }, message: { type: string }, details: { type: [object, 'null'] } } } }
+    Money:
+      type: object
+      required: [amount, currency]
+      properties: { amount: { type: integer }, currency: { type: string, minLength: 3, maxLength: 3 } }
+    Address:
+      type: object
+      properties:
+        name: { type: [string, 'null'] }
+        line1: { type: [string, 'null'] }
+        line2: { type: [string, 'null'] }
+        city: { type: [string, 'null'] }
+        state: { type: [string, 'null'] }
+        postal_code: { type: [string, 'null'] }
+        country: { type: [string, 'null'], description: ISO 3166-1 alpha-2 }
+    HealthEnvelope:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            name: { type: string }
+            url: { type: string }
+            currency: { type: string }
+            locale: { type: string }
+            version: { type: string, description: Store platform version }
+            counts: { type: object, properties: { products: { type: integer }, categories: { type: integer }, orders: { type: integer }, customers: { type: integer } } }
+            time: { type: string, format: date-time }
+    OrderLine:
+      type: object
+      properties:
+        id: { type: string }
+        sku: { type: string }
+        name: { type: string }
+        quantity: { type: integer }
+        unit_amount: { $ref: '#/components/schemas/Money' }
+        total_amount: { $ref: '#/components/schemas/Money' }
+        fulfilled_quantity: { type: integer }
+    Fulfillment:
+      type: object
+      properties:
+        id: { type: string }
+        external_id: { type: string }
+        carrier: { type: [string, 'null'] }
+        service: { type: [string, 'null'] }
+        tracking_number: { type: [string, 'null'] }
+        tracking_url: { type: [string, 'null'] }
+        shipped_at: { type: [string, 'null'], format: date-time }
+        lines: { type: array, items: { type: object, properties: { sku: { type: string }, quantity: { type: integer } } } }
+        created_at: { type: string, format: date-time }
+    FulfillmentInput:
+      type: object
+      required: [external_id, lines]
+      properties:
+        external_id: { type: string, maxLength: 64, description: The operations system's shipment id; makes the call idempotent }
+        carrier: { type: [string, 'null'] }
+        service: { type: [string, 'null'] }
+        tracking_number: { type: [string, 'null'] }
+        tracking_url: { type: [string, 'null'] }
+        shipped_at: { type: [string, 'null'], format: date-time }
+        lines: { type: array, minItems: 1, items: { type: object, required: [sku, quantity], properties: { sku: { type: string }, quantity: { type: integer, minimum: 1 } } } }
+        notify_customer: { type: boolean, default: true }
+    FulfillmentEnvelope:
+      type: object
+      properties: { data: { $ref: '#/components/schemas/Fulfillment' } }
+    Order:
+      type: object
+      properties:
+        id: { type: string }
+        number: { type: string }
+        status: { type: string, enum: [pending_payment, paid, processing, partially_fulfilled, fulfilled, cancelled, refunded] }
+        payment:
+          type: object
+          properties:
+            status: { type: string, enum: [unpaid, paid, refunded, failed] }
+            provider: { type: [string, 'null'], description: stripe, manual, … }
+            reference: { type: [string, 'null'] }
+            method_label: { type: [string, 'null'] }
+            paid_at: { type: [string, 'null'], format: date-time }
+        currency: { type: string }
+        subtotal: { $ref: '#/components/schemas/Money' }
+        shipping: { $ref: '#/components/schemas/Money' }
+        tax: { $ref: '#/components/schemas/Money' }
+        discount: { $ref: '#/components/schemas/Money' }
+        total: { $ref: '#/components/schemas/Money' }
+        customer: { type: object, properties: { id: { type: string }, email: { type: string }, name: { type: [string, 'null'] }, phone: { type: [string, 'null'] } } }
+        shipping_address: { $ref: '#/components/schemas/Address' }
+        billing_address: { oneOf: [{ $ref: '#/components/schemas/Address' }, { type: 'null' }] }
+        shipping_method: { type: [object, 'null'], properties: { code: { type: string }, name: { type: string } } }
+        lines: { type: array, items: { $ref: '#/components/schemas/OrderLine' } }
+        fulfillments: { type: array, items: { $ref: '#/components/schemas/Fulfillment' } }
+        external_reference: { type: [string, 'null'] }
+        notes: { type: [string, 'null'] }
+        metadata: { type: object, additionalProperties: { type: string } }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        paid_at: { type: [string, 'null'], format: date-time }
+        cancelled_at: { type: [string, 'null'], format: date-time }
+    OrderEnvelope:
+      type: object
+      properties: { data: { $ref: '#/components/schemas/Order' } }
+    Product:
+      type: object
+      description: A catalogue product as the store holds it.
+      required: [sku, name, slug, price, active]
+      properties:
+        sku: { type: string }
+        name: { type: string }
+        slug: { type: string }
+        description_html: { type: [string, 'null'] }
+        short_description_html: { type: [string, 'null'] }
+        price: { $ref: '#/components/schemas/Money' }
+        compare_at: { oneOf: [{ $ref: '#/components/schemas/Money' }, { type: 'null' }] }
+        attributes: { type: object, additionalProperties: { type: string }, description: '`{}` when empty, never an array' }
+        active: { type: boolean }
+        position: { type: integer }
+        legacy_path: { type: [string, 'null'] }
+        categories:
+          type: array
+          description: In the product's own order. slug and name are null for a link to a category the store never received.
+          items: { type: object, properties: { id: { type: string }, slug: { type: [string, 'null'] }, name: { type: [string, 'null'] } } }
+        images:
+          type: array
+          items: { type: object, properties: { url: { type: string }, alt: { type: [string, 'null'] }, position: { type: integer } } }
+        inventory:
+          type: [object, 'null']
+          description: Null when the store holds no stock row for the SKU, which is not the same as zero.
+          properties: { available: { type: integer }, allow_backorder: { type: boolean }, updated_at: { type: string, format: date-time } }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    Category:
+      type: object
+      required: [id, slug, name]
+      properties:
+        id: { type: string }
+        parent_id: { type: [string, 'null'] }
+        slug: { type: string }
+        name: { type: string }
+        description_html: { type: [string, 'null'] }
+        position: { type: integer }
+        product_count: { type: integer }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    ProductInput:
+      type: object
+      required: [sku, name, price]
+      properties:
+        sku: { type: string, maxLength: 64 }
+        name: { type: string, maxLength: 255 }
+        slug: { type: [string, 'null'], maxLength: 255 }
+        description_html: { type: [string, 'null'] }
+        short_description_html: { type: [string, 'null'] }
+        price: { $ref: '#/components/schemas/Money' }
+        compare_at_price: { oneOf: [{ $ref: '#/components/schemas/Money' }, { type: 'null' }] }
+        images: { type: array, items: { type: object, required: [url], properties: { url: { type: string }, alt: { type: [string, 'null'] } } } }
+        category_ids: { type: array, items: { type: string } }
+        attributes: { type: object, additionalProperties: { type: string } }
+        active: { type: boolean, default: true }
+        position: { type: integer }
+    CategoryInput:
+      type: object
+      required: [id, name]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        slug: { type: [string, 'null'] }
+        parent_id: { type: [string, 'null'] }
+        description_html: { type: [string, 'null'] }
+        image: { type: [object, 'null'], properties: { url: { type: string }, alt: { type: [string, 'null'] } } }
+        position: { type: integer }

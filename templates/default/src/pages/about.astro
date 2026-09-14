@@ -1,8 +1,8 @@
 ---
 import BaseLayout from '../layouts/BaseLayout.astro'
 import Breadcrumbs from '../components/Breadcrumbs.astro'
-import { config } from '../lib/catalog'
-export const prerender = true
+import { config } from '../lib/store'
+export const prerender = false
 ---
 
 <BaseLayout title="About" description={`About ${config.name}.`}>

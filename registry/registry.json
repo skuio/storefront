@@ -1,8 +1,9 @@
 {
   "version": 1,
   "conventions": {
-    "note": "Blocks import `catalog`, `config` and `routes` from src/lib/catalog.ts and `resolveImage` from src/lib/images.ts. Both files ship in the template; keep those exports if you restructure.",
-    "sdk": "@skuio/storefront"
+    "note": "Blocks import { store, config, routes, readEnv, payment, paymentContext, mail, siteUrl } from src/lib/store.ts and { resolveImage } from src/lib/images.ts. Both files ship in the template; keep those exports if you restructure. `store(Astro)` returns the per-request Store (memoised on Astro.locals) — call `await store(Astro).catalog.load()` for the catalogue snapshot.",
+    "sdk": "@skuio/storefront",
+    "runtime": "Cloudflare Workers with a D1 binding named DB; see docs/store-platform.md."
   },
   "blocks": [
     {
@@ -17,7 +18,7 @@
     },
     {
       "name": "product-card",
-      "description": "Grid card: image, name, SKU, price, sale badge",
+      "description": "Product tile with image, sale/sold-out badges and price; links through routes.product().",
       "files": [
         {
           "from": "ProductCard.astro",
@@ -89,64 +90,8 @@
       ]
     },
     {
-      "name": "checkout",
-      "description": "Stripe Checkout: the /api/checkout endpoint, the webhook receiver, and the success page. Prices come from the catalogue on the server.",
-      "files": [
-        {
-          "from": "api/checkout.ts",
-          "to": "src/pages/api/checkout.ts"
-        },
-        {
-          "from": "api/stripe-webhook.ts",
-          "to": "src/pages/api/stripe-webhook.ts"
-        },
-        {
-          "from": "checkout/success.astro",
-          "to": "src/pages/checkout/success.astro"
-        },
-        {
-          "from": "lib/orders.ts",
-          "to": "src/lib/orders.ts"
-        }
-      ],
-      "dependencies": [
-        "stripe"
-      ]
-    },
-    {
-      "name": "contact-form",
-      "description": "Contact form with honeypot, posting to /api/contact which sends via SendGrid",
-      "files": [
-        {
-          "from": "ContactForm.astro",
-          "to": "src/components/ContactForm.astro"
-        },
-        {
-          "from": "api/contact.ts",
-          "to": "src/pages/api/contact.ts"
-        }
-      ]
-    },
-    {
-      "name": "order-lookup",
-      "description": "Order status by email + reference, read live from Stripe. The seed of the customer portal; needs no SKU.io API.",
-      "files": [
-        {
-          "from": "account/order-lookup.astro",
-          "to": "src/pages/account/order-lookup.astro"
-        },
-        {
-          "from": "api/order-lookup.ts",
-          "to": "src/pages/api/order-lookup.ts"
-        }
-      ],
-      "dependencies": [
-        "stripe"
-      ]
-    },
-    {
       "name": "cart",
-      "description": "Browser cart: Add to cart button, header badge, and a /cart page that checks out every line in one Stripe session. Snapshots are display-only; the server re-prices.",
+      "description": "Browser cart (localStorage) with add-to-cart button, header badge and a cart page that hands off to /checkout/.",
       "files": [
         {
           "from": "lib/cart.client.ts",
@@ -166,13 +111,76 @@
         }
       ],
       "registryDependencies": [
+        "breadcrumbs"
+      ]
+    },
+    {
+      "name": "checkout",
+      "description": "The store’s own checkout: address + shipping method page, order creation, adapter-neutral payment start, success and pending pages, processor webhook.",
+      "files": [
+        {
+          "from": "checkout/index.astro",
+          "to": "src/pages/checkout/index.astro"
+        },
+        {
+          "from": "api/checkout.ts",
+          "to": "src/pages/api/checkout.ts"
+        },
+        {
+          "from": "checkout/success.astro",
+          "to": "src/pages/checkout/success.astro"
+        },
+        {
+          "from": "checkout/pending.astro",
+          "to": "src/pages/checkout/pending.astro"
+        },
+        {
+          "from": "api/payments/webhook.ts",
+          "to": "src/pages/api/payments/webhook.ts"
+        }
+      ],
+      "dependencies": [
+        "stripe"
+      ],
+      "registryDependencies": [
         "breadcrumbs",
-        "checkout"
+        "cart"
+      ]
+    },
+    {
+      "name": "contact-form",
+      "description": "Contact form with honeypot, posting to /api/contact which sends via SendGrid",
+      "files": [
+        {
+          "from": "ContactForm.astro",
+          "to": "src/components/ContactForm.astro"
+        },
+        {
+          "from": "api/contact.ts",
+          "to": "src/pages/api/contact.ts"
+        }
+      ]
+    },
+    {
+      "name": "order-lookup",
+      "description": "Guest order status by email + order number, read from the store.",
+      "files": [
+        {
+          "from": "account/order-lookup.astro",
+          "to": "src/pages/account/order-lookup.astro"
+        },
+        {
+          "from": "api/order-lookup.ts",
+          "to": "src/pages/api/order-lookup.ts"
+        }
+      ],
+      "registryDependencies": [
+        "breadcrumbs"
       ]
     },
     {
       "name": "account",
-      "description": "Customer portal: passwordless sign-in by emailed link, order history with fulfilment and tracking, reorder into the cart. Needs a provider with the customers capability (SKU.io); degrades to order-lookup without one.",
+      "description": "Buyer portal: sign-in by emailed magic link, order history with fulfilments and tracking, order detail, reorder, sign out. Sessions live in the store.",
       "files": [
         {
           "from": "lib/account.ts",
@@ -191,6 +199,10 @@
           "to": "src/pages/account/orders/index.astro"
         },
         {
+          "from": "pages/account/orders/[id].astro",
+          "to": "src/pages/account/orders/[id].astro"
+        },
+        {
           "from": "pages/api/account/session.ts",
           "to": "src/pages/api/account/session.ts"
         },
@@ -203,6 +215,26 @@
         "breadcrumbs",
         "order-lookup",
         "cart"
+      ]
+    },
+    {
+      "name": "store-api",
+      "description": "The Store API route (/api/skuio/v1/*) that SKU.io pulls orders from and pushes inventory, fulfilments and products to. Auth: STORE_API_KEY.",
+      "files": [
+        {
+          "from": "api/skuio/v1/[...path].ts",
+          "to": "src/pages/api/skuio/v1/[...path].ts"
+        }
+      ]
+    },
+    {
+      "name": "sitemap",
+      "description": "sitemap.xml generated from the live catalogue.",
+      "files": [
+        {
+          "from": "pages/sitemap.xml.ts",
+          "to": "src/pages/sitemap.xml.ts"
+        }
       ]
     }
   ]
