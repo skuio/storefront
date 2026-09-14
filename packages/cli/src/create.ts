@@ -11,8 +11,22 @@ export interface CreateOptions {
   cwd: string
 }
 
+/**
+ * The published SDK range a scaffolded store depends on. It lives in the CLI's
+ * own package.json so it ships with the package, and `scripts/check-sdk-range.mjs`
+ * fails the build when it drifts from the SDK's current minor — a stale range here
+ * scaffolds stores that cannot resolve the dependency at all.
+ */
+function publishedSdkRange(): string {
+  const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { sdkRange?: string }
+  if (!pkg.sdkRange) {
+    throw new Error('@skuio/cli package.json is missing "sdkRange"')
+  }
+  return pkg.sdkRange
+}
+
 const SKIP = new Set([
-  'node_modules', 'dist', '.astro', '.wrangler', '.env', '.dev.vars', 'test-results', 'playwright-report',
+  'node_modules', 'dist', '.astro', '.wrangler', '.env', '.dev.vars', '.store-api-key', 'migrations', 'test-results', 'playwright-report',
 ])
 
 /**
@@ -73,7 +87,7 @@ export async function create(opts: CreateOptions): Promise<void> {
       // Astro pins vite 6; without this npm may hoist a second vite next to it.
       pkg.overrides = { ...((pkg.overrides as Record<string, string>) ?? {}), vite: '^6.4.3' }
     } else {
-      deps['@skuio/storefront'] = '^0.1.0'
+      deps['@skuio/storefront'] = publishedSdkRange()
     }
   }
   writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n')

@@ -9,7 +9,7 @@
   "scripts": {
     "build": "npm run build -w @skuio/storefront -w @skuio/cli",
     "test": "npm run test -w @skuio/storefront",
-    "check": "npm run check --workspaces --if-present",
+    "check": "npm run check --workspaces --if-present && node scripts/check-sdk-range.mjs",
     "sync:template": "node scripts/sync-template.mjs",
     "template:build": "npm run build -w @skuio/template-default",
     "template:e2e": "npm run e2e -w @skuio/template-default"
