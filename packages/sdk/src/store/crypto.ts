@@ -22,6 +22,15 @@ export function randomToken(bytes = 32): string {
   return toHex(buf)
 }
 
+/** Random secret as URL-safe base64 (no padding); 32 bytes → 43 characters. */
+export function randomBase64Url(bytes = 32): string {
+  const buf = new Uint8Array(bytes)
+  crypto.getRandomValues(buf)
+  let bin = ''
+  for (const b of buf) bin += String.fromCharCode(b)
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+}
+
 export function toHex(buf: ArrayBuffer | Uint8Array): string {
   const view = buf instanceof Uint8Array ? buf : new Uint8Array(buf)
   let out = ''

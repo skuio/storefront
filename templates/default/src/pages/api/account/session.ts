@@ -1,4 +1,5 @@
 import type { APIContext } from 'astro'
+import { sameOrigin } from '@skuio/storefront'
 import { store } from '../../../lib/store'
 
 export const prerender = false
@@ -8,6 +9,7 @@ export const prerender = false
  * belongs to a customer, so this cannot be used to enumerate customers.
  */
 export async function POST(context: APIContext): Promise<Response> {
+  if (!sameOrigin(context.request, context.url)) return context.redirect('/account/', 303)
   const form = await context.request.formData()
   const email = String(form.get('email') ?? '').trim().toLowerCase()
   if (!email.includes('@')) return context.redirect('/account/', 303)

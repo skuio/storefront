@@ -1,0 +1,83 @@
+---
+import { SCOPE_DESCRIPTIONS, type AuthorizeRequest } from '@skuio/storefront/store'
+import AdminShell from '../../components/AdminShell.astro'
+import { config, store } from '../../lib/store'
+import { requireOwner, sameOrigin } from '../../lib/admin'
+
+/**
+ * The authorization screen. A consumer (SKU.io) sends the owner's browser here
+ * with client_id, redirect_uri, state, tenant and scope. The owner sees who is
+ * asking and where the browser will go, and approves or denies. Approval mints
+ * a one-time code the consumer trades for its key at /api/skuio/v1/connect/token.
+ */
+export const prerender = false
+
+const owner = await requireOwner(Astro)
+if (owner instanceof Response) return owner
+
+const s = store(Astro)
+const params = Astro.request.method === 'POST' ? await Astro.request.formData() : Astro.url.searchParams
+const get = (k: string) => {
+  const v = params.get(k)
+  return typeof v === 'string' ? v : null
+}
+
+let request: AuthorizeRequest | null = null
+let problems: Record<string, string> | null = null
+try {
+  request = s.connections.validateAuthorize({ client_id: get('client_id'), redirect_uri: get('redirect_uri'), state: get('state'), tenant: get('tenant'), scope: get('scope') })
+} catch (error) {
+  problems = (error as { details?: Record<string, string> }).details ?? { request: 'is invalid' }
+}
+
+if (request && Astro.request.method === 'POST') {
+  if (!sameOrigin(Astro.request, Astro.url)) return new Response('Forbidden', { status: 403 })
+  const decision = get('decision')
+  if (decision === 'approve') {
+    const { redirectTo } = await s.connections.approve(request, owner.id)
+    return Astro.redirect(redirectTo, 303)
+  }
+  if (decision === 'deny') return Astro.redirect(s.connections.denyUrl(request), 303)
+}
+---
+
+<AdminShell title="Connect to SKU.io" owner={owner} width="narrow">
+  {
+    problems ? (
+      <div class="mt-6 rounded-md border border-accent/30 bg-accent/5 p-4 text-sm" role="alert">
+        <p class="font-semibold text-accent">This connect request cannot be approved.</p>
+        <ul class="mt-2 list-disc pl-5 text-body/80">
+          {Object.entries(problems).map(([field, problem]) => <li><span class="font-mono text-xs">{field}</span> {problem}</li>)}
+        </ul>
+        <p class="mt-3 text-xs text-body/70">Start again from SKU.io. Nothing was changed.</p>
+      </div>
+    ) : (
+      <>
+        <p class="mt-3 text-sm">
+          <span class="font-semibold text-ink">{request!.tenant}</span> on SKU.io wants to connect to <span class="font-semibold text-ink">{config.name}</span>.
+        </p>
+        <div class="mt-5 rounded-lg border border-rule">
+          <div class="border-b border-rule bg-[#fafafa] px-4 py-2.5 text-[11px] font-semibold tracking-wide text-body/60 uppercase">It will be allowed to</div>
+          <ul class="divide-y divide-rule px-4 text-sm">
+            {request!.scopes.map((scope) => <li class="py-2.5">{SCOPE_DESCRIPTIONS[scope]}</li>)}
+          </ul>
+        </div>
+        <p class="mt-5 text-sm">
+          After you approve, your browser goes to
+          <span class="mt-1 block rounded bg-ink px-3 py-2 font-mono text-xs text-white">{request!.redirectHost}</span>
+        </p>
+        <p class="mt-2 text-xs text-body/70">Only approve if that is the SKU.io address you signed in to. The key never appears on screen; you can revoke it any time under Connections.</p>
+
+        <form method="POST" class="mt-6 flex gap-3">
+          <input type="hidden" name="client_id" value={request!.clientId} />
+          <input type="hidden" name="redirect_uri" value={request!.redirectUri} />
+          <input type="hidden" name="state" value={request!.state} />
+          <input type="hidden" name="tenant" value={request!.tenant} />
+          <input type="hidden" name="scope" value={request!.scopes.join(',')} />
+          <button type="submit" name="decision" value="approve" class="flex-1 rounded-md bg-accent px-6 py-3 text-sm font-bold tracking-wide text-white uppercase transition hover:bg-accent-dark">Approve</button>
+          <button type="submit" name="decision" value="deny" class="rounded-md border-2 border-ink px-6 py-3 text-sm font-bold tracking-wide text-ink uppercase transition hover:bg-ink hover:text-white">Deny</button>
+        </form>
+      </>
+    )
+  }
+</AdminShell>

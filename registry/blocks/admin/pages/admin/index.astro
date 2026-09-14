@@ -1,0 +1,69 @@
+---
+import AdminShell from '../../components/AdminShell.astro'
+import { config, store } from '../../lib/store'
+import { requireOwner } from '../../lib/admin'
+
+// The owner's landing page: what the store holds and who runs it. Read-only by
+// design — orders, products and stock are managed in SKU.io.
+export const prerender = false
+
+const owner = await requireOwner(Astro)
+if (owner instanceof Response) return owner
+
+const s = store(Astro)
+const [health, connections] = await Promise.all([s.health(), s.connections.list()])
+const live = connections.filter((c) => !c.revokedAt)
+const date = (iso: string | null) => (iso ? new Date(iso).toLocaleString(config.locale, { dateStyle: 'medium', timeStyle: 'short' }) : '—')
+const counts = [
+  { label: 'Products', value: health.counts.products },
+  { label: 'Categories', value: health.counts.categories },
+  { label: 'Orders', value: health.counts.orders },
+  { label: 'Customers', value: health.counts.customers },
+]
+---
+
+<AdminShell title={config.name} owner={owner}>
+  <p class="mt-2 text-sm text-body/70">{config.url} · platform {health.version}</p>
+
+  <dl class="mt-8 grid grid-cols-2 gap-3 sm:grid-cols-4">
+    {counts.map((c) => (
+      <div class="rounded-lg border border-rule bg-[#fafafa] px-4 py-3">
+        <dt class="text-[11px] font-semibold tracking-wide text-body/60 uppercase">{c.label}</dt>
+        <dd class="mt-1 text-2xl font-bold text-ink">{c.value.toLocaleString(config.locale)}</dd>
+      </div>
+    ))}
+  </dl>
+
+  <section class="mt-8 rounded-lg border border-rule">
+    <div class="flex flex-wrap items-baseline justify-between gap-3 border-b border-rule bg-[#fafafa] px-4 py-3 text-sm">
+      <span class="font-semibold text-ink">Connection</span>
+      <a href="/admin/connections/" class="text-xs font-semibold tracking-wide text-accent uppercase">Manage connections</a>
+    </div>
+    <div class="px-4 py-4 text-sm">
+      {
+        live.length === 0 ? (
+          <>
+            <p class="font-semibold text-ink">Not connected.</p>
+            <p class="mt-1 text-body/80">Connect this store from SKU.io: Integrations → Storefront → Connect, enter <span class="font-mono text-xs">{config.url}</span>, and approve the request here when it arrives.</p>
+          </>
+        ) : (
+          <ul class="divide-y divide-rule">
+            {live.map((c) => (
+              <li class="flex flex-wrap items-baseline justify-between gap-2 py-2 first:pt-0 last:pb-0">
+                <span>
+                  <span class="font-semibold text-ink">{c.name}</span>
+                  <span class="block text-xs text-body/60">since {date(c.issuedAt ?? c.createdAt)} · last used {date(c.lastUsedAt)}</span>
+                </span>
+                <span class="rounded-full bg-green-600 px-2.5 py-0.5 text-[11px] font-bold tracking-wide text-white uppercase">Connected</span>
+              </li>
+            ))}
+          </ul>
+        )
+      }
+    </div>
+  </section>
+
+  <p class="mt-8 text-xs text-body/70">
+    Orders, products and stock are managed in SKU.io. This store keeps the records and shows them to buyers; it does not edit them here.
+  </p>
+</AdminShell>

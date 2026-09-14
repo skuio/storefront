@@ -1,6 +1,7 @@
 # Store API v1 — the contract between a store and its operations system
 
-Base URL: `https://<store>/api/skuio/v1` · Auth: `Authorization: Bearer <STORE_API_KEY>`
+Base URL: `https://<store>/api/skuio/v1` · Auth: `Authorization: Bearer <key>` — a connection key issued by the
+owner-approved connect flow below, or the `STORE_API_KEY` secret as a break-glass
 · JSON in and out · money is `{ "amount": <integer minor units>, "currency": "USD" }` ·
 timestamps are ISO-8601 UTC · errors are `{ "error": { "code", "message", "details" } }`.
 
@@ -9,7 +10,10 @@ is the first consumer; anything that can speak this contract can run the store.
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/health` | Store identity, counts, server time. Used by "Test connection". |
+| POST | `/connect/token` | Trade an approved connect code for a per-connection key. The one unauthenticated endpoint. |
+| GET | `/connect` | The connection behind this key (`null` for the secret). |
+| DELETE | `/connect` | Revoke the connection behind this key. |
+| GET | `/health` | Store identity, counts, whether an owner exists, which connection is calling, server time. Used by "Test connection". |
 | GET | `/orders` | Orders changed since a watermark, oldest first, keyset-paged. |
 | GET | `/orders/{id}` | One order with lines, payment, addresses, fulfilments. |
 | PATCH | `/orders/{id}` | Stamp `external_reference`, record a payment status, or cancel. |
@@ -21,6 +25,43 @@ is the first consumer; anything that can speak this contract can run the store.
 | DELETE | `/products/{sku}` | Deactivate a product (it stays for order history). |
 | GET | `/categories` | The category tree as a flat list, parents before children. |
 | PUT | `/categories` | Batch upsert of the category tree. |
+
+## Connecting from SKU.io
+
+The store is its own authorization server. Nobody pastes a key: the owner approves the
+consumer in the browser, and the consumer trades a one-time code for a key it alone holds.
+
+1. **Owner exists.** The merchant runs `npm run owner:create -- --email … --name …` once
+   against the deployed store. `GET /health` reports `owner_configured: true` from then on;
+   until it does, there is nobody to approve anything and the consumer should say so.
+2. **Browser step.** The consumer sends the owner's browser to
+   `https://<store>/admin/connect?client_id=skuio&redirect_uri=<https url>&state=<opaque>&tenant=<name>&scope=orders,fulfillments,inventory,catalog`.
+   The store asks the owner to sign in (password, or an emailed reset if forgotten), then shows who
+   is asking, what it may do, and the host the browser will be sent to. Approve → `302 <redirect_uri>?code=…&state=…`.
+   Deny → `302 <redirect_uri>?error=access_denied&state=…`. `state` is opaque to the store and
+   echoed untouched; the consumer must sign it and check it on return.
+3. **Token step, server to server.** `POST /connect/token` with `{ "code", "redirect_uri" }` (no auth)
+   → `201 { "data": { "api_key": "sk_store_…", "connection": { … } } }`. The key appears exactly
+   once; store it encrypted. A replay is `400 invalid_grant`, and so is a `redirect_uri` that differs
+   from the one used in step 2. Codes live 10 minutes.
+4. **Use it.** `Authorization: Bearer sk_store_…` on every other endpoint. `GET /connect` says which
+   connection is calling; `DELETE /connect` revokes it (204), after which the key is a 401.
+
+Redirect rules: `redirect_uri` must be absolute `https` (plain `http` is allowed only for
+`localhost`, `*.localhost` and `*.test`, so a developer's SKU.io works), must not carry a fragment
+or credentials, and `client_id` must be one the store knows (`skuio`). Scopes are the four listed;
+they describe intent to the owner and travel with the connection — v1 does not yet enforce them
+per endpoint.
+
+The owner can see every connection at `/admin/connections` (name, tenant, key prefix, last used) and
+revoke any of them. Revoking in the store and `DELETE /connect` from the consumer are the same
+operation.
+
+**Break-glass.** The `STORE_API_KEY` Worker secret still authenticates every endpoint, so a store
+whose owner is unreachable can be operated, and a brand-new store can be seeded before an owner
+exists. It is not a connection: `GET /connect` returns `null` for it and `DELETE /connect` is a 409.
+Rotate it on the Worker. Both sign-in and code exchange lock an address after repeated failures
+(`429 rate_limited`).
 
 ## Orders
 
@@ -150,4 +191,5 @@ keyed by SKU and are unaffected by category re-keying. A second identical push c
 ## Errors
 
 `401 unauthorized` (missing/wrong key) · `404 not_found` · `422 validation_failed` (with
-`details` per field) · `409 conflict` (e.g. cancelling a fulfilled order) · `429` never in v1.
+`details` per field) · `409 conflict` (e.g. cancelling a fulfilled order) · `400 invalid_grant` (code
+exchange) · `429 rate_limited` (repeated sign-in or exchange failures from one address).

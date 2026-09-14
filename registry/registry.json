@@ -1,7 +1,7 @@
 {
   "version": 1,
   "conventions": {
-    "note": "Blocks import { store, config, routes, readEnv, payment, paymentContext, mail, siteUrl } from src/lib/store.ts and { resolveImage } from src/lib/images.ts. Both files ship in the template; keep those exports if you restructure. `store(Astro)` returns the per-request Store (memoised on Astro.locals) — call `await store(Astro).catalog.load()` for the catalogue snapshot.",
+    "note": "Blocks import { store, config, routes, readEnv, payment, paymentContext, mail, siteUrl } from src/lib/store.ts and { resolveImage } from src/lib/images.ts. Both files ship in the template; keep those exports if you restructure. `store(Astro)` returns the per-request Store (memoised on Astro.locals) \u2014 call `await store(Astro).catalog.load()` for the catalogue snapshot.",
     "sdk": "@skuio/storefront",
     "runtime": "Cloudflare Workers with a D1 binding named DB; see docs/store-platform.md."
   },
@@ -116,7 +116,7 @@
     },
     {
       "name": "checkout",
-      "description": "The store’s own checkout: address + shipping method page, order creation, adapter-neutral payment start, success and pending pages, processor webhook.",
+      "description": "The store\u2019s own checkout: address + shipping method page, order creation, adapter-neutral payment start, success and pending pages, processor webhook.",
       "files": [
         {
           "from": "checkout/index.astro",
@@ -219,7 +219,7 @@
     },
     {
       "name": "store-api",
-      "description": "The Store API route (/api/skuio/v1/*) that SKU.io pulls orders from and pushes inventory, fulfilments and products to. Auth: STORE_API_KEY.",
+      "description": "The Store API route (/api/skuio/v1/*) that SKU.io pulls orders from and pushes inventory, fulfilments and products to. Auth: a connection key issued through the admin block's approval screen, or the STORE_API_KEY secret as a break-glass.",
       "files": [
         {
           "from": "api/skuio/v1/[...path].ts",
@@ -235,6 +235,71 @@
           "from": "pages/sitemap.xml.ts",
           "to": "src/pages/sitemap.xml.ts"
         }
+      ]
+    },
+    {
+      "name": "admin",
+      "description": "Owner sign-in (password, reset by email), a read-only overview, the connections list, and the approval screen that hands SKU.io a per-connection Store API key. Owners are created with `npm run owner:create`; there is no public sign-up.",
+      "files": [
+        {
+          "from": "lib/admin.ts",
+          "to": "src/lib/admin.ts"
+        },
+        {
+          "from": "components/AdminShell.astro",
+          "to": "src/components/AdminShell.astro"
+        },
+        {
+          "from": "pages/admin/index.astro",
+          "to": "src/pages/admin/index.astro"
+        },
+        {
+          "from": "pages/admin/sign-in.astro",
+          "to": "src/pages/admin/sign-in.astro"
+        },
+        {
+          "from": "pages/admin/sign-out.astro",
+          "to": "src/pages/admin/sign-out.astro"
+        },
+        {
+          "from": "pages/admin/forgot-password.astro",
+          "to": "src/pages/admin/forgot-password.astro"
+        },
+        {
+          "from": "pages/admin/reset-password.astro",
+          "to": "src/pages/admin/reset-password.astro"
+        },
+        {
+          "from": "pages/admin/connections.astro",
+          "to": "src/pages/admin/connections.astro"
+        },
+        {
+          "from": "pages/admin/connect.astro",
+          "to": "src/pages/admin/connect.astro"
+        },
+        {
+          "from": "pages/api/admin/session.ts",
+          "to": "src/pages/api/admin/session.ts"
+        },
+        {
+          "from": "pages/api/admin/sign-out.ts",
+          "to": "src/pages/api/admin/sign-out.ts"
+        },
+        {
+          "from": "pages/api/admin/reset-request.ts",
+          "to": "src/pages/api/admin/reset-request.ts"
+        },
+        {
+          "from": "pages/api/admin/reset.ts",
+          "to": "src/pages/api/admin/reset.ts"
+        },
+        {
+          "from": "pages/api/admin/connections/revoke.ts",
+          "to": "src/pages/api/admin/connections/revoke.ts"
+        }
+      ],
+      "registryDependencies": [
+        "store-api"
       ]
     }
   ]

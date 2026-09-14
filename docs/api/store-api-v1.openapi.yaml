@@ -4,12 +4,44 @@ info:
   version: "1.0"
   description: |
     The contract between a store built on the SKU.io storefront kit and its operations system.
-    Base path `/api/skuio/v1`, bearer `STORE_API_KEY`. Money is integer minor units + ISO currency.
+    Base path `/api/skuio/v1`. Money is integer minor units + ISO currency.
+
+    Auth is a bearer key. A consumer obtains one through the owner-approved connect flow
+    (`GET /admin/connect` in the browser, then `POST /connect/token` server to server), or the
+    store's `STORE_API_KEY` secret is used as a break-glass. Every endpoint except
+    `POST /connect/token` requires it.
 servers:
   - url: https://{store}/api/skuio/v1
     variables: { store: { default: www.example.com } }
 security: [{ bearer: [] }]
 paths:
+  /connect/token:
+    post:
+      operationId: exchangeConnectCode
+      security: []
+      description: |
+        Trade the one-time code from an approved `/admin/connect` for this connection's API key.
+        Unauthenticated: the code is the credential. Works exactly once; the `redirect_uri` must
+        equal the one the code was issued for. Failures count against the caller's address.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/TokenRequest' } } }
+      responses:
+        '201': { description: Key issued, content: { application/json: { schema: { $ref: '#/components/schemas/TokenEnvelope' } } } }
+        '400': { description: invalid_grant — unknown, used or expired code, or a redirect_uri mismatch, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /connect:
+    get:
+      operationId: currentConnection
+      description: The connection behind the bearer key, or `null` when the STORE_API_KEY secret was used.
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: object, properties: { data: { oneOf: [{ $ref: '#/components/schemas/Connection' }, { type: 'null' }] } } } } } }
+    delete:
+      operationId: revokeCurrentConnection
+      description: Revoke the connection behind the bearer key. Its key is a 401 from then on.
+      responses:
+        '204': { description: Revoked }
+        '409': { description: The STORE_API_KEY secret is not a connection, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
   /health:
     get:
       operationId: health
@@ -164,6 +196,7 @@ components:
     NotFound: { description: Not found, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
     Conflict: { description: Conflict, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
     Unprocessable: { description: Validation failed, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    RateLimited: { description: Too many failures from this address; try later, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
   schemas:
     Error:
       type: object
@@ -194,7 +227,39 @@ components:
             locale: { type: string }
             version: { type: string, description: Store platform version }
             counts: { type: object, properties: { products: { type: integer }, categories: { type: integer }, orders: { type: integer }, customers: { type: integer } } }
+            owner_configured: { type: boolean, description: True once an owner exists; false means `npm run owner:create` has not been run and nobody can approve a connection yet }
+            connection:
+              description: The connection this request authenticated as; null for the STORE_API_KEY secret
+              oneOf:
+                - type: 'null'
+                - { type: object, properties: { id: { type: string }, name: { type: string }, tenant: { type: [string, 'null'] } } }
             time: { type: string, format: date-time }
+    Connection:
+      type: object
+      properties:
+        id: { type: string, description: con_… }
+        name: { type: string }
+        tenant: { type: [string, 'null'], description: The consumer's display name for itself (the SKU.io tenant) }
+        scopes: { type: array, items: { type: string, enum: [orders, fulfillments, inventory, catalog] } }
+        key_prefix: { type: [string, 'null'], description: First characters of the key, for display only }
+        created_at: { type: string, format: date-time }
+        issued_at: { type: [string, 'null'], format: date-time }
+        last_used_at: { type: [string, 'null'], format: date-time }
+        revoked_at: { type: [string, 'null'], format: date-time }
+    TokenRequest:
+      type: object
+      required: [code, redirect_uri]
+      properties:
+        code: { type: string, description: The `code` query parameter the store appended to the redirect }
+        redirect_uri: { type: string, format: uri, description: Exactly the redirect_uri sent to /admin/connect }
+    TokenEnvelope:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            api_key: { type: string, description: sk_store_… — shown once, store it encrypted }
+            connection: { $ref: '#/components/schemas/Connection' }
     OrderLine:
       type: object
       properties:

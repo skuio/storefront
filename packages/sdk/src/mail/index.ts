@@ -1,6 +1,6 @@
 export type { MailAdapter, MailMessage } from './types'
 export {
-  orderConfirmationMail, shippingConfirmationMail, magicLinkMail, merchantNewOrderMail, escapeHtml,
+  orderConfirmationMail, shippingConfirmationMail, magicLinkMail, merchantNewOrderMail, ownerPasswordResetMail, escapeHtml,
   type RenderedMail, type MailContext,
 } from './templates'
 export { consoleMail, type ConsoleMailOptions } from './console'

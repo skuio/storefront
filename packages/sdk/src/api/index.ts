@@ -1,4 +1,5 @@
-import type { Store } from '../store'
+import type { Connection, Store } from '../store'
+import { API_KEY_PREFIX } from '../store/connections'
 import { secretsEqual } from '../store/crypto'
 import { StoreError } from '../store/errors'
 import { serializeCategory, serializeFulfillment, serializeOrder, serializeProduct } from './serialize'
@@ -8,11 +9,18 @@ import {
 
 export interface StoreApiOptions {
   store: Store
-  /** The STORE_API_KEY secret. When unset every request is refused. */
+  /**
+   * The STORE_API_KEY secret — the break-glass key that works without an owner
+   * or a connection. Optional: a store whose consumers all connect through the
+   * owner-approved flow can leave it unset.
+   */
   apiKey: string | undefined
   /** Where the API is mounted in the request URL. */
   basePath?: string
 }
+
+/** Who a request authenticated as: the environment key, or an approved connection. */
+export type ApiCaller = { kind: 'env' } | { kind: 'connection'; connection: Connection }
 
 export const STORE_API_BASE = '/api/skuio/v1'
 
@@ -34,10 +42,17 @@ export async function handleStoreApi(request: Request, options: StoreApiOptions)
   const path = url.pathname.slice(at + base.length).replace(/\/+$/, '') || '/'
   const method = request.method.toUpperCase()
 
-  if (!(await authorized(request, options.apiKey))) return error(401, 'unauthorized', 'A valid bearer STORE_API_KEY is required')
-
   try {
-    return await route(method, path, url, request, options.store)
+    // The token exchange is the one unauthenticated endpoint: the code is the credential.
+    if (path === '/connect/token' && method === 'POST') {
+      const issued = await options.store.connections.exchange(await readJson(request), clientAddress(request))
+      return json({ data: { api_key: issued.apiKey, connection: serializeConnection(issued.connection) } }, 201)
+    }
+
+    const caller = await authorized(request, options.apiKey, options.store)
+    if (!caller) return error(401, 'unauthorized', 'A valid bearer key is required: a connection key issued through /admin/connect, or the STORE_API_KEY secret')
+
+    return await route(method, path, url, request, options.store, caller)
   } catch (e) {
     if (e instanceof ValidationError) return error(422, 'validation_failed', e.message, e.details)
     if (e instanceof StoreError) return error(e.status, e.code, e.message, e.details)
@@ -46,12 +61,36 @@ export async function handleStoreApi(request: Request, options: StoreApiOptions)
   }
 }
 
-async function authorized(request: Request, apiKey: string | undefined): Promise<boolean> {
-  if (!apiKey) return false
+async function authorized(request: Request, apiKey: string | undefined, store: Store): Promise<ApiCaller | null> {
   const header = request.headers.get('authorization') ?? ''
   const match = /^Bearer\s+(.+)$/i.exec(header.trim())
-  if (!match) return false
-  return secretsEqual(match[1]!.trim(), apiKey)
+  if (!match) return null
+  const bearer = match[1]!.trim()
+  if (bearer.startsWith(API_KEY_PREFIX)) {
+    const connection = await store.connections.resolveKey(bearer)
+    return connection ? { kind: 'connection', connection } : null
+  }
+  if (apiKey && (await secretsEqual(bearer, apiKey))) return { kind: 'env' }
+  return null
+}
+
+/** The caller's address for failure counting; Cloudflare sets the first header, proxies the second. */
+function clientAddress(request: Request): string {
+  return request.headers.get('cf-connecting-ip') ?? request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? 'unknown'
+}
+
+export function serializeConnection(c: Connection) {
+  return {
+    id: c.id,
+    name: c.name,
+    tenant: c.tenant,
+    scopes: c.scopes,
+    key_prefix: c.keyPrefix,
+    created_at: c.createdAt,
+    issued_at: c.issuedAt,
+    last_used_at: c.lastUsedAt,
+    revoked_at: c.revokedAt,
+  }
 }
 
 async function readJson(request: Request): Promise<Record<string, unknown>> {
@@ -67,10 +106,23 @@ async function readJson(request: Request): Promise<Record<string, unknown>> {
   return parsed as Record<string, unknown>
 }
 
-async function route(method: string, path: string, url: URL, request: Request, store: Store): Promise<Response> {
+async function route(method: string, path: string, url: URL, request: Request, store: Store, caller: ApiCaller): Promise<Response> {
   const segments = path.split('/').filter(Boolean)
 
-  if (path === '/health' && method === 'GET') return json({ data: await store.health() })
+  if (path === '/health' && method === 'GET') {
+    const health = await store.health()
+    const connection = caller.kind === 'connection' ? { id: caller.connection.id, name: caller.connection.name, tenant: caller.connection.tenant } : null
+    return json({ data: { ...health, connection } })
+  }
+
+  if (path === '/connect') {
+    if (method === 'GET') return json({ data: caller.kind === 'connection' ? serializeConnection(caller.connection) : null })
+    if (method === 'DELETE') {
+      if (caller.kind !== 'connection') return error(409, 'conflict', 'The STORE_API_KEY secret is not a connection; rotate it on the Worker instead')
+      await store.connections.revoke(caller.connection.id)
+      return new Response(null, { status: 204 })
+    }
+  }
 
   if (segments[0] === 'orders') {
     if (segments.length === 1 && method === 'GET') {

@@ -12,3 +12,4 @@ export {
   MAX_CART_LINES, emptyCart, addLine, setQuantity, removeLine, cartCount, cartSubtotal,
   cartToCheckoutItems, parseCart, serializeCart, type Cart, type CartLine,
 } from './cart'
+export { sameOrigin, clientAddress } from './http'

@@ -1,0 +1,66 @@
+---
+import { SCOPE_DESCRIPTIONS } from '@skuio/storefront/store'
+import AdminShell from '../../components/AdminShell.astro'
+import { config, store } from '../../lib/store'
+import { requireOwner } from '../../lib/admin'
+
+// Every consumer that was ever issued a key, live ones first. Revoking is the
+// only write here: a revoked key is a 401 from its next request.
+export const prerender = false
+
+const owner = await requireOwner(Astro)
+if (owner instanceof Response) return owner
+
+const connections = await store(Astro).connections.list()
+const revoked = Astro.url.searchParams.get('revoked') === '1'
+const date = (iso: string | null) => (iso ? new Date(iso).toLocaleString(config.locale, { dateStyle: 'medium', timeStyle: 'short' }) : 'never')
+const ordered = [...connections].sort((a, b) => Number(!!a.revokedAt) - Number(!!b.revokedAt))
+---
+
+<AdminShell title="Connections" owner={owner}>
+  <p class="mt-2 text-sm text-body/70">Systems allowed to read this store's orders and push shipments, stock and catalogue. Each holds its own key; revoking one does not touch the others.</p>
+  {revoked && <p class="mt-4 rounded-md border border-green-600/30 bg-green-50 px-4 py-3 text-sm text-green-800" role="status">Connection revoked. Its key no longer works.</p>}
+
+  {
+    ordered.length === 0 ? (
+      <div class="mt-8 rounded-md border border-rule bg-[#fafafa] p-4 text-sm">
+        <p class="font-semibold text-ink">No connections yet.</p>
+        <p class="mt-1 text-body/80">Start from SKU.io: Integrations → Storefront → Connect. You will be asked to approve the request here.</p>
+      </div>
+    ) : (
+      <ul class="mt-8 space-y-4">
+        {ordered.map((c) => (
+          <li class:list={['rounded-lg border border-rule', c.revokedAt && 'opacity-60']} data-connection={c.id}>
+            <div class="flex flex-wrap items-baseline justify-between gap-3 border-b border-rule bg-[#fafafa] px-4 py-3 text-sm">
+              <span>
+                <span class="font-semibold text-ink">{c.name}</span>
+                {c.tenant && <span class="text-body/60"> · tenant {c.tenant}</span>}
+              </span>
+              {c.revokedAt ? (
+                <span class="rounded-full bg-rule px-2.5 py-0.5 text-[11px] font-bold tracking-wide text-body uppercase">Revoked {date(c.revokedAt)}</span>
+              ) : (
+                <span class="rounded-full bg-green-600 px-2.5 py-0.5 text-[11px] font-bold tracking-wide text-white uppercase">Active</span>
+              )}
+            </div>
+            <dl class="grid grid-cols-1 gap-x-6 gap-y-2 px-4 py-3 text-sm sm:grid-cols-2">
+              <div><dt class="text-[11px] font-semibold tracking-wide text-body/60 uppercase">Key</dt><dd class="font-mono text-xs">{c.keyPrefix}…</dd></div>
+              <div><dt class="text-[11px] font-semibold tracking-wide text-body/60 uppercase">Redirects to</dt><dd class="font-mono text-xs">{c.redirectHost ?? '—'}</dd></div>
+              <div><dt class="text-[11px] font-semibold tracking-wide text-body/60 uppercase">Connected</dt><dd>{date(c.issuedAt ?? c.createdAt)}</dd></div>
+              <div><dt class="text-[11px] font-semibold tracking-wide text-body/60 uppercase">Last used</dt><dd>{date(c.lastUsedAt)}</dd></div>
+              <div class="sm:col-span-2">
+                <dt class="text-[11px] font-semibold tracking-wide text-body/60 uppercase">Allowed to</dt>
+                <dd><ul class="mt-1 list-disc pl-5 text-body/80">{c.scopes.map((s) => <li>{SCOPE_DESCRIPTIONS[s]}</li>)}</ul></dd>
+              </div>
+            </dl>
+            {!c.revokedAt && (
+              <form method="POST" action="/api/admin/connections/revoke" class="border-t border-rule px-4 py-3" onsubmit="return confirm('Revoke this connection? SKU.io will lose access until it connects again.')">
+                <input type="hidden" name="id" value={c.id} />
+                <button type="submit" class="text-xs font-semibold tracking-wide text-accent uppercase hover:underline">Revoke</button>
+              </form>
+            )}
+          </li>
+        ))}
+      </ul>
+    )
+  }
+</AdminShell>

@@ -162,6 +162,27 @@ export function magicLinkMail(input: { url: string; expiresMinutes: number }, ct
   return { subject: `Sign in to ${config.name}`, html, text }
 }
 
+export function ownerPasswordResetMail(input: { url: string; expiresMinutes: number }, ctx: MailContext): RenderedMail {
+  const { config } = ctx
+  const html = layout(
+    config,
+    'Reset your password',
+    `<p style="margin:0 0 16px;font-size:14px">Someone asked to reset the owner password for ${escapeHtml(config.name)}. If that was you, click the button. The link works once and expires in ${input.expiresMinutes} minutes.</p>
+<p style="margin:0 0 16px"><a href="${escapeHtml(input.url)}" style="display:inline-block;background:#0f6fff;color:#fff;text-decoration:none;padding:12px 22px;border-radius:6px;font-weight:700;font-size:14px">Choose a new password</a></p>
+<p style="margin:0;font-size:12px;color:#666">If you did not ask for this, ignore this email — your password stays as it is.</p>`,
+    escapeHtml(config.name)
+  )
+  const text = [
+    `Reset the owner password for ${config.name}`,
+    '',
+    `Open this link to choose a new password (it works once and expires in ${input.expiresMinutes} minutes):`,
+    input.url,
+    '',
+    'If you did not ask for this, ignore this email.',
+  ].join('\n')
+  return { subject: `Reset your ${config.name} owner password`, html, text }
+}
+
 export function merchantNewOrderMail(order: Order, ctx: MailContext): RenderedMail {
   const { config } = ctx
   const number = `${config.orders.numberPrefix}${order.number}`

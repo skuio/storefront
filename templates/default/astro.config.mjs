@@ -12,6 +12,10 @@ import storefront from './storefront.config'
 export default defineConfig({
   site: storefront.url,
   output: 'server',
+  // The Store API is bearer-authenticated machine traffic with no Origin header;
+  // Astro's browser CSRF check would 403 its bodyless DELETEs. Browser form
+  // handlers guard themselves with sameOrigin() from the SDK instead.
+  security: { checkOrigin: false },
   adapter: cloudflare({ imageService: 'compile', platformProxy: { enabled: true, persist: true } }),
   vite: { plugins: [tailwindcss()] },
 })

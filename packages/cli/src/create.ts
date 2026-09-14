@@ -100,6 +100,7 @@ export async function create(opts: CreateOptions): Promise<void> {
   console.log(`  ${dim('$')} npm install`)
   console.log(`  ${dim('$')} cp .env.example .env     ${dim('# add a Stripe test key')}`)
   console.log(`  ${dim('$')} npm run dev`)
+  console.log(`  ${dim('$')} npm run owner:create:local -- --email you@example.com --name "Your Name"   ${dim('# the owner who signs in at /admin')}`)
   if (linkedSdk) {
     console.log(`\n${dim('@skuio/storefront is linked from your kit checkout (' + linkedSdk + ').')}`)
     console.log(dim('Run `npm run build` in the kit first, and replace the link with a version range before publishing.'))

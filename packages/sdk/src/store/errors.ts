@@ -1,4 +1,4 @@
-export type StoreErrorCode = 'not_found' | 'validation_failed' | 'conflict' | 'unavailable'
+export type StoreErrorCode = 'not_found' | 'validation_failed' | 'conflict' | 'unavailable' | 'rate_limited' | 'invalid_grant'
 
 /** A domain error the API maps straight to a status code. */
 export class StoreError extends Error {
@@ -22,6 +22,10 @@ export class StoreError extends Error {
         return 409
       case 'unavailable':
         return 503
+      case 'rate_limited':
+        return 429
+      case 'invalid_grant':
+        return 400
     }
   }
 }

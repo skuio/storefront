@@ -4,14 +4,16 @@ import { consoleMail } from '../mail/console'
 import type { MailAdapter } from '../mail/types'
 import { CatalogService } from './catalog'
 import { CheckoutService } from './checkout'
+import { ConnectionsService } from './connections'
 import type { StoreContext, StoreEnv } from './context'
 import { CustomersService } from './customers'
 import { EventsService } from './events'
 import { InventoryService } from './inventory'
 import { OrdersService } from './orders'
+import { OwnersService } from './owners'
 import { SessionsService } from './sessions'
 
-export const STORE_PLATFORM_VERSION = '2.0.0'
+export const STORE_PLATFORM_VERSION = '2.1.0'
 
 export interface StoreOptions {
   db: Database
@@ -32,6 +34,8 @@ export interface StoreHealth {
   locale: string
   version: string
   counts: { products: number; categories: number; orders: number; customers: number }
+  /** True once an owner exists, so a consumer can tell the merchant to run `owner:create` first. */
+  owner_configured: boolean
   time: string
 }
 
@@ -49,6 +53,8 @@ export interface Store {
   readonly checkout: CheckoutService
   readonly sessions: SessionsService
   readonly events: EventsService
+  readonly owners: OwnersService
+  readonly connections: ConnectionsService
   health(): Promise<StoreHealth>
 }
 
@@ -75,6 +81,8 @@ export function createStore(options: StoreOptions): Store {
   const orders = new OrdersService(ctx, events, inventory)
   const checkout = new CheckoutService(ctx, catalog, orders, events)
   const sessions = new SessionsService(ctx, customers)
+  const owners = new OwnersService(ctx)
+  const connections = new ConnectionsService(ctx)
 
   return {
     db: ctx.db,
@@ -90,8 +98,10 @@ export function createStore(options: StoreOptions): Store {
     checkout,
     sessions,
     events,
+    owners,
+    connections,
     async health() {
-      const [counts, orderCount, customerCount] = await Promise.all([catalog.counts(), orders.count(), customers.count()])
+      const [counts, orderCount, customerCount, ownerCount] = await Promise.all([catalog.counts(), orders.count(), customers.count(), owners.count()])
       return {
         name: ctx.config.name,
         url: ctx.config.url,
@@ -99,6 +109,7 @@ export function createStore(options: StoreOptions): Store {
         locale: ctx.config.locale,
         version: STORE_PLATFORM_VERSION,
         counts: { ...counts, orders: orderCount, customers: customerCount },
+        owner_configured: ownerCount > 0,
         time: ctx.now(),
       }
     },
@@ -119,4 +130,11 @@ export { OrdersService, ABANDONED_AFTER_MINUTES, type PaymentRecord, type Fulfil
 export { CheckoutService, type CheckoutInput, type CheckoutItem, type Quote, type PricedLine } from './checkout'
 export { SessionsService, type MagicLink, type Session, MAGIC_LINK_MINUTES, SESSION_DAYS } from './sessions'
 export { EventsService } from './events'
-export { newId, randomToken, hashToken, sha256Hex, secretsEqual } from './crypto'
+export { newId, randomToken, randomBase64Url, hashToken, sha256Hex, secretsEqual } from './crypto'
+export { OwnersService, normalizeOwnerEmail, type Owner, type OwnerSession, type OwnerResetLink, OWNER_SESSION_DAYS, OWNER_RESET_MINUTES } from './owners'
+export {
+  ConnectionsService, isLocalHost, type Connection, type AuthorizeParams, type AuthorizeRequest, type IssuedKey, type ConnectScope,
+  CONNECT_CODE_MINUTES, CONNECT_SCOPES, SCOPE_DESCRIPTIONS, API_KEY_PREFIX,
+} from './connections'
+export { hashPassword, verifyPassword, passwordProblem, PASSWORD_MIN_LENGTH, PASSWORD_ITERATIONS } from './password'
+export { RateLimiter, type RateLimitPolicy } from './ratelimit'
