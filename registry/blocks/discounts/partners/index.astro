@@ -1,0 +1,31 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro'
+import { config, store } from '../../lib/store'
+import { readPartnerSession } from '../../lib/partner-session'
+
+/** Partner sign-in: an emailed link, no password. A signed-in partner goes straight to their dashboard. */
+export const prerender = false
+
+if (await store(Astro).partners.resolveSession(readPartnerSession(Astro.cookies))) return Astro.redirect('/partners/dashboard/', 303)
+const sent = Astro.url.searchParams.get('sent') === '1'
+const expired = Astro.url.searchParams.get('expired') === '1'
+const inputClass = 'mt-1.5 w-full rounded-md border border-rule px-3 py-2.5 text-sm focus:border-accent focus:ring-2 focus:ring-accent/25 focus:outline-none'
+---
+
+<BaseLayout title="Partner dashboard" noindex>
+  <div class="mx-auto max-w-md px-5 py-16">
+    <p class="text-xs font-semibold tracking-widest text-body/60 uppercase">Partners</p>
+    <h1 class="display-heading mt-2 text-4xl">Your partner dashboard</h1>
+    <p class="mt-3 text-sm text-body/80">See the visits your links send to {config.name}, the orders placed with your code, and the commission you have earned. Enter the email we have on file for you and we will send a sign-in link — no password.</p>
+    {sent && <p class="mt-6 rounded-md border border-rule px-4 py-3 text-sm" role="status">If that address belongs to a partner, a sign-in link is on its way. It works once and expires in 15 minutes.</p>}
+    {expired && <p class="mt-6 rounded-md border border-rule px-4 py-3 text-sm" role="alert">That link has expired or was already used. Ask for a new one below.</p>}
+    <form method="POST" action="/api/partners/session" class="mt-6 space-y-4">
+      <div>
+        <label for="email" class="block text-xs font-semibold tracking-wide text-ink uppercase">Email address</label>
+        <input id="email" name="email" type="email" required autocomplete="email" class={inputClass} />
+      </div>
+      <button type="submit" class="w-full rounded-md bg-accent px-8 py-3 text-sm font-bold tracking-wide text-white uppercase transition hover:bg-accent-dark">Email me a sign-in link</button>
+    </form>
+    <p class="mt-6 text-xs text-body/60">Not a partner yet? Write to us{config.contact?.email && <> at <a class="underline" href={`mailto:${config.contact.email}`}>{config.contact.email}</a></>}.</p>
+  </div>
+</BaseLayout>

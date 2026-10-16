@@ -1,0 +1,16 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro'
+import PartnerDashboard from '../../components/PartnerDashboard.astro'
+import { store } from '../../lib/store'
+import { readPartnerSession } from '../../lib/partner-session'
+
+/** A signed-in partner's own numbers. Nothing here identifies a buyer. */
+export const prerender = false
+
+const partner = await store(Astro).partners.resolveSession(readPartnerSession(Astro.cookies))
+if (!partner) return Astro.redirect('/partners/', 303)
+---
+
+<BaseLayout title="Partner dashboard" noindex>
+  <PartnerDashboard partner={partner} signedIn />
+</BaseLayout>

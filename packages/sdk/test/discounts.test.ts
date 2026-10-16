@@ -19,6 +19,7 @@ const withCodes = defineStorefront({
   ],
   shipToCountries: ['US', 'CA', 'GB'],
   discounts: codes,
+  partners: [{ id: 'orbit-show', name: 'The Orbit Show', email: 'host@example.com', welcome: 'Tune in.' }],
   quantityDiscounts: [{ minQuantity: 2, percentOff: 5 }, { minQuantity: 3, percentOff: 20 }],
 })
 
@@ -111,5 +112,57 @@ describe('discount codes', () => {
     const base = { name: 'X', url: 'https://x.test', currency: 'usd', shipping: config.shipping, shipToCountries: ['US'] }
     expect(() => defineStorefront({ ...base, quantityDiscounts: [{ minQuantity: 1, percentOff: 5 }] })).toThrow(/>= 2/)
     expect(() => defineStorefront({ ...base, quantityDiscounts: [{ minQuantity: 2, percentOff: 0 }] })).toThrow(/percentOff/)
+  })
+
+  it('records visits once per visitor per half hour, without storing the IP, and reports the funnel', async () => {
+    const { store, db, clock } = rig({ SESSION_SECRET: 's' }, withCodes)
+    await seed(store)
+    const visit = (ip: string, source?: string) => store.partners.recordVisit({ partner: 'orbit-show', code: 'podcast', ip, userAgent: 'UA', source, landingPath: '/', country: 'us' })
+    expect(await visit('1.1.1.1', 'YouTube')).toBe(true)
+    expect(await visit('1.1.1.1', 'YouTube')).toBe(false) // same visitor, inside the window
+    expect(await visit('2.2.2.2')).toBe(true)
+    expect(await store.partners.recordVisit({ partner: 'nobody', code: 'x', ip: '3.3.3.3', userAgent: null })).toBe(false)
+    const raw = JSON.stringify(db.prepare('SELECT * FROM referral_visits').all())
+    expect(raw).not.toContain('1.1.1.1')
+
+    // One of the two visitors buys, from the YouTube link.
+    const order = await placeOrder(store, { discountCode: 'PODCAST', metadata: { ref_source: 'youtube' } })
+    await store.orders.markPaid(order.id, { provider: 'manual', reference: null })
+    await placeOrder(store, { discountCode: 'PODCAST' }) // a checkout started, never paid
+
+    const t = await store.partners.traffic('orbit-show', { days: 7 })
+    expect(t.totals).toMatchObject({ visits: 2, visitors: 2, checkouts: 2, orders: 1, conversion: 0.5, commission: { amount: 14837 } })
+    expect(t.bySource.find((s) => s.source === 'youtube')).toMatchObject({ visits: 1, orders: 1 })
+    expect(t.byDay).toHaveLength(7)
+    expect(t.byDay.at(-1)).toMatchObject({ visits: 2, checkouts: 2, orders: 1 })
+    expect(t.byCountry[0]).toEqual({ country: 'US', visits: 2 })
+
+    clock.tick(31 * 60_000)
+    expect(await visit('1.1.1.1', 'YouTube')).toBe(true) // a later visit counts again
+  })
+
+  it('signs a partner in by emailed link, once, and never for an unknown address', async () => {
+    const { store, mail } = rig({ SESSION_SECRET: 's' }, withCodes)
+    expect(await store.partners.sendSignInLink('stranger@example.com')).toBe(false)
+    expect(mail.sent).toHaveLength(0)
+    expect(await store.partners.sendSignInLink(' HOST@example.com ')).toBe(true)
+    const url = mail.sent[0]!.text.match(/https?:\/\/\S+/)![0]
+    expect(mail.sent[0]!.to).toBe('host@example.com')
+    const token = new URL(url).searchParams.get('token')!
+    const session = await store.partners.exchange(token)
+    expect(session.partner).toBe('orbit-show')
+    expect(await store.partners.resolveSession(session.token)).toBe('orbit-show')
+    await expect(store.partners.exchange(token)).rejects.toMatchObject({ code: 'not_found' })
+    await store.partners.signOut(session.token)
+    expect(await store.partners.resolveSession(session.token)).toBeNull()
+  })
+
+  it('describes a referral for the welcome banner', () => {
+    const { store } = rig({}, withCodes)
+    expect(store.partners.referral('podcast')).toEqual({
+      partner: { id: 'orbit-show', name: 'The Orbit Show', email: 'host@example.com', welcome: 'Tune in.' },
+      discount: { code: 'PODCAST', label: '10% off', percentOff: 10, amountOff: null },
+    })
+    expect(store.partners.referral('TENOFF')).toBeNull() // a code with no partner is not a referral
   })
 })

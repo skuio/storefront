@@ -1,6 +1,7 @@
 import type { APIContext } from 'astro'
 import { StoreError, type CheckoutInput } from '@skuio/storefront/store'
 import { paymentContext, paymentMethods, store } from '../../lib/store'
+import { referredSource } from '../../lib/referral'
 
 export const prerender = false
 
@@ -36,6 +37,10 @@ export async function POST(context: APIContext): Promise<Response> {
     const error = { code: 'validation_failed', message: 'Checkout is incomplete', details: { payment_method: 'is not offered by this store' } }
     return wantsJson ? json({ ok: false, error }, 422) : bounce(context, 'validation', error.details, direct)
   }
+
+  // Credit the channel that brought a referred buyer (set by the partner link); never trusted for pricing.
+  const source = referredSource(context)
+  if (source && input.discountCode) input.metadata = { ...(input.metadata ?? {}), ref_source: source }
 
   const s = store(context)
   // Lazy housekeeping: processor checkouts abandoned for 24h become cancelled (cheap, indexed).

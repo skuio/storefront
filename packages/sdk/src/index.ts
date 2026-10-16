@@ -16,5 +16,5 @@ export { sameOrigin, clientAddress } from './http'
 export {
   DISCOUNT_COOKIE, normalizeDiscountCode, findDiscount, discountAmount, commissionAmount, publicDiscount,
   quantityTier, quantityLabel,
-  type DiscountCode, type PublicDiscount, type QuantityDiscount, type ReferralSettings,
+  type DiscountCode, type PartnerProfile, type PublicDiscount, type QuantityDiscount, type ReferralSettings,
 } from './discounts'

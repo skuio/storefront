@@ -1,0 +1,227 @@
+---
+import { formatMoney } from '@skuio/storefront'
+import { config, siteUrl, store } from '../lib/store'
+
+/**
+ * A partner's numbers: traffic through their links, the funnel to paid
+ * orders, which channels convert, a link builder, and the commission ledger.
+ * Used by /partners/dashboard/ (signed in) and /partners/<id>/?key= (key link).
+ * Shows order numbers, countries and money — never who bought.
+ */
+interface Props {
+  partner: string
+  signedIn?: boolean
+}
+const { partner, signedIn = false } = Astro.props
+const s = store(Astro)
+const PERIODS = [7, 30, 90, 365]
+const asked = Number(Astro.url.searchParams.get('days'))
+const days = PERIODS.includes(asked) ? asked : 30
+const [traffic, report] = await Promise.all([s.partners.traffic(partner, { days }), s.partners.report(partner)])
+const profile = s.partners.profile(partner)
+const fmt = (m: { amount: number; currency: string }) => formatMoney(m, config.locale)
+const num = (n: number) => n.toLocaleString(config.locale)
+const pct = (n: number) => `${(n * 100).toFixed(n && n < 0.1 ? 1 : 0)}%`
+const date = (iso: string) => new Date(iso).toLocaleDateString(config.locale, { year: 'numeric', month: 'short', day: 'numeric' })
+const countryNames = new Intl.DisplayNames([config.locale], { type: 'region' })
+const country = (c: string) => (c && c !== '??' ? (countryNames.of(c) ?? c) : 'Unknown')
+const periodHref = (d: number) => {
+  const u = new URL(Astro.url)
+  u.searchParams.set('days', String(d))
+  return u.pathname + u.search
+}
+const origin = siteUrl(Astro)
+const codes = report.codes
+
+// Daily chart: visits as bars, paid orders as dots on top.
+const W = 720
+const H = 160
+const max = Math.max(1, ...traffic.byDay.map((d) => d.visits))
+const bw = W / traffic.byDay.length
+const t = traffic.totals
+const funnel = [
+  { label: 'Visits', value: t.visits },
+  { label: 'Unique visitors', value: t.visitors },
+  { label: 'Checkouts started', value: t.checkouts },
+  { label: 'Paid orders', value: t.orders },
+]
+const funnelMax = Math.max(1, ...funnel.map((f) => f.value))
+const sourceLabel = (src: string) => (src === 'code' ? 'Code typed at checkout' : src === 'direct' ? 'Direct / unknown' : src)
+const PRESETS = ['youtube', 'podcast', 'x', 'instagram', 'newsletter', 'nostr', 'telegram']
+---
+
+<div class="mx-auto max-w-5xl px-5 py-12" data-partner-dashboard>
+  <div class="flex flex-wrap items-end justify-between gap-4">
+    <div>
+      <p class="text-xs font-semibold tracking-widest text-body/60 uppercase">Partner dashboard</p>
+      <h1 class="display-heading mt-2 text-4xl">{profile.name}</h1>
+      <p class="mt-2 text-sm">
+        {codes.map((c) => <code class="mr-2 rounded bg-rule/60 px-1.5 py-0.5">{c.code} · {c.label}</code>)}
+      </p>
+    </div>
+    <div class="flex items-center gap-3">
+      <nav class="flex rounded-md border border-rule text-sm" aria-label="Period">
+        {PERIODS.map((d) => (
+          <a href={periodHref(d)} class:list={['px-3 py-1.5', d === days ? 'bg-accent text-white' : 'hover:bg-rule/50']} aria-current={d === days ? 'page' : undefined}>
+            {d === 365 ? '1y' : `${d}d`}
+          </a>
+        ))}
+      </nav>
+      {signedIn && (
+        <form method="POST" action="/api/partners/sign-out">
+          <button class="text-sm underline">Sign out</button>
+        </form>
+      )}
+    </div>
+  </div>
+
+  <dl class="mt-8 grid grid-cols-2 gap-3 md:grid-cols-4" data-partner-kpis>
+    <div class="rounded-lg border border-rule p-4"><dt class="text-xs uppercase text-body/60">Visits</dt><dd class="mt-1 text-2xl font-bold">{num(t.visits)}</dd><dd class="text-xs text-body/60">{num(t.visitors)} unique</dd></div>
+    <div class="rounded-lg border border-rule p-4"><dt class="text-xs uppercase text-body/60">Paid orders</dt><dd class="mt-1 text-2xl font-bold">{num(t.orders)}</dd><dd class="text-xs text-body/60">{pct(t.conversion)} of visitors</dd></div>
+    <div class="rounded-lg border border-rule p-4"><dt class="text-xs uppercase text-body/60">Sales</dt><dd class="mt-1 text-2xl font-bold">{fmt(t.sales)}</dd><dd class="text-xs text-body/60">last {days} days</dd></div>
+    <div class="rounded-lg border border-rule p-4"><dt class="text-xs uppercase text-body/60">Commission earned</dt><dd class="mt-1 text-2xl font-bold">{fmt(t.commission)}</dd><dd class="text-xs text-body/60">last {days} days</dd></div>
+  </dl>
+
+  <section class="mt-8 rounded-lg border border-rule p-4">
+    <div class="flex items-baseline justify-between">
+      <h2 class="text-sm font-semibold">Daily visits</h2>
+      <p class="text-xs text-body/60"><span class="inline-block h-2 w-2 rounded-sm bg-accent/70"></span> visits &nbsp; <span class="inline-block h-2 w-2 rounded-full bg-ink"></span> paid order</p>
+    </div>
+    <svg viewBox={`0 0 ${W} ${H + 18}`} class="mt-3 w-full" role="img" aria-label={`Visits per day over the last ${days} days`}>
+      <line x1="0" x2={W} y1={H} y2={H} stroke="currentColor" stroke-opacity="0.15" />
+      {traffic.byDay.map((d, i) => {
+        const h = (d.visits / max) * (H - 14)
+        return (
+          <g>
+            <rect x={i * bw + bw * 0.15} y={H - h} width={Math.max(1, bw * 0.7)} height={h} rx="1.5" class="fill-accent/70">
+              <title>{`${d.day}: ${d.visits} visits, ${d.visitors} unique, ${d.checkouts} checkouts, ${d.orders} paid`}</title>
+            </rect>
+            {d.orders > 0 && <circle cx={i * bw + bw / 2} cy={H - h - 6} r="3.5" class="fill-ink" />}
+          </g>
+        )
+      })}
+      <text x="0" y={H + 14} font-size="10" fill="currentColor" fill-opacity="0.6">{traffic.byDay[0]?.day}</text>
+      <text x={W} y={H + 14} font-size="10" fill="currentColor" fill-opacity="0.6" text-anchor="end">{traffic.byDay.at(-1)?.day}</text>
+    </svg>
+  </section>
+
+  <div class="mt-6 grid gap-6 md:grid-cols-2">
+    <section class="rounded-lg border border-rule p-4">
+      <h2 class="text-sm font-semibold">Funnel</h2>
+      <ol class="mt-3 space-y-2">
+        {funnel.map((f) => (
+          <li>
+            <div class="flex justify-between text-xs"><span>{f.label}</span><span class="font-semibold">{num(f.value)}</span></div>
+            <div class="mt-1 h-2 rounded bg-rule/60"><div class="h-2 rounded bg-accent" style={`width:${(f.value / funnelMax) * 100}%`}></div></div>
+          </li>
+        ))}
+      </ol>
+      <p class="mt-3 text-xs text-body/60">Checkouts and orders count everyone who used your code — including listeners who typed it rather than clicking a link.</p>
+    </section>
+
+    <section class="rounded-lg border border-rule p-4">
+      <h2 class="text-sm font-semibold">Where your visitors come from</h2>
+      {traffic.bySource.length ? (
+        <table class="mt-3 w-full text-sm">
+          <thead class="text-left text-xs uppercase text-body/60"><tr><th class="py-1">Source</th><th class="text-right">Visits</th><th class="text-right">Orders</th><th class="text-right">Sales</th></tr></thead>
+          <tbody class="divide-y divide-rule">
+            {traffic.bySource.map((r) => (
+              <tr><td class="py-1.5">{sourceLabel(r.source)}</td><td class="text-right">{num(r.visits)}</td><td class="text-right">{num(r.orders)}</td><td class="text-right">{fmt(r.sales)}</td></tr>
+            ))}
+          </tbody>
+        </table>
+      ) : (
+        <p class="mt-3 text-sm text-body/70">No visits through your links yet in this period.</p>
+      )}
+      {traffic.byCountry.length > 0 && (
+        <p class="mt-4 text-xs text-body/70">
+          <span class="font-semibold">Top countries:</span> {traffic.byCountry.map((c) => `${country(c.country)} (${num(c.visits)})`).join(' · ')}
+        </p>
+      )}
+    </section>
+  </div>
+
+  {codes.length > 0 && (
+    <section class="mt-6 rounded-lg border border-rule p-4" data-link-builder data-origin={origin} data-code={codes[0]!.code}>
+      <h2 class="text-sm font-semibold">Your links</h2>
+      <p class="mt-1 text-xs text-body/70">Anyone who opens a link gets <strong>{codes[0]!.label}</strong> applied automatically, for {config.referral.cookieDays} days. Tag each place you post it and the table above shows which one sells.</p>
+      <div class="mt-3 flex flex-wrap items-center gap-2">
+        <label class="text-xs font-semibold uppercase" for="lb-source">Posting on</label>
+        <select id="lb-source" class="rounded-md border border-rule px-2 py-1.5 text-sm">
+          <option value="">Anywhere (no tag)</option>
+          {PRESETS.map((p) => <option value={p}>{p}</option>)}
+        </select>
+        <input id="lb-campaign" placeholder="Episode / post (optional)" class="min-w-0 flex-1 rounded-md border border-rule px-2 py-1.5 text-sm" />
+      </div>
+      <div class="mt-3 flex items-center gap-2">
+        <input id="lb-url" readonly value={`${origin}/?code=${codes[0]!.code}`} class="min-w-0 flex-1 rounded-md border border-rule bg-transparent px-3 py-2 font-mono text-sm" />
+        <button type="button" id="lb-copy" class="rounded-md bg-accent px-4 py-2 text-sm font-bold text-white hover:bg-accent-dark">Copy</button>
+      </div>
+    </section>
+  )}
+
+  <section class="mt-6">
+    <div class="flex flex-wrap items-baseline justify-between gap-2">
+      <h2 class="text-sm font-semibold">Commission</h2>
+      <p class="text-sm">
+        <span class="mr-4">Payable: <strong>{fmt(report.totals.payable)}</strong></span>
+        <span>In refund window: <strong>{fmt(report.totals.held)}</strong></span>
+      </p>
+    </div>
+    {report.lines.length ? (
+      <div class="mt-3 overflow-x-auto">
+        <table class="w-full min-w-[560px] text-sm">
+          <thead class="text-left text-xs uppercase text-body/60">
+            <tr><th class="py-2">Order</th><th>Paid</th><th>Country</th><th class="text-right">Units</th><th class="text-right">Sale</th><th class="text-right">Commission</th><th class="text-right">Status</th></tr>
+          </thead>
+          <tbody class="divide-y divide-rule">
+            {report.lines.map((l) => (
+              <tr>
+                <td class="py-2 font-mono">{l.number}</td>
+                <td>{l.paidAt ? date(l.paidAt) : '—'}</td>
+                <td>{l.country ? country(l.country) : '—'}</td>
+                <td class="text-right">{l.units}</td>
+                <td class="text-right">{fmt(l.merchandise)}</td>
+                <td class="text-right">{fmt(l.commission)}</td>
+                <td class="text-right">{l.state === 'payable' ? 'Payable' : l.state === 'held' ? 'Refund window' : 'Refunded'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    ) : (
+      <p class="mt-3 text-sm text-body/70">No paid orders with your code yet.</p>
+    )}
+    <p class="mt-4 text-xs text-body/60">Commission is on the sale after the discount, excluding shipping and tax. It becomes payable 30 days after payment; refunded orders earn none. Visitors are counted without storing IP addresses.</p>
+  </section>
+</div>
+
+<script>
+  const box = document.querySelector<HTMLElement>('[data-link-builder]')
+  if (box) {
+    const source = box.querySelector<HTMLInputElement>('#lb-source')! // a <select>; typed as an input because workers-types shadows HTMLSelectElement
+    const campaign = box.querySelector<HTMLInputElement>('#lb-campaign')!
+    const out = box.querySelector<HTMLInputElement>('#lb-url')!
+    const copy = box.querySelector<HTMLButtonElement>('#lb-copy')!
+    const build = () => {
+      const u = new URL('/', box.dataset.origin)
+      u.searchParams.set('code', box.dataset.code ?? '')
+      if (source.value) u.searchParams.set('utm_source', source.value)
+      const c = campaign.value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+      if (c) u.searchParams.set('utm_campaign', c)
+      out.value = u.toString()
+    }
+    source.addEventListener('change', build)
+    campaign.addEventListener('input', build)
+    copy.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(out.value)
+      } catch {
+        out.select()
+        document.execCommand('copy')
+      }
+      copy.textContent = 'Copied'
+      setTimeout(() => (copy.textContent = 'Copy'), 1500)
+    })
+  }
+</script>

@@ -159,6 +159,27 @@ test('a discount code is previewed, carried by a ?code= link, priced into the or
   expect((await request.get('/partners/demo-partner/')).status()).toBe(404)
 })
 
+test('partner dashboard signs in by emailed link and says nothing about who is a partner', async ({ page, request }) => {
+  await page.goto('/partners/')
+  await expect(page.getByRole('button', { name: /sign-in link/i })).toBeVisible()
+
+  // Signed out, the dashboard sends you to sign in.
+  const dash = await request.get('/partners/dashboard/', { maxRedirects: 0 })
+  expect(dash.status()).toBe(303)
+  expect(dash.headers().location).toBe('/partners/')
+
+  // Known and unknown addresses get the same answer.
+  for (const email of ['partner@example.com', 'nobody@example.com']) {
+    const res = await request.post('/api/partners/session', { form: { email }, headers: { origin: new URL(page.url()).origin }, maxRedirects: 0 })
+    expect(res.status()).toBe(303)
+    expect(res.headers().location).toBe('/partners/?sent=1')
+  }
+
+  // A bad or reused link explains itself instead of erroring.
+  const bad = await request.get('/partners/verify/?token=not-a-token', { maxRedirects: 0 })
+  expect(bad.headers().location).toBe('/partners/?expired=1')
+})
+
 test('owner pages for orders and partners need a signed-in owner', async ({ request }) => {
   for (const path of ['/admin/orders/', '/admin/partners/']) {
     const res = await request.get(path, { maxRedirects: 0 })

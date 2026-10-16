@@ -116,15 +116,43 @@
     },
     {
       "name": "discounts",
-      "description": "Store-priced discount codes: ?code= partner links (captureReferral, call it from src/middleware.ts), the code preview endpoint the checkout page uses, and a partner's private sales report at /partners/<partner>/?key=.",
+      "description": "Store-priced discount codes and the partner program: ?code= links that apply the discount and record the visit (captureReferral, call it from src/middleware.ts), the code preview endpoint the checkout uses, and the partner dashboard — traffic, funnel, sources, link builder and commission — at /partners/ (emailed sign-in link) or /partners/<partner>/?key=.",
       "files": [
         {
           "from": "lib/referral.ts",
           "to": "src/lib/referral.ts"
         },
         {
+          "from": "lib/partner-session.ts",
+          "to": "src/lib/partner-session.ts"
+        },
+        {
           "from": "api/discount.ts",
           "to": "src/pages/api/discount.ts"
+        },
+        {
+          "from": "api/partners/session.ts",
+          "to": "src/pages/api/partners/session.ts"
+        },
+        {
+          "from": "api/partners/sign-out.ts",
+          "to": "src/pages/api/partners/sign-out.ts"
+        },
+        {
+          "from": "components/PartnerDashboard.astro",
+          "to": "src/components/PartnerDashboard.astro"
+        },
+        {
+          "from": "partners/index.astro",
+          "to": "src/pages/partners/index.astro"
+        },
+        {
+          "from": "partners/verify.astro",
+          "to": "src/pages/partners/verify.astro"
+        },
+        {
+          "from": "partners/dashboard.astro",
+          "to": "src/pages/partners/dashboard.astro"
         },
         {
           "from": "partners/[partner].astro",

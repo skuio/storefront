@@ -66,6 +66,22 @@ export function quantityLabel(t: QuantityDiscount): string {
   return t.label ?? `Buy ${t.minQuantity}+, save ${t.percentOff}%`
 }
 
+/**
+ * Who a partner is, for the people they send and for their own portal.
+ * `id` is what discount codes name in `partner`.
+ */
+export interface PartnerProfile {
+  id: string
+  /** Shown to visitors: "Welcome, friend of <name>". */
+  name: string
+  /** Where their portal sign-in link is sent. Without it they can only use a key link. */
+  email?: string
+  /** A line in their voice for the welcome banner, e.g. "Stack sats, solo mine, have fun." */
+  welcome?: string
+  /** Absolute URL or site path of a square photo or logo for the welcome banner. */
+  avatar?: string
+}
+
 /** What a buyer is shown about a code. Never includes the partner or the commission. */
 export interface PublicDiscount {
   code: string

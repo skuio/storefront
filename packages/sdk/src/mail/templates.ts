@@ -141,6 +141,20 @@ ${tracking ? `<p style="margin:0 0 16px;font-size:14px">Tracking number: ${track
   return { subject: `Order ${number} has shipped — ${config.name}`, html, text }
 }
 
+export function partnerSignInMail(input: { url: string; name: string; expiresMinutes: number }, ctx: MailContext): RenderedMail {
+  const { config } = ctx
+  const html = layout(
+    config,
+    'Your partner dashboard',
+    `<p style="margin:0 0 16px;font-size:14px">Hi ${escapeHtml(input.name)} — click the button to open your ${escapeHtml(config.name)} partner dashboard: visits through your links, orders with your code, and your commission. The link works once and expires in ${input.expiresMinutes} minutes.</p>
+<p style="margin:0 0 16px"><a href="${escapeHtml(input.url)}" style="display:inline-block;background:#0f6fff;color:#fff;text-decoration:none;padding:12px 22px;border-radius:6px;font-weight:700;font-size:14px">Open my dashboard</a></p>
+<p style="margin:0;font-size:12px;color:#666">If you did not request this, you can ignore this email.</p>`,
+    escapeHtml(config.name)
+  )
+  const text = [`Your ${config.name} partner dashboard`, '', `Open this link (it works once and expires in ${input.expiresMinutes} minutes):`, input.url, '', 'If you did not request this, ignore this email.'].join('\n')
+  return { subject: `Your ${config.name} partner dashboard`, html, text }
+}
+
 export function magicLinkMail(input: { url: string; expiresMinutes: number }, ctx: MailContext): RenderedMail {
   const { config } = ctx
   const html = layout(

@@ -20,7 +20,7 @@ const origin = siteUrl(Astro)
 const fmt = (m: { amount: number; currency: string }) => formatMoney(m, config.locale)
 const partners = await Promise.all(
   s.partners.partners().map(async (id) => {
-    const report = await s.partners.report(id)
+    const [report, traffic] = await Promise.all([s.partners.report(id), s.partners.traffic(id, { days: 30 })])
     let key: string | null = null
     try {
       key = await s.partners.reportKey(id)
@@ -28,7 +28,7 @@ const partners = await Promise.all(
       /* SESSION_SECRET missing: no private link */
     }
     const codes = config.discounts.filter((d) => d.partner === id)
-    return { id, report, key, codes }
+    return { id, name: s.partners.profile(id).name, email: s.partners.profile(id).email, report, traffic, key, codes }
   })
 )
 ---
@@ -43,7 +43,7 @@ const partners = await Promise.all(
         {partners.map((p) => (
           <li class="rounded-lg border border-rule p-5 text-sm" data-partner={p.id}>
             <div class="flex flex-wrap items-baseline justify-between gap-2">
-              <span class="text-base font-semibold text-ink">{p.id}</span>
+              <span class="text-base font-semibold text-ink">{p.name}</span>
               <span class="text-xs text-body/60">{p.codes.map((c) => `${c.code} · ${c.percentOff ? `${c.percentOff}% off` : ''} · ${c.commissionPercent ?? 0}% commission`).join(' / ')}</span>
             </div>
             <dl class="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -52,8 +52,13 @@ const partners = await Promise.all(
               <div><dt class="text-xs text-body/60 uppercase">Payable now</dt><dd class="text-lg font-semibold text-ink">{fmt(p.report.totals.payable)}</dd></div>
               <div><dt class="text-xs text-body/60 uppercase">In refund window</dt><dd class="text-lg font-semibold text-ink">{fmt(p.report.totals.held)}</dd></div>
             </dl>
+            <p class="mt-3 text-xs text-body/70" data-partner-traffic>
+              Last 30 days: <strong>{p.traffic.totals.visits}</strong> visits ({p.traffic.totals.visitors} unique) · <strong>{p.traffic.totals.checkouts}</strong> checkouts · <strong>{p.traffic.totals.orders}</strong> paid ({(p.traffic.totals.conversion * 100).toFixed(1)}%)
+              {p.traffic.bySource.length > 0 && <> · top source {p.traffic.bySource[0]!.source}</>}
+            </p>
             <div class="mt-4 space-y-1 text-xs">
               {p.codes.map((c) => <p>Share link: <code>{origin}/?code={c.code}</code></p>)}
+              <p>{p.email ? <>Dashboard sign-in: {origin}/partners/ with <code>{p.email}</code></> : <>No email on file — add one to <code>partners</code> in storefront.config.ts to let them sign in at {origin}/partners/.</>}</p>
               {p.key ? <p>Their private report: <a class="underline" href={`/partners/${p.id}/?key=${p.key}`}>{origin}/partners/{p.id}/?key={p.key}</a></p> : <p>Set SESSION_SECRET to get a private report link.</p>}
             </div>
             {p.report.lines.length > 0 && (

@@ -1,6 +1,6 @@
 import { defineRoutes, type RoutePatterns, type Routes } from './routes'
 import type { ShippingOption } from './shipping'
-import { validateDiscounts, validateQuantityDiscounts, type DiscountCode, type QuantityDiscount, type ReferralSettings } from './discounts'
+import { validateDiscounts, validateQuantityDiscounts, type DiscountCode, type PartnerProfile, type QuantityDiscount, type ReferralSettings } from './discounts'
 
 export interface StorefrontInput {
   /** Store name, used in titles, emails and the Store API health check. */
@@ -44,11 +44,13 @@ export interface StorefrontInput {
   discounts?: DiscountCode[]
   /** Percent off by units in the order (see discounts.ts). Never stacks with a code: the larger saving wins. */
   quantityDiscounts?: QuantityDiscount[]
+  /** Profiles for the partners codes name: welcome banner + portal sign-in. */
+  partners?: PartnerProfile[]
   /** `?code=` links that apply a code for a while. Defaults: param "code", 30 days. */
   referral?: Partial<ReferralSettings>
 }
 
-export interface StorefrontConfig extends Omit<StorefrontInput, 'routes' | 'locale' | 'checkout' | 'inventory' | 'orders' | 'discounts' | 'quantityDiscounts' | 'referral'> {
+export interface StorefrontConfig extends Omit<StorefrontInput, 'routes' | 'locale' | 'checkout' | 'inventory' | 'orders' | 'discounts' | 'quantityDiscounts' | 'partners' | 'referral'> {
   locale: string
   routes: Routes
   checkout: {
@@ -64,6 +66,7 @@ export interface StorefrontConfig extends Omit<StorefrontInput, 'routes' | 'loca
   }
   discounts: DiscountCode[]
   quantityDiscounts: QuantityDiscount[]
+  partners: PartnerProfile[]
   referral: ReferralSettings
 }
 
@@ -78,6 +81,13 @@ export function defineStorefront(input: StorefrontInput): StorefrontConfig {
   if (!input.shipToCountries.length) throw new Error('storefront.shipToCountries needs at least one country')
   validateDiscounts(input.discounts ?? [], input.currency)
   validateQuantityDiscounts(input.quantityDiscounts ?? [])
+  const partnerIds = new Set<string>()
+  for (const p of input.partners ?? []) {
+    if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(p.id)) throw new Error(`partner id "${p.id}" must be lower-case letters, digits and dashes`)
+    if (partnerIds.has(p.id)) throw new Error(`partner ${p.id} is defined twice`)
+    if (p.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(p.email)) throw new Error(`partner ${p.id}: email is not an address`)
+    partnerIds.add(p.id)
+  }
   const referralParam = input.referral?.param ?? 'code'
   if (!/^[a-z][a-z0-9_]{0,31}$/.test(referralParam)) throw new Error(`storefront.referral.param "${referralParam}" must be a short lower-case query parameter`)
 
@@ -98,6 +108,7 @@ export function defineStorefront(input: StorefrontInput): StorefrontConfig {
     },
     discounts: input.discounts ?? [],
     quantityDiscounts: input.quantityDiscounts ?? [],
+    partners: input.partners ?? [],
     referral: {
       param: referralParam,
       cookieDays: input.referral?.cookieDays ?? 30,

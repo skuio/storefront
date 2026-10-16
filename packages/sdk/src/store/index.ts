@@ -142,4 +142,4 @@ export {
 } from './connections'
 export { hashPassword, verifyPassword, passwordProblem, PASSWORD_MIN_LENGTH, PASSWORD_ITERATIONS } from './password'
 export { RateLimiter, type RateLimitPolicy } from './ratelimit'
-export { PartnersService, type PartnerReport, type PartnerReportLine, type PartnerReportOptions } from './partners'
+export { PartnersService, PARTNER_LINK_MINUTES, PARTNER_SESSION_DAYS, type PartnerReport, type PartnerReportLine, type PartnerReportOptions, type PartnerTraffic, type TrafficDay, type TrafficSource, type VisitInput } from './partners'

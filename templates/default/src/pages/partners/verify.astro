@@ -1,0 +1,16 @@
+---
+import { store } from '../../lib/store'
+import { writePartnerSession } from '../../lib/partner-session'
+
+/** Exchanges a one-time sign-in link for a 30-day partner session. */
+export const prerender = false
+
+const token = Astro.url.searchParams.get('token') ?? ''
+try {
+  const session = await store(Astro).partners.exchange(token)
+  writePartnerSession(Astro.cookies, session.token, session.expiresAt, Astro.url.protocol === 'https:')
+  return Astro.redirect('/partners/dashboard/', 303)
+} catch {
+  return Astro.redirect('/partners/?expired=1', 303)
+}
+---
