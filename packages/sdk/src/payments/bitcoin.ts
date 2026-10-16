@@ -136,14 +136,26 @@ export function bitcoinPayments(options: BitcoinPaymentOptions): BitcoinPaymentA
         return { ...r, order_id: order.id, amount_sats: null, quoted_at: null, expires_at: null }
       }
     }
+    // A fresh index — but never an address that has already received anything (a wallet used
+    // elsewhere): those are recorded as burned, with their history, so they are never handed out.
     const last = await db.prepare(`SELECT MAX(derivation_index) AS i FROM bitcoin_addresses`).first<{ i: number | null }>()
-    const index = (last?.i ?? -1) + 1
-    const address = deriveAddress(options.xpub, index)
-    await db
-      .prepare(`INSERT INTO bitcoin_addresses (derivation_index, address, order_id, updated_at) VALUES (?, ?, ?, ?)`)
-      .bind(index, address, order.id, now)
-      .run()
-    return { derivation_index: index, address, order_id: order.id, amount_sats: null, btc_usd_rate: null, quoted_at: null, expires_at: null, txid: null, received_sats: 0, paid_at: null }
+    for (let index = (last?.i ?? -1) + 1, tries = 0; tries < 20; index++, tries++) {
+      const address = deriveAddress(options.xpub, index)
+      const history = await txsFor(address)
+      if (history.length) {
+        await db
+          .prepare(`INSERT INTO bitcoin_addresses (derivation_index, address, order_id, txid, received_sats, updated_at) VALUES (?, ?, NULL, ?, ?, ?)`)
+          .bind(index, address, history[0]!.txid, 1, now)
+          .run()
+        continue
+      }
+      await db
+        .prepare(`INSERT INTO bitcoin_addresses (derivation_index, address, order_id, updated_at) VALUES (?, ?, ?, ?)`)
+        .bind(index, address, order.id, now)
+        .run()
+      return { derivation_index: index, address, order_id: order.id, amount_sats: null, btc_usd_rate: null, quoted_at: null, expires_at: null, txid: null, received_sats: 0, paid_at: null }
+    }
+    throw new Error('20 consecutive receive addresses already have history — use a fresh wallet account for the store')
   }
 
   async function check(row: Row, ctx: PaymentContext): Promise<{ received: number; txid: string | null; confirmations: number }> {
@@ -199,8 +211,9 @@ export function bitcoinPayments(options: BitcoinPaymentOptions): BitcoinPaymentA
       const now = Date.parse(ctx.store.now())
       const { received, txid, confirmations } = await check(row, ctx)
       const expired = !row.expires_at || Date.parse(row.expires_at) < now
-      // Re-quote only while nothing has been sent: a payment in flight keeps the price it was sent at.
-      if (expired && received === 0) {
+      // Quote when there is no price yet; re-quote only while nothing has been sent (a payment in
+      // flight keeps the price it was sent at).
+      if (row.amount_sats === null || (expired && received === 0)) {
         const rate = await usdRate(order.currency)
         const amountSats = Math.ceil((order.total.amount / 100 / rate) * 1e8)
         const expiresAt = new Date(now + quoteMs).toISOString()

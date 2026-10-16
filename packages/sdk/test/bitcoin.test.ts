@@ -109,4 +109,15 @@ describe('bitcoin on-chain adapter', () => {
     const next = await placeOrder(store)
     expect((await btc.quote(next, ctx)).address).toBe(A0)
   })
+
+  it('never hands out an address that already has history', async () => {
+    const { store } = rig({}, config)
+    await seed(store)
+    const ctx = { store, siteUrl: '' }
+    const { state, fetch } = explorer()
+    state.txs[A0] = [pay(A0, 767_366, 100)] // strangers paid the test-vector address years ago
+    const btc = bitcoinPayments({ xpub: ZPUB, fetch })
+    const q = await btc.quote(await placeOrder(store), ctx)
+    expect(q).toMatchObject({ address: A1, status: 'awaiting', amountSats: 1_099_000 })
+  })
 })
