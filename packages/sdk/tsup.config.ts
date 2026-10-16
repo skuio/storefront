@@ -14,6 +14,7 @@ export default defineConfig({
     mail: 'src/mail/index.ts',
     'mail/sendgrid': 'src/mail/sendgrid.ts',
     'mail/console': 'src/mail/console.ts',
+    'mail/cloudflare': 'src/mail/cloudflare.ts',
   },
   format: ['esm'],
   dts: true,

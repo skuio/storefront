@@ -19,12 +19,14 @@ const { title, owner = null, width = 'regular' } = Astro.props
 const path = Astro.url.pathname
 const nav = [
   { href: '/admin/', label: 'Overview' },
+  { href: '/admin/orders/', label: 'Orders' },
+  { href: '/admin/partners/', label: 'Partners' },
   { href: '/admin/connections/', label: 'Connections' },
 ]
 ---
 
 <BaseLayout title={`${title} · Admin`} noindex>
-  <div class:list={['mx-auto px-5 py-10', width === 'narrow' ? 'max-w-md' : 'max-w-3xl']}>
+  <div class:list={['mx-auto px-5 py-10', width === 'narrow' ? 'max-w-md' : 'max-w-4xl']}>
     <div class="flex flex-wrap items-center justify-between gap-3 border-b border-rule pb-4 text-xs">
       <div class="flex items-center gap-4">
         <span class="font-bold tracking-wide text-ink uppercase">{config.name} · Admin</span>

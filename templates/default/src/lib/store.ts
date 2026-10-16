@@ -1,7 +1,7 @@
 import type { APIContext } from 'astro'
 import Stripe from 'stripe'
 import { createStore, type Store } from '@skuio/storefront/store'
-import { consoleMail, sendgridMail, type MailAdapter } from '@skuio/storefront/mail'
+import { cloudflareMail, consoleMail, sendgridMail, type CloudflareSendEmailBinding, type MailAdapter } from '@skuio/storefront/mail'
 import type { PaymentAdapter, PaymentContext } from '@skuio/storefront/payments'
 import { manualPayments } from '@skuio/storefront/payments/manual'
 import { stripePayments } from '@skuio/storefront/payments/stripe'
@@ -59,19 +59,34 @@ export function store(ctx: StoreContext): Store {
 }
 
 /**
- * Transactional mail. `MAIL_PROVIDER=sendgrid` needs SENDGRID_API_KEY and a
- * verified MAIL_FROM; anything else logs the message (readable in `wrangler tail`).
+ * Transactional mail. `MAIL_PROVIDER`:
+ *   cloudflare — Cloudflare Email Service via the `send_email` binding named EMAIL
+ *                (wrangler.jsonc) and a MAIL_FROM on a domain onboarded with
+ *                `wrangler email sending enable <domain>`. No API key.
+ *   sendgrid   — SENDGRID_API_KEY and a verified MAIL_FROM.
+ *   console    — log every message (development; readable in `wrangler tail`).
+ * Default: cloudflare when the binding exists, else sendgrid when its key exists, else console.
  */
 export function mail(ctx: StoreContext): MailAdapter {
-  const provider = readEnv(ctx, 'MAIL_PROVIDER') ?? (readEnv(ctx, 'SENDGRID_API_KEY') && readEnv(ctx, 'MAIL_FROM') ? 'sendgrid' : 'console')
+  const binding = (ctx.locals.runtime?.env as Record<string, unknown> | undefined)?.EMAIL as CloudflareSendEmailBinding | undefined
+  const from = readEnv(ctx, 'MAIL_FROM')
+  const provider =
+    readEnv(ctx, 'MAIL_PROVIDER') ?? (binding && from ? 'cloudflare' : readEnv(ctx, 'SENDGRID_API_KEY') && from ? 'sendgrid' : 'console')
+  const sender = { email: from ?? '', name: readEnv(ctx, 'MAIL_FROM_NAME') ?? config.name }
+  if (provider === 'cloudflare') {
+    if (!binding || !from) {
+      console.error('mail: MAIL_PROVIDER=cloudflare but the EMAIL binding or MAIL_FROM is missing; falling back to console')
+      return consoleMail()
+    }
+    return cloudflareMail({ binding, from: sender })
+  }
   if (provider === 'sendgrid') {
     const apiKey = readEnv(ctx, 'SENDGRID_API_KEY')
-    const from = readEnv(ctx, 'MAIL_FROM')
     if (!apiKey || !from) {
       console.error('mail: MAIL_PROVIDER=sendgrid but SENDGRID_API_KEY / MAIL_FROM are not set; falling back to console')
       return consoleMail()
     }
-    return sendgridMail({ apiKey, from: { email: from, name: readEnv(ctx, 'MAIL_FROM_NAME') ?? config.name } })
+    return sendgridMail({ apiKey, from: sender })
   }
   return consoleMail()
 }

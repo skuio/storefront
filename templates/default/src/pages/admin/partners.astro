@@ -1,0 +1,74 @@
+---
+import { formatMoney } from '@skuio/storefront'
+import AdminShell from '../../components/AdminShell.astro'
+import { config, siteUrl, store } from '../../lib/store'
+import { requireOwner } from '../../lib/admin'
+
+/**
+ * Affiliates and what they are owed. Commission is snapshotted on each order
+ * at the rate in force when it was placed; it becomes payable after the
+ * refund window and is void on a refund. Each partner has a private report
+ * link (no buyer data) and a share link that applies their code.
+ */
+export const prerender = false
+
+const owner = await requireOwner(Astro)
+if (owner instanceof Response) return owner
+
+const s = store(Astro)
+const origin = siteUrl(Astro)
+const fmt = (m: { amount: number; currency: string }) => formatMoney(m, config.locale)
+const partners = await Promise.all(
+  s.partners.partners().map(async (id) => {
+    const report = await s.partners.report(id)
+    let key: string | null = null
+    try {
+      key = await s.partners.reportKey(id)
+    } catch {
+      /* SESSION_SECRET missing: no private link */
+    }
+    const codes = config.discounts.filter((d) => d.partner === id)
+    return { id, report, key, codes }
+  })
+)
+---
+
+<AdminShell title="Partners & commissions" owner={owner}>
+  <p class="mt-2 text-sm text-body/70">Commission is on the sale after the discount (no shipping or tax), snapshotted when the order was placed. It becomes payable 30 days after payment; refunded orders earn none. Pay partners from the "Payable" figure.</p>
+  {
+    partners.length === 0 ? (
+      <p class="mt-8 rounded-md border border-rule p-4 text-sm">No partner codes yet. Add one to <code>discounts</code> in storefront.config.ts with a <code>partner</code> and <code>commissionPercent</code>.</p>
+    ) : (
+      <ul class="mt-6 space-y-5">
+        {partners.map((p) => (
+          <li class="rounded-lg border border-rule p-5 text-sm" data-partner={p.id}>
+            <div class="flex flex-wrap items-baseline justify-between gap-2">
+              <span class="text-base font-semibold text-ink">{p.id}</span>
+              <span class="text-xs text-body/60">{p.codes.map((c) => `${c.code} · ${c.percentOff ? `${c.percentOff}% off` : ''} · ${c.commissionPercent ?? 0}% commission`).join(' / ')}</span>
+            </div>
+            <dl class="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <div><dt class="text-xs text-body/60 uppercase">Orders</dt><dd class="text-lg font-semibold text-ink">{p.report.totals.orders}</dd></div>
+              <div><dt class="text-xs text-body/60 uppercase">Sales</dt><dd class="text-lg font-semibold text-ink">{fmt(p.report.totals.merchandise)}</dd></div>
+              <div><dt class="text-xs text-body/60 uppercase">Payable now</dt><dd class="text-lg font-semibold text-ink">{fmt(p.report.totals.payable)}</dd></div>
+              <div><dt class="text-xs text-body/60 uppercase">In refund window</dt><dd class="text-lg font-semibold text-ink">{fmt(p.report.totals.held)}</dd></div>
+            </dl>
+            <div class="mt-4 space-y-1 text-xs">
+              {p.codes.map((c) => <p>Share link: <code>{origin}/?code={c.code}</code></p>)}
+              {p.key ? <p>Their private report: <a class="underline" href={`/partners/${p.id}/?key=${p.key}`}>{origin}/partners/{p.id}/?key={p.key}</a></p> : <p>Set SESSION_SECRET to get a private report link.</p>}
+            </div>
+            {p.report.lines.length > 0 && (
+              <table class="mt-4 w-full text-xs">
+                <thead class="text-left text-body/60 uppercase"><tr><th class="py-1">Order</th><th>Paid</th><th class="text-right">Sale</th><th class="text-right">Commission</th><th class="text-right">Status</th></tr></thead>
+                <tbody>
+                  {p.report.lines.map((l) => (
+                    <tr class="border-t border-rule"><td class="py-1.5">{l.number}</td><td>{l.paidAt ? new Date(l.paidAt).toLocaleDateString(config.locale) : '—'}</td><td class="text-right">{fmt(l.merchandise)}</td><td class="text-right">{fmt(l.commission)}</td><td class="text-right">{l.state === 'payable' ? 'Payable' : l.state === 'held' ? 'Refund window' : 'Refunded'}</td></tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </li>
+        ))}
+      </ul>
+    )
+  }
+</AdminShell>

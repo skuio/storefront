@@ -159,6 +159,14 @@ test('a discount code is previewed, carried by a ?code= link, priced into the or
   expect((await request.get('/partners/demo-partner/')).status()).toBe(404)
 })
 
+test('owner pages for orders and partners need a signed-in owner', async ({ request }) => {
+  for (const path of ['/admin/orders/', '/admin/partners/']) {
+    const res = await request.get(path, { maxRedirects: 0 })
+    expect([302, 303], path).toContain(res.status())
+    expect(res.headers().location, path).toContain('/admin/sign-in')
+  }
+})
+
 test('the Store API refuses a missing or wrong key', async ({ request }) => {
   expect((await request.get('/api/skuio/v1/health')).status()).toBe(401)
   expect((await request.get('/api/skuio/v1/health', { headers: { Authorization: 'Bearer nope' } })).status()).toBe(401)

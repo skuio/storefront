@@ -27,7 +27,7 @@ BITCOIN_XPUB=
 # Optional block explorer API (default https://mempool.space/api)
 BITCOIN_EXPLORER=
 
-# console (log every email — fine for development) or sendgrid.
+# console (log every email — fine for development), cloudflare (Email Service send_email binding EMAIL + MAIL_FROM) or sendgrid.
 MAIL_PROVIDER=console
 SENDGRID_API_KEY=
 MAIL_FROM=
