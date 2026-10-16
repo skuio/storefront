@@ -147,6 +147,20 @@ describe('btcpay adapter', () => {
   })
 })
 
+describe('btcpay late payments', () => {
+  it('treats an expired invoice paid late as paid', async () => {
+    const { store, order } = await discountedOrder()
+    const server = 'https://btcpay.test'
+    const { fetch } = fakeFetch({
+      [`GET ${server}/api/v1/stores/S1/invoices?orderId=`]: () => ({
+        body: [{ id: 'INV2', status: 'Expired', additionalStatus: 'PaidLate', amount: '989.10', currency: 'USD', checkoutLink: '', metadata: { orderId: order.id } }],
+      }),
+    })
+    const adapter = btcpayPayments({ serverUrl: server, storeId: 'S1', apiKey: 'K', webhookSecret: 'w', fetch })
+    expect(await adapter.verifyReturn!(new URLSearchParams(), order, { store, siteUrl: '' })).toMatchObject([{ type: 'paid', reference: 'INV2' }])
+  })
+})
+
 describe('stripe adapter with a store discount', () => {
   it('carries the discount on a single-use coupon instead of promotion codes', async () => {
     const { order, ctx } = await discountedOrder()

@@ -21,6 +21,8 @@ const PROVIDER = 'btcpay'
 interface Invoice {
   id: string
   status: 'New' | 'Processing' | 'Expired' | 'Invalid' | 'Settled'
+  /** PaidLate: paid in full after the invoice expired — BTCPay sends no Settled event for it. */
+  additionalStatus?: 'None' | 'PaidLate' | 'PaidPartial' | 'Marked' | 'Invalid' | 'PaidOver'
   amount: string
   currency: string
   checkoutLink: string
@@ -58,7 +60,9 @@ export function btcpayPayments(options: BtcPayPaymentOptions): PaymentAdapter {
     const orderId = invoice.metadata?.orderId
     if (!orderId) return [{ type: 'ignored', reason: `invoice ${invoice.id} has no orderId` }]
     if (expectedOrderId && orderId !== expectedOrderId) return [{ type: 'ignored', reason: `invoice ${invoice.id} belongs to another order` }]
-    if (invoice.status === 'Settled') {
+    // A buyer who pays after the timer ran out has still paid: BTCPay leaves the invoice Expired + PaidLate.
+    const paidLate = invoice.status === 'Expired' && (invoice.additionalStatus === 'PaidLate' || invoice.additionalStatus === 'PaidOver')
+    if (invoice.status === 'Settled' || paidLate) {
       const currency = invoice.currency.toLowerCase()
       return [
         {
@@ -120,7 +124,9 @@ export function btcpayPayments(options: BtcPayPaymentOptions): PaymentAdapter {
 
     async verifyReturn(_params, order): Promise<PaymentEvent[]> {
       const invoices = await api<Invoice[]>('GET', `${storePath}/invoices?orderId=${encodeURIComponent(order.id)}`)
-      const settled = invoices.find((i) => i.status === 'Settled' && i.metadata?.orderId === order.id)
+      const settled = invoices.find(
+        (i) => i.metadata?.orderId === order.id && (i.status === 'Settled' || (i.status === 'Expired' && (i.additionalStatus === 'PaidLate' || i.additionalStatus === 'PaidOver')))
+      )
       return settled ? eventsFromInvoice(settled, order.id) : []
     },
   }
