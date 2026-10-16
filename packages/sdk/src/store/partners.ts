@@ -9,6 +9,18 @@ export const PARTNER_LINK_MINUTES = 15
 export const PARTNER_SESSION_DAYS = 30
 /** A second visit from the same visitor within this window is the same visit. */
 const VISIT_DEDUPE_MINUTES = 30
+/**
+ * Fetchers that open a link without a person behind them: link previews (a link pasted in
+ * WhatsApp, X, Slack, Discord, Telegram or iMessage is fetched once to draw its card), search
+ * crawlers and scripts. Counting them would credit a partner with a "visit" for every chat the
+ * link is pasted into. In-app browsers (Instagram, Facebook's FBAN) are people and do not match.
+ */
+const NOT_A_PERSON = /bot\b|bot\/|crawl|spider|slurp|preview|facebookexternalhit|meta-externalagent|whatsapp|telegram|slack|discord|skypeuripreview|embedly|vkshare|pinterest\/|bitlybot|headless|curl\/|wget|python-requests|go-http-client|node-fetch|axios/i
+
+/** A user agent that belongs to a link preview, crawler or script rather than a person. */
+export function isAutomatedVisit(userAgent: string | null | undefined): boolean {
+  return !userAgent || NOT_A_PERSON.test(userAgent)
+}
 
 export interface VisitInput {
   partner: string
@@ -112,7 +124,7 @@ export class PartnersService {
 
   /** Record a visit through a partner link. Same visitor within 30 minutes counts once. Returns whether it was recorded. */
   async recordVisit(v: VisitInput): Promise<boolean> {
-    if (!this.partners().includes(v.partner)) return false
+    if (!this.partners().includes(v.partner) || isAutomatedVisit(v.userAgent)) return false
     const now = this.ctx.now()
     const visitor = (await sha256Hex(`${this.ctx.env.SESSION_SECRET ?? ''}|${now.slice(0, 10)}|${v.ip ?? ''}|${v.userAgent ?? ''}`)).slice(0, 20)
     const since = new Date(Date.parse(now) - VISIT_DEDUPE_MINUTES * 60_000).toISOString()

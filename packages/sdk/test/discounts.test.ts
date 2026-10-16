@@ -1,3 +1,4 @@
+import { isAutomatedVisit } from '../src/store/partners'
 import { describe, expect, it } from 'vitest'
 import { defineStorefront, discountAmount, findDiscount, flatRate, freeShipping, type DiscountCode } from '../src'
 import { config, placeOrder, rig, seed } from './helpers'
@@ -122,6 +123,14 @@ describe('discount codes', () => {
     expect(await visit('1.1.1.1', 'YouTube')).toBe(false) // same visitor, inside the window
     expect(await visit('2.2.2.2')).toBe(true)
     expect(await store.partners.recordVisit({ partner: 'nobody', code: 'x', ip: '3.3.3.3', userAgent: null })).toBe(false)
+    // Link previews and crawlers are not visitors: pasting the link in a chat must not count.
+    for (const ua of ['WhatsApp/2.23.20.0 A', 'facebookexternalhit/1.1', 'Twitterbot/1.0', 'TelegramBot (like TwitterBot)', 'Mozilla/5.0 (compatible; Discordbot/2.0)', 'Slackbot-LinkExpanding 1.0', 'Mozilla/5.0 (compatible; Googlebot/2.1)', 'curl/8.4.0', null]) {
+      expect(await store.partners.recordVisit({ partner: 'orbit-show', code: 'podcast', ip: '4.4.4.4', userAgent: ua })).toBe(false)
+    }
+    // People in in-app browsers are.
+    for (const ua of ['Mozilla/5.0 (iPhone; CPU iPhone OS 17_0) AppleWebKit/605.1.15 Instagram 300.0', 'Mozilla/5.0 (iPhone) [FBAN/FBIOS;FBAV/440.0]', 'Mozilla/5.0 (Macintosh) Chrome/129.0 Safari/537.36']) {
+      expect(isAutomatedVisit(ua)).toBe(false)
+    }
     const raw = JSON.stringify(db.prepare('SELECT * FROM referral_visits').all())
     expect(raw).not.toContain('1.1.1.1')
 
