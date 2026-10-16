@@ -1,4 +1,4 @@
-import { defineStorefront, flatRate, freeShipping } from '../src'
+import { defineStorefront, flatRate, freeShipping, type StorefrontConfig } from '../src'
 import type { MailAdapter, MailMessage } from '../src/mail'
 import { createStore, type Store } from '../src/store'
 import { sqliteDatabase, type TestDatabase } from './sqlite'
@@ -59,13 +59,13 @@ export interface Rig {
   env: Record<string, string | undefined>
 }
 
-export function rig(env: Record<string, string | undefined> = {}): Rig {
+export function rig(env: Record<string, string | undefined> = {}, storeConfig: StorefrontConfig = config): Rig {
   const db = sqliteDatabase()
   const mail = fakeMail()
   const clock = testClock()
   const store = createStore({
     db,
-    config,
+    config: storeConfig,
     env,
     mail,
     clock: () => {

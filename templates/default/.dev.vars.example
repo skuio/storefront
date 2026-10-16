@@ -7,10 +7,21 @@ STORE_API_KEY=
 # Signs buyer session hashes. Generate with `openssl rand -hex 32`.
 SESSION_SECRET=
 
-# stripe (hosted Checkout) or manual (pay later; the operations system marks the order paid).
+# Comma list, in the order checkout offers them: stripe (hosted Checkout), paypal (Orders v2),
+# btcpay (Bitcoin / Lightning via BTCPay Server), manual (pay later; operations marks the order paid).
+# Each processor's webhook points at /api/payments/webhook?provider=<id>.
 PAYMENT_PROVIDER=manual
 STRIPE_SECRET_KEY=
 STRIPE_WEBHOOK_SECRET=
+PAYPAL_CLIENT_ID=
+PAYPAL_CLIENT_SECRET=
+PAYPAL_WEBHOOK_ID=
+# sandbox (default) or live
+PAYPAL_ENV=sandbox
+BTCPAY_URL=
+BTCPAY_STORE_ID=
+BTCPAY_API_KEY=
+BTCPAY_WEBHOOK_SECRET=
 
 # console (log every email — fine for development) or sendgrid.
 MAIL_PROVIDER=console

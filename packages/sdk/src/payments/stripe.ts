@@ -56,6 +56,20 @@ export function stripePayments(options: StripePaymentOptions): PaymentAdapter {
             },
           ]
         : []
+      // A store discount is already in the order's total. Stripe Checkout cannot take a negative line, so the
+      // amount rides on a single-use coupon named after the code; Stripe forbids promotion codes alongside it.
+      const discounts: Stripe.Checkout.SessionCreateParams.Discount[] = []
+      if (order.discount.amount > 0) {
+        const coupon = await stripe.coupons.create({
+          amount_off: order.discount.amount,
+          currency,
+          duration: 'once',
+          max_redemptions: 1,
+          name: (order.discountCode ?? 'Discount').slice(0, 40),
+          metadata: { order_id: order.id },
+        })
+        discounts.push({ coupon: coupon.id })
+      }
       const a = order.shippingAddress
       const params: Stripe.Checkout.SessionCreateParams = {
         mode: 'payment',
@@ -84,7 +98,7 @@ export function stripePayments(options: StripePaymentOptions): PaymentAdapter {
             : {}),
         },
         ...(shippingOption.length ? { shipping_options: shippingOption } : {}),
-        allow_promotion_codes: ctx.store.config.checkout.allowPromotionCodes,
+        ...(discounts.length ? { discounts } : { allow_promotion_codes: ctx.store.config.checkout.allowPromotionCodes }),
         billing_address_collection: 'auto',
         success_url: `${ctx.siteUrl}/checkout/success/?order=${encodeURIComponent(order.id)}&key=${encodeURIComponent(order.accessKey)}&session_id={CHECKOUT_SESSION_ID}`,
         cancel_url: `${ctx.siteUrl}/cart/?checkout_error=cancelled&order=${encodeURIComponent(order.id)}`,

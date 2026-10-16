@@ -69,7 +69,7 @@ prerendered pages: the header needs the live category tree.
    e2e asserts no `/_image?` URL on a product page.
 
 7. **`src/lib/store.ts` must keep exporting `store`, `config`, `routes`,
-   `readEnv`, `payment`, `paymentContext`, `mail`, `siteUrl`**, and
+   `readEnv`, `payment`, `paymentMethods`, `paymentContext`, `mail`, `siteUrl`**, and
    `src/lib/images.ts` must keep exporting `resolveImage`. Registry blocks
    import those names.
 

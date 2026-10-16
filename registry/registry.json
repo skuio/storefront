@@ -1,7 +1,7 @@
 {
   "version": 1,
   "conventions": {
-    "note": "Blocks import { store, config, routes, readEnv, payment, paymentContext, mail, siteUrl } from src/lib/store.ts and { resolveImage } from src/lib/images.ts. Both files ship in the template; keep those exports if you restructure. `store(Astro)` returns the per-request Store (memoised on Astro.locals) \u2014 call `await store(Astro).catalog.load()` for the catalogue snapshot.",
+    "note": "Blocks import { store, config, routes, readEnv, payment, paymentMethods, paymentContext, mail, siteUrl } from src/lib/store.ts and { resolveImage } from src/lib/images.ts. Both files ship in the template; keep those exports if you restructure. `store(Astro)` returns the per-request Store (memoised on Astro.locals) — call `await store(Astro).catalog.load()` for the catalogue snapshot.",
     "sdk": "@skuio/storefront",
     "runtime": "Cloudflare Workers with a D1 binding named DB; see docs/store-platform.md."
   },
@@ -115,8 +115,28 @@
       ]
     },
     {
+      "name": "discounts",
+      "description": "Store-priced discount codes: ?code= partner links (captureReferral, call it from src/middleware.ts), the code preview endpoint the checkout page uses, and a partner's private sales report at /partners/<partner>/?key=.",
+      "files": [
+        {
+          "from": "lib/referral.ts",
+          "to": "src/lib/referral.ts"
+        },
+        {
+          "from": "api/discount.ts",
+          "to": "src/pages/api/discount.ts"
+        },
+        {
+          "from": "partners/[partner].astro",
+          "to": "src/pages/partners/[partner].astro"
+        }
+      ],
+      "dependencies": [],
+      "registryDependencies": []
+    },
+    {
       "name": "checkout",
-      "description": "The store\u2019s own checkout: address + shipping method page, order creation, adapter-neutral payment start, success and pending pages, processor webhook.",
+      "description": "The store’s own checkout: address + shipping method page, order creation, adapter-neutral payment start, success and pending pages, processor webhook.",
       "files": [
         {
           "from": "checkout/index.astro",
@@ -144,7 +164,8 @@
       ],
       "registryDependencies": [
         "breadcrumbs",
-        "cart"
+        "cart",
+        "discounts"
       ]
     },
     {

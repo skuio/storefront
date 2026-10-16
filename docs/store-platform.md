@@ -54,8 +54,10 @@ buyer ──▶ store (Astro + Workers + D1) ◀── Store API ◀── SKU.i
 |---|---|
 | `DB` (binding) | D1 database. |
 | `STORE_API_KEY` | Bearer key SKU.io uses to call the Store API. Generate with `openssl rand -hex 32`. |
-| `PAYMENT_PROVIDER` | `stripe` (default when `STRIPE_SECRET_KEY` exists) or `manual`. |
+| `PAYMENT_PROVIDER` | Comma list, in the order checkout offers them: `stripe`, `paypal`, `btcpay`, `manual`. Default `stripe` when `STRIPE_SECRET_KEY` exists, else `manual`. With more than one, the buyer picks at checkout and each processor's webhook is `/api/payments/webhook?provider=<id>`. |
 | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` | Stripe adapter only. |
+| `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, `PAYPAL_WEBHOOK_ID`, `PAYPAL_ENV` | PayPal adapter (Orders v2) only. `PAYPAL_ENV=live` for production; sandbox otherwise. |
+| `BTCPAY_URL`, `BTCPAY_STORE_ID`, `BTCPAY_API_KEY`, `BTCPAY_WEBHOOK_SECRET` | BTCPay adapter (Bitcoin on-chain + Lightning, Greenfield API) only. |
 | `MAIL_PROVIDER`, `SENDGRID_API_KEY`, `MAIL_FROM`, `MAIL_FROM_NAME` | Mail adapter: `sendgrid` or `console` (logs the whole message; readable in `wrangler tail`). |
 | `SESSION_SECRET` | HMAC key for magic-link and session hashes (only hashes are stored). |
 | `PUBLIC_SITE_URL` | Absolute origin for links in emails and processor return URLs. |
@@ -94,6 +96,22 @@ start of the Store API `GET /orders` and of `POST /api/checkout` (indexed on
 `status, created_at`, so it is cheap) — and needs no cron. `manual` orders never expire.
 A payment that the processor reports for an expired order still lands: `markPaid` reopens
 the order as `paid` with an `uncancelled` event, so a paid order is never lost.
+
+## Discount codes and partners
+
+Codes live in `storefront.config.ts` (`discounts`), not at the processor. `/api/checkout`
+validates the code and prices it into the order — `discount`, `discount_code` — so it works
+under every payment adapter, and a code the buyer saw applied is never silently dropped (an
+invalid one is a 422 on `discount_code`). Stripe receives the discount as a single-use coupon;
+PayPal as `breakdown.discount`; BTCPay simply invoices the discounted total.
+
+A code may name a `partner` and a `commissionPercent`. The order then stores the partner and
+the commission owed **at the rate in force when it was placed** (`partner_commission`), so a
+later rate change never rewrites history. `?code=X` on any page (`config.referral`) sets a
+cookie that pre-applies the code at checkout. A partner sees their own orders — number, date,
+country, amounts, never the buyer — at `/partners/<partner>/?key=<HMAC of the partner id under
+SESSION_SECRET>`; rotating the secret revokes every link. The Store API exposes `discount_code`
+only; partner and commission stay in the store.
 
 ## Why not pull orders from the processor
 

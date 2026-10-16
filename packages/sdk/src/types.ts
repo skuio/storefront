@@ -151,6 +151,10 @@ export interface Order {
   shipping: Money
   tax: Money
   discount: Money
+  /** The store discount code priced into this order (upper case), or null. */
+  discountCode: string | null
+  /** The partner the code attributes this order to, and the commission owed at the rate in force when it was placed. */
+  partner: { id: string; commission: Money } | null
   total: Money
   customer: OrderCustomer
   shippingAddress: Address

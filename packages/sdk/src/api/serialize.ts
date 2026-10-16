@@ -38,6 +38,8 @@ export interface ApiOrder {
   shipping: ApiMoney
   tax: ApiMoney
   discount: ApiMoney
+  /** The store discount code the buyer used, upper case. Partner and commission stay in the store. */
+  discount_code: string | null
   total: ApiMoney
   customer: { id: string; email: string; name: string | null; phone: string | null }
   shipping_address: ApiAddress
@@ -126,6 +128,7 @@ export function serializeOrder(o: Order): ApiOrder {
     shipping: money(o.shipping),
     tax: money(o.tax),
     discount: money(o.discount),
+    discount_code: o.discountCode,
     total: money(o.total),
     customer: { id: o.customer.id, email: o.customer.email, name: o.customer.name, phone: o.customer.phone },
     shipping_address: address(o.shippingAddress) ?? { name: null, line1: null, line2: null, city: null, state: null, postal_code: null, country: null },

@@ -31,6 +31,9 @@ export interface OrderRow {
   created_at: string
   updated_at: string
   cancelled_at: string | null
+  discount_code: string | null
+  discount_partner: string | null
+  partner_commission: number
 }
 
 export interface OrderLineRow {
@@ -123,6 +126,8 @@ export function rowToOrder(r: OrderRow, lines: OrderLineRow[], fulfillments: Ful
     shipping: money(r.shipping),
     tax: money(r.tax),
     discount: money(r.discount),
+    discountCode: r.discount_code ?? null,
+    partner: r.discount_partner ? { id: r.discount_partner, commission: money(r.partner_commission ?? 0) } : null,
     total: money(r.total),
     customer: { id: r.customer_id, email: r.email, name: r.customer_name, phone: r.customer_phone },
     shippingAddress: parseJson<Address>(r.shipping_address_json, {}),

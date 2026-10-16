@@ -34,6 +34,14 @@
       "types": "./dist/payments/manual.d.ts",
       "import": "./dist/payments/manual.js"
     },
+    "./payments/paypal": {
+      "types": "./dist/payments/paypal.d.ts",
+      "import": "./dist/payments/paypal.js"
+    },
+    "./payments/btcpay": {
+      "types": "./dist/payments/btcpay.d.ts",
+      "import": "./dist/payments/btcpay.js"
+    },
     "./mail": {
       "types": "./dist/mail.d.ts",
       "import": "./dist/mail.js"

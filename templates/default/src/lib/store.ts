@@ -5,11 +5,13 @@ import { consoleMail, sendgridMail, type MailAdapter } from '@skuio/storefront/m
 import type { PaymentAdapter, PaymentContext } from '@skuio/storefront/payments'
 import { manualPayments } from '@skuio/storefront/payments/manual'
 import { stripePayments } from '@skuio/storefront/payments/stripe'
+import { paypalPayments } from '@skuio/storefront/payments/paypal'
+import { btcpayPayments } from '@skuio/storefront/payments/btcpay'
 import config from '../../storefront.config'
 
 /**
  * The one place a page or endpoint gets the store from. Registry blocks
- * import { store, config, routes, readEnv, payment, siteUrl } from here.
+ * import { store, config, routes, readEnv, payment, paymentMethods, siteUrl } from here.
  *
  * `store(Astro)` builds a Store over the D1 binding for this request and
  * memoises it on `Astro.locals`, so every component in the same request
@@ -74,25 +76,58 @@ export function mail(ctx: StoreContext): MailAdapter {
 }
 
 /**
- * The payment adapter. `PAYMENT_PROVIDER=stripe` (default when a Stripe key
- * exists) or `manual` (pay later: the order waits until the operations
- * system marks it paid through the Store API). A store on another processor
- * adds its adapter here and can drop the Stripe import entirely.
+ * The payment adapters, in the order the checkout offers them.
+ * `PAYMENT_PROVIDER` is a comma list — `stripe`, `paypal`, `btcpay`, `manual`
+ * — and defaults to `stripe` when a Stripe key exists, else `manual`. A store
+ * on another processor adds its adapter to `adapterFor`.
  */
-export function payment(ctx: StoreContext): PaymentAdapter {
-  const provider = readEnv(ctx, 'PAYMENT_PROVIDER') ?? (readEnv(ctx, 'STRIPE_SECRET_KEY') ? 'stripe' : 'manual')
-  if (provider === 'stripe') {
-    const secretKey = readEnv(ctx, 'STRIPE_SECRET_KEY')
-    if (!secretKey) throw new Error('PAYMENT_PROVIDER=stripe but STRIPE_SECRET_KEY is not set')
-    return stripePayments({
-      // Workers have no Node http stack; the fetch client and WebCrypto are required.
-      stripe: new Stripe(secretKey, { httpClient: Stripe.createFetchHttpClient() }),
-      webhookSecret: readEnv(ctx, 'STRIPE_WEBHOOK_SECRET'),
-      cryptoProvider: Stripe.createSubtleCryptoProvider(),
-    })
+export function paymentMethods(ctx: StoreContext): PaymentAdapter[] {
+  const ids = (readEnv(ctx, 'PAYMENT_PROVIDER') ?? (readEnv(ctx, 'STRIPE_SECRET_KEY') ? 'stripe' : 'manual'))
+    .split(',')
+    .map((id) => id.trim())
+    .filter(Boolean)
+  return [...new Set(ids)].map((id) => adapterFor(ctx, id))
+}
+
+/** One adapter: the one named `id` if the store offers it, else the default (first). */
+export function payment(ctx: StoreContext, id?: string | null): PaymentAdapter {
+  const all = paymentMethods(ctx)
+  return (id ? all.find((a) => a.id === id) : undefined) ?? all[0]!
+}
+
+function adapterFor(ctx: StoreContext, id: string): PaymentAdapter {
+  const required = (key: string) => {
+    const value = readEnv(ctx, key)
+    if (!value) throw new Error(`PAYMENT_PROVIDER includes ${id} but ${key} is not set`)
+    return value
   }
-  if (provider === 'manual') return manualPayments()
-  throw new Error(`Unknown PAYMENT_PROVIDER "${provider}"`)
+  switch (id) {
+    case 'stripe':
+      return stripePayments({
+        // Workers have no Node http stack; the fetch client and WebCrypto are required.
+        stripe: new Stripe(required('STRIPE_SECRET_KEY'), { httpClient: Stripe.createFetchHttpClient() }),
+        webhookSecret: readEnv(ctx, 'STRIPE_WEBHOOK_SECRET'),
+        cryptoProvider: Stripe.createSubtleCryptoProvider(),
+      })
+    case 'paypal':
+      return paypalPayments({
+        clientId: required('PAYPAL_CLIENT_ID'),
+        clientSecret: required('PAYPAL_CLIENT_SECRET'),
+        webhookId: readEnv(ctx, 'PAYPAL_WEBHOOK_ID'),
+        environment: readEnv(ctx, 'PAYPAL_ENV') === 'live' ? 'live' : 'sandbox',
+      })
+    case 'btcpay':
+      return btcpayPayments({
+        serverUrl: required('BTCPAY_URL'),
+        storeId: required('BTCPAY_STORE_ID'),
+        apiKey: required('BTCPAY_API_KEY'),
+        webhookSecret: readEnv(ctx, 'BTCPAY_WEBHOOK_SECRET'),
+      })
+    case 'manual':
+      return manualPayments()
+    default:
+      throw new Error(`Unknown PAYMENT_PROVIDER "${id}"`)
+  }
 }
 
 export function paymentContext(ctx: StoreContext): PaymentContext {

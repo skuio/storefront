@@ -23,7 +23,7 @@ to whatever agent you point at it, and names the one test that has to stay green
 
 | Path | What | Published as |
 |---|---|---|
-| `packages/sdk` | The store core (`/store`), the Store API handler (`/api`), payment adapters (`/payments`, `/payments/stripe`, `/payments/manual`), mail adapters (`/mail`, `/mail/sendgrid`, `/mail/console`), the D1 schema (`db/migrations`), and the catalogue/routing/money/cart primitives (`.`). Framework-agnostic. | `@skuio/storefront` |
+| `packages/sdk` | The store core (`/store`), the Store API handler (`/api`), payment adapters (`/payments`, `/payments/stripe`, `/payments/paypal`, `/payments/btcpay`, `/payments/manual`), mail adapters (`/mail`, `/mail/sendgrid`, `/mail/console`), the D1 schema (`db/migrations`), and the catalogue/routing/money/cart primitives (`.`). Framework-agnostic. | `@skuio/storefront` |
 | `packages/cli` | `create` a store from a template, `add` blocks from the registry. | `@skuio/cli` |
 | `registry/` | UI blocks: source of truth for everything under a store's `src/components` and `src/pages/api`. | copied into stores by `skuio add` |
 | `templates/default` | The reference store. Built from the registry; a complete, deployable site with a demo catalogue. | copied by `skuio create` |
@@ -50,8 +50,13 @@ stay underneath.
   `PUT /categories`. Availability comes from `PUT /inventory`.
 - **Checkout** is the store's own page: contact, address, shipping method.
   `POST /api/checkout` creates the order (priced from the database) and hands
-  it to the payment adapter — Stripe hosted Checkout in payment-only mode, or
-  `manual` (pay later). The processor's webhook marks the order paid; the
+  it to the payment adapter — Stripe hosted Checkout in payment-only mode,
+  PayPal (Orders v2), BTCPay Server (Bitcoin / Lightning), or `manual` (pay
+  later). A store can offer several; the buyer picks at checkout.
+- **Discount codes** are the store's own (`discounts` in the config), priced
+  into the order under any processor. A code can attribute sales to a
+  partner, with the commission snapshotted on the order and a private
+  partner report at `/partners/<partner>/`. The processor's webhook marks the order paid; the
   buyer gets a confirmation email.
 - **Orders** are the system of record for the buyer. SKU.io reads them with
   `GET /orders?updated_since=…`, stamps its own number back, and pushes

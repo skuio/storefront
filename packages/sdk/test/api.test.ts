@@ -81,6 +81,7 @@ describe('Store API orders', () => {
       shipping: { amount: 0, currency: 'USD' },
       tax: { amount: 0, currency: 'USD' },
       discount: { amount: 0, currency: 'USD' },
+      discount_code: null,
       total: { amount: 109900, currency: 'USD' },
       customer: { id: a.customer.id, email: 'ada@example.com', name: 'Ada Lovelace', phone: '+1 555 0100' },
       shipping_address: { name: 'Ada Lovelace', line1: '1 Analytical Way', line2: null, city: 'Austin', state: 'TX', postal_code: '78701', country: 'US' },

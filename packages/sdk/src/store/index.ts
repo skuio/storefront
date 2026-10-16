@@ -5,6 +5,7 @@ import type { MailAdapter } from '../mail/types'
 import { CatalogService } from './catalog'
 import { CheckoutService } from './checkout'
 import { ConnectionsService } from './connections'
+import { PartnersService } from './partners'
 import type { StoreContext, StoreEnv } from './context'
 import { CustomersService } from './customers'
 import { EventsService } from './events'
@@ -55,6 +56,7 @@ export interface Store {
   readonly events: EventsService
   readonly owners: OwnersService
   readonly connections: ConnectionsService
+  readonly partners: PartnersService
   health(): Promise<StoreHealth>
 }
 
@@ -83,6 +85,7 @@ export function createStore(options: StoreOptions): Store {
   const sessions = new SessionsService(ctx, customers)
   const owners = new OwnersService(ctx)
   const connections = new ConnectionsService(ctx)
+  const partners = new PartnersService(ctx)
 
   return {
     db: ctx.db,
@@ -100,6 +103,7 @@ export function createStore(options: StoreOptions): Store {
     events,
     owners,
     connections,
+    partners,
     async health() {
       const [counts, orderCount, customerCount, ownerCount] = await Promise.all([catalog.counts(), orders.count(), customers.count(), owners.count()])
       return {
@@ -138,3 +142,4 @@ export {
 } from './connections'
 export { hashPassword, verifyPassword, passwordProblem, PASSWORD_MIN_LENGTH, PASSWORD_ITERATIONS } from './password'
 export { RateLimiter, type RateLimitPolicy } from './ratelimit'
+export { PartnersService, type PartnerReport, type PartnerReportLine, type PartnerReportOptions } from './partners'

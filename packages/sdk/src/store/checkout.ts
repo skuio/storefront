@@ -1,4 +1,5 @@
 import { MAX_CART_LINES } from '../cart'
+import { commissionAmount, discountAmount, findDiscount, normalizeDiscountCode, type DiscountCode } from '../discounts'
 import type { DbStatement } from '../db/driver'
 import { regionForCountry, shippingForRegion, type ShippingOption } from '../shipping'
 import type { Address, Order } from '../types'
@@ -24,6 +25,8 @@ export interface CheckoutInput {
   shippingAddress: Address
   billingAddress?: Address | null
   shippingOptionId: string
+  /** A discount code the buyer entered or arrived with; validated against the store's configuration. */
+  discountCode?: string | null
   notes?: string | null
   metadata?: Record<string, string>
 }
@@ -40,6 +43,12 @@ export interface PricedLine {
 export interface Quote {
   lines: PricedLine[]
   subtotal: number
+  /** Minor units off the merchandise subtotal; 0 without a code. */
+  discount: number
+  /** The code that priced `discount`, or null. */
+  discountCode: DiscountCode | null
+  /** What the code's partner is owed for this order, minor units; 0 without a partner. */
+  commission: number
   shipping: number
   total: number
   currency: string
@@ -66,7 +75,7 @@ export class CheckoutService {
    * Price a set of lines from the catalogue. Quantities are clamped to the
    * store's per-line maximum; unknown or unavailable SKUs fail validation.
    */
-  async quote(items: CheckoutItem[], country: string, shippingOptionId: string): Promise<Quote> {
+  async quote(items: CheckoutItem[], country: string, shippingOptionId: string, discountCode?: string | null): Promise<Quote> {
     const details: Record<string, string> = {}
     if (!items.length) details.items = 'is empty'
     if (items.length > MAX_CART_LINES) details.items = `has more than ${MAX_CART_LINES} lines`
@@ -95,9 +104,24 @@ export class CheckoutService {
     if (!options.length) details['shipping_address.country'] = 'is not a country this store ships to'
     const option = options.find((o) => o.id === shippingOptionId)
     if (options.length && !option) details.shipping_option = 'is not available for this destination'
+    // A code the buyer sees as applied must still be valid when the order is priced; never drop it silently.
+    const code = discountCode && normalizeDiscountCode(discountCode) ? findDiscount(this.ctx.config.discounts, discountCode, new Date(this.ctx.now())) : null
+    if (discountCode && normalizeDiscountCode(discountCode) && !code) details.discount_code = 'is not a valid code'
     if (Object.keys(details).length || !option) throw invalid('Checkout could not be priced', details)
     const subtotal = lines.reduce((sum, l) => sum + l.totalAmount, 0)
-    return { lines, subtotal, shipping: option.price.amount, total: subtotal + option.price.amount, currency: this.ctx.config.currency, option }
+    const discount = code ? discountAmount(code, subtotal) : 0
+    const commission = code ? commissionAmount(code, subtotal, discount) : 0
+    return {
+      lines,
+      subtotal,
+      discount,
+      discountCode: code,
+      commission,
+      shipping: option.price.amount,
+      total: subtotal - discount + option.price.amount,
+      currency: this.ctx.config.currency,
+      option,
+    }
   }
 
   /** Create a pending order the payment adapter can take from here. */
@@ -114,7 +138,7 @@ export class CheckoutService {
     if (this.ctx.config.checkout.collectPhone && !input.phone?.trim()) details.phone = 'is required'
     let quote: Quote | null = null
     try {
-      quote = await this.quote(input.items, shipTo.country ?? '', input.shippingOptionId)
+      quote = await this.quote(input.items, shipTo.country ?? '', input.shippingOptionId, input.discountCode)
     } catch (error) {
       if (error instanceof Error && 'details' in error) Object.assign(details, (error as { details: Record<string, string> | null }).details ?? {})
       else throw error
@@ -137,15 +161,17 @@ export class CheckoutService {
       db
         .prepare(
           `INSERT INTO orders (id, number, status, payment_status, currency, subtotal, shipping, tax, discount, total, customer_id, email,
-             shipping_address_json, billing_address_json, shipping_method_code, shipping_method_name, notes, metadata_json, access_key, created_at, updated_at)
-           VALUES (?, (SELECT COALESCE(MAX(number), 1000) + 1 FROM orders), 'pending_payment', 'unpaid', ?, ?, ?, 0, 0, ?, (SELECT id FROM customers WHERE email = ?), ?,
-             ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+             shipping_address_json, billing_address_json, shipping_method_code, shipping_method_name, notes, metadata_json, access_key, created_at, updated_at,
+             discount_code, discount_partner, partner_commission)
+           VALUES (?, (SELECT COALESCE(MAX(number), 1000) + 1 FROM orders), 'pending_payment', 'unpaid', ?, ?, ?, 0, ?, ?, (SELECT id FROM customers WHERE email = ?), ?,
+             ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
         .bind(
           orderId,
           quote.currency,
           quote.subtotal,
           quote.shipping,
+          quote.discount,
           quote.total,
           email,
           email,
@@ -157,14 +183,21 @@ export class CheckoutService {
           JSON.stringify(metadata),
           randomToken(16),
           now,
-          now
+          now,
+          quote.discountCode ? normalizeDiscountCode(quote.discountCode.code) : null,
+          quote.discountCode?.partner ?? null,
+          quote.commission
         ),
       ...quote.lines.map((l, i) =>
         db
           .prepare(`INSERT INTO order_lines (id, order_id, sku, name, quantity, unit_amount, total_amount, fulfilled_quantity, image_url, position) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`)
           .bind(newId('lin'), orderId, l.sku, l.name, l.quantity, l.unitAmount, l.totalAmount, l.image, i)
       ),
-      this.events.statement(orderId, 'created', { lines: quote.lines.length, total: quote.total }),
+      this.events.statement(orderId, 'created', {
+        lines: quote.lines.length,
+        total: quote.total,
+        ...(quote.discountCode ? { discount_code: normalizeDiscountCode(quote.discountCode.code), discount: quote.discount } : {}),
+      }),
     ]
     await db.batch(statements)
     return this.orders.require(orderId)

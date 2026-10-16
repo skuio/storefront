@@ -1,6 +1,6 @@
 import type { APIContext } from 'astro'
 import { StoreError, type CheckoutInput } from '@skuio/storefront/store'
-import { payment, paymentContext, store } from '../../lib/store'
+import { paymentContext, paymentMethods, store } from '../../lib/store'
 
 export const prerender = false
 
@@ -15,7 +15,7 @@ export const prerender = false
  */
 export async function POST(context: APIContext): Promise<Response> {
   const wantsJson = (context.request.headers.get('content-type') ?? '').includes('application/json')
-  let input: CheckoutInput
+  let input: CheckoutInput & { paymentMethod?: string }
   let direct: { sku: string; quantity: string } | null = null
   try {
     if (wantsJson) input = fromJson(await context.request.json())
@@ -29,12 +29,19 @@ export async function POST(context: APIContext): Promise<Response> {
     return wantsJson ? json({ ok: false, error: { code: 'validation_failed', message: 'Malformed request', details: null } }, 422) : bounce(context, 'invalid', null, direct)
   }
 
+  // The buyer picks among the store's adapters; the first is the default. An unknown choice is refused, not swapped.
+  const methods = paymentMethods(context)
+  const adapter = input.paymentMethod ? methods.find((m) => m.id === input.paymentMethod) : methods[0]
+  if (!adapter) {
+    const error = { code: 'validation_failed', message: 'Checkout is incomplete', details: { payment_method: 'is not offered by this store' } }
+    return wantsJson ? json({ ok: false, error }, 422) : bounce(context, 'validation', error.details, direct)
+  }
+
   const s = store(context)
   // Lazy housekeeping: processor checkouts abandoned for 24h become cancelled (cheap, indexed).
   await s.orders.expireAbandoned().catch((e) => console.warn('checkout: expireAbandoned failed', e))
   try {
     const order = await s.checkout.createOrder(input)
-    const adapter = payment(context)
     const start = await adapter.start(order, paymentContext(context))
     await s.orders.startPayment(order.id, { provider: adapter.id, kind: start.kind })
     let redirect: string
@@ -94,7 +101,7 @@ function items(raw: unknown, sku?: string | null, quantity?: string | number | n
   return out
 }
 
-function fromForm(form: FormData): CheckoutInput {
+function fromForm(form: FormData): CheckoutInput & { paymentMethod?: string } {
   const get = (k: string) => {
     const v = form.get(k)
     return typeof v === 'string' ? v : ''
@@ -114,11 +121,13 @@ function fromForm(form: FormData): CheckoutInput {
       country: get('ship_country'),
     },
     shippingOptionId: get('shipping_option'),
+    discountCode: get('discount_code') || null,
+    paymentMethod: get('payment_method') || undefined,
     notes: get('notes') || null,
   }
 }
 
-function fromJson(body: unknown): CheckoutInput {
+function fromJson(body: unknown): CheckoutInput & { paymentMethod?: string } {
   const b = (body && typeof body === 'object' ? body : {}) as Record<string, unknown>
   const a = (b.shipping_address && typeof b.shipping_address === 'object' ? b.shipping_address : {}) as Record<string, unknown>
   const str = (v: unknown) => (typeof v === 'string' ? v : '')
@@ -137,6 +146,8 @@ function fromJson(body: unknown): CheckoutInput {
       country: str(a.country),
     },
     shippingOptionId: str(b.shipping_option),
+    discountCode: str(b.discount_code) || null,
+    paymentMethod: str(b.payment_method) || undefined,
     notes: str(b.notes) || null,
     ...(b.metadata && typeof b.metadata === 'object' ? { metadata: b.metadata as Record<string, string> } : {}),
   }

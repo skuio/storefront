@@ -22,7 +22,8 @@ let lookupFailed = false
 // buyer has just completed: the adapter's verdict reopens it, the same way the webhook would.
 if (order && order.payment.status !== 'paid') {
   try {
-    const adapter = payment(Astro)
+    // The processor that took this order; `provider` on the return URL covers an order that never recorded one.
+    const adapter = payment(Astro, order.payment.provider ?? Astro.url.searchParams.get('provider'))
     if (adapter.verifyReturn) {
       const events = await adapter.verifyReturn(Astro.url.searchParams, order, paymentContext(Astro))
       if (events.length) {

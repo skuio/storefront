@@ -8,6 +8,8 @@ export default defineConfig({
     payments: 'src/payments/index.ts',
     'payments/stripe': 'src/payments/stripe.ts',
     'payments/manual': 'src/payments/manual.ts',
+    'payments/paypal': 'src/payments/paypal.ts',
+    'payments/btcpay': 'src/payments/btcpay.ts',
     mail: 'src/mail/index.ts',
     'mail/sendgrid': 'src/mail/sendgrid.ts',
     'mail/console': 'src/mail/console.ts',

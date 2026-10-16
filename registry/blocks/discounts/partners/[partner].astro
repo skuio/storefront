@@ -1,0 +1,65 @@
+---
+import { formatMoney } from '@skuio/storefront'
+import BaseLayout from '../../layouts/BaseLayout.astro'
+import { config, store } from '../../lib/store'
+
+/**
+ * A partner's own sales: /partners/<partner>/?key=<key>. The key is an HMAC
+ * of the partner id under SESSION_SECRET — print a partner's link with
+ * `store.partners.reportKey(partner)`, and rotate the secret to revoke them
+ * all. The page shows order numbers, countries and money; never who bought.
+ */
+export const prerender = false
+
+const s = store(Astro)
+const partner = Astro.params.partner ?? ''
+const allowed = await s.partners.verifyReportKey(partner, Astro.url.searchParams.get('key'))
+if (!allowed) return new Response('Not found', { status: 404 })
+const report = await s.partners.report(partner)
+const fmt = (m: { amount: number; currency: string }) => formatMoney(m, config.locale)
+const date = (iso: string) => new Date(iso).toLocaleDateString(config.locale, { year: 'numeric', month: 'short', day: 'numeric' })
+const countryNames = new Intl.DisplayNames([config.locale], { type: 'region' })
+---
+
+<BaseLayout title={`Partner report — ${partner}`} noindex>
+  <div class="mx-auto max-w-4xl px-5 py-12">
+    <p class="text-xs font-semibold tracking-widest text-body/60 uppercase">Partner report</p>
+    <h1 class="display-heading mt-2 text-4xl">{partner}</h1>
+    <p class="mt-3 text-sm">
+      Codes: {report.codes.map((c) => <code class="mr-2 rounded bg-black/5 px-1.5 py-0.5">{c.code} · {c.label}</code>)}
+    </p>
+
+    <dl class="mt-8 grid gap-4 sm:grid-cols-4" data-partner-totals>
+      <div class="rounded-lg border border-rule p-4"><dt class="text-xs uppercase text-body/60">Orders</dt><dd class="mt-1 text-2xl font-bold">{report.totals.orders}</dd></div>
+      <div class="rounded-lg border border-rule p-4"><dt class="text-xs uppercase text-body/60">Units</dt><dd class="mt-1 text-2xl font-bold">{report.totals.units}</dd></div>
+      <div class="rounded-lg border border-rule p-4"><dt class="text-xs uppercase text-body/60">Commission payable</dt><dd class="mt-1 text-2xl font-bold">{fmt(report.totals.payable)}</dd></div>
+      <div class="rounded-lg border border-rule p-4"><dt class="text-xs uppercase text-body/60">In refund window</dt><dd class="mt-1 text-2xl font-bold">{fmt(report.totals.held)}</dd></div>
+    </dl>
+
+    {
+      report.lines.length ? (
+        <table class="mt-8 w-full text-sm">
+          <thead class="text-left text-xs uppercase text-body/60">
+            <tr><th class="py-2">Order</th><th>Paid</th><th>Country</th><th class="text-right">Units</th><th class="text-right">Sale</th><th class="text-right">Commission</th><th class="text-right">Status</th></tr>
+          </thead>
+          <tbody class="divide-y divide-rule">
+            {report.lines.map((l) => (
+              <tr>
+                <td class="py-2 font-mono">{l.number}</td>
+                <td>{l.paidAt ? date(l.paidAt) : '—'}</td>
+                <td>{l.country ? countryNames.of(l.country) : '—'}</td>
+                <td class="text-right">{l.units}</td>
+                <td class="text-right">{fmt(l.merchandise)}</td>
+                <td class="text-right">{fmt(l.commission)}</td>
+                <td class="text-right">{l.state === 'payable' ? 'Payable' : l.state === 'held' ? 'Refund window' : 'Refunded'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : (
+        <p class="mt-8 text-sm text-body/70">No paid orders with your code yet.</p>
+      )
+    }
+    <p class="mt-6 text-xs text-body/60">Commission is on the sale after the discount, excluding shipping and tax. It becomes payable 30 days after payment; refunded orders earn none.</p>
+  </div>
+</BaseLayout>

@@ -114,6 +114,51 @@ test('an order goes cart → checkout → pending → paid → shipped through t
   expect(lookup.order.tracking.number).toBe('1Z-E2E')
 })
 
+test('a discount code is previewed, carried by a ?code= link, priced into the order and refused when invalid', async ({ page, request }) => {
+  const sku = (JSON.parse(readFileSync(new URL('../src/data/products.json', import.meta.url), 'utf8')) as { sku: string; available?: boolean }[]).find((p) => p.available !== false)!.sku
+
+  const preview = await request.get('/api/discount?code=welcome10')
+  expect(preview.status()).toBe(200)
+  expect((await preview.json()).discount).toEqual({ code: 'WELCOME10', label: '10% off', percentOff: 10, amountOff: null })
+  const previewBody = JSON.stringify(await preview.json())
+  expect(previewBody).not.toContain('demo-partner')
+  expect((await request.get('/api/discount?code=NOPE')).status()).toBe(404)
+
+  // A partner link keeps the code applied through to checkout.
+  await page.goto('/?code=welcome10')
+  expect((await page.context().cookies()).find((c) => c.name === 'sf_discount')?.value).toBe('WELCOME10')
+  await page.goto(`/checkout/?sku=${encodeURIComponent(sku)}&quantity=1`)
+  await expect(page.locator('[data-discount-code]')).toHaveText('WELCOME10')
+  await expect(page.locator('[data-summary-discount-row]')).toBeVisible()
+
+  const order = (code: string) =>
+    request.post('/api/checkout', {
+      headers: { ...browser, 'content-type': 'application/json' },
+      data: {
+        items: [{ sku, quantity: 1 }],
+        email: 'e2e-discount@example.com',
+        name: 'Ada Lovelace',
+        phone: '+1 555 0100',
+        shipping_address: { name: 'Ada Lovelace', line1: '1 Analytical Way', city: 'Austin', state: 'TX', postal_code: '78701', country: 'US' },
+        shipping_option: 'us-standard',
+        discount_code: code,
+      },
+    })
+  const bad = await order('NOT-A-CODE')
+  expect(bad.status()).toBe(422)
+  expect((await bad.json()).error.details.discount_code).toBeTruthy()
+
+  const good = await order('welcome10')
+  expect(good.status()).toBe(200)
+  const placed = await (await request.get(`/api/skuio/v1/orders/${(await good.json()).order.id}`, { headers: api })).json()
+  expect(placed.data.discount_code).toBe('WELCOME10')
+  expect(placed.data.discount.amount).toBe(Math.round(placed.data.subtotal.amount * 0.1))
+  expect(placed.data.total.amount).toBe(placed.data.subtotal.amount - placed.data.discount.amount + placed.data.shipping.amount)
+
+  // A partner report needs its key.
+  expect((await request.get('/partners/demo-partner/')).status()).toBe(404)
+})
+
 test('the Store API refuses a missing or wrong key', async ({ request }) => {
   expect((await request.get('/api/skuio/v1/health')).status()).toBe(401)
   expect((await request.get('/api/skuio/v1/health', { headers: { Authorization: 'Bearer nope' } })).status()).toBe(401)

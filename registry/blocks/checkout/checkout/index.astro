@@ -2,7 +2,8 @@
 import { formatMoney, hasInternationalRegion, shippingForRegion } from '@skuio/storefront'
 import BaseLayout from '../../layouts/BaseLayout.astro'
 import Breadcrumbs from '../../components/Breadcrumbs.astro'
-import { config, store } from '../../lib/store'
+import { config, paymentMethods, store } from '../../lib/store'
+import { referredCode } from '../../lib/referral'
 import { resolveImage } from '../../lib/images'
 
 /**
@@ -41,6 +42,12 @@ const options = config.shipping.map((o) => ({
 const countryNames = new Intl.DisplayNames([config.locale], { type: 'region' })
 const countries = config.shipToCountries.map((code) => ({ code, name: countryNames.of(code) ?? code })).sort((a, b) => a.name.localeCompare(b.name))
 const defaultCountry = domestic.countries[0] ?? config.shipToCountries[0]!
+// A partner's link (or a code typed on an earlier visit) arrives applied; the order is priced again on submit.
+const presetCode = referredCode(Astro)
+const preset = presetCode ? s.partners.lookupCode(presetCode) : null
+const hasCodes = config.discounts.length > 0
+const methods = paymentMethods(Astro).map((m) => ({ id: m.id, label: m.label }))
+const directDiscount = preset && directLine ? (preset.percentOff !== null ? Math.round((directSubtotal * preset.percentOff) / 100) : Math.min(preset.amountOff ?? 0, directSubtotal)) : 0
 const inputClass = 'mt-1.5 w-full rounded-md border border-rule px-3 py-2.5 text-sm focus:border-accent focus:ring-2 focus:ring-accent/25 focus:outline-none'
 const labelClass = 'block text-xs font-semibold tracking-wide text-ink uppercase'
 ---
@@ -63,7 +70,7 @@ const labelClass = 'block text-xs font-semibold tracking-wide text-ink uppercase
     }
 
     <div class="mt-8 grid gap-10 lg:grid-cols-[1.2fr_1fr]">
-      <form method="POST" action="/api/checkout" class="space-y-8" data-checkout-form novalidate>
+      <form method="POST" action="/api/checkout" class="space-y-8" id="checkout-form" data-checkout-form novalidate>
         <input type="hidden" name="items" value={directLine ? JSON.stringify([{ sku: directLine.sku, quantity: directLine.quantity }]) : '[]'} data-items />
         {directLine && <input type="hidden" name="sku" value={directLine.sku} />}
         {directLine && <input type="hidden" name="quantity" value={directLine.quantity} />}
@@ -144,6 +151,25 @@ const labelClass = 'block text-xs font-semibold tracking-wide text-ink uppercase
           <p class="mt-1 hidden text-xs text-accent" data-error-for="shipping_option"></p>
         </section>
 
+        {
+          methods.length > 1 && (
+            <section>
+              <h2 class="text-sm font-bold tracking-wide text-ink uppercase">Payment</h2>
+              <ul class="mt-4 space-y-2" data-payment-methods>
+                {methods.map((m, i) => (
+                  <li>
+                    <label class="flex cursor-pointer items-center gap-3 rounded-md border border-rule px-4 py-3 text-sm has-checked:border-accent has-checked:bg-accent/5">
+                      <input type="radio" name="payment_method" value={m.id} checked={i === 0} class="h-4 w-4" />
+                      <span class="flex-1 font-semibold text-ink">{m.label}</span>
+                    </label>
+                  </li>
+                ))}
+              </ul>
+              <p class="mt-1 hidden text-xs text-accent" data-error-for="payment_method"></p>
+            </section>
+          )
+        }
+
         <section>
           <label for="notes" class={labelClass}>Order notes (optional)</label>
           <textarea id="notes" name="notes" rows="3" maxlength="2000" class={inputClass}></textarea>
@@ -172,24 +198,45 @@ const labelClass = 'block text-xs font-semibold tracking-wide text-ink uppercase
         <p hidden class="mt-4 text-sm" data-summary-empty>
           Your cart is empty. <a href="/cart/" class="font-semibold text-accent">Back to the cart</a>
         </p>
+        {
+          hasCodes && (
+            <div class="mt-4 border-t border-rule pt-4 text-sm" data-discount>
+              <input type="hidden" name="discount_code" form="checkout-form" value={preset?.code ?? ''} data-discount-input />
+              <p class:list={['flex items-center justify-between', !preset && 'hidden']} data-discount-applied>
+                <span><span class="font-semibold text-ink" data-discount-code>{preset?.code}</span> · <span data-discount-label>{preset?.label}</span></span>
+                <button type="button" class="text-xs font-semibold text-accent underline" data-discount-remove>Remove</button>
+              </p>
+              <details class:list={[preset && 'hidden']} data-discount-entry>
+                <summary class="cursor-pointer text-xs font-semibold text-body/70">Have a code?</summary>
+                <div class="mt-2 flex gap-2">
+                  <input type="text" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="40" aria-label="Discount code" class={inputClass + ' mt-0 uppercase'} data-discount-field />
+                  <button type="button" class="rounded-md border border-rule px-4 text-xs font-bold uppercase" data-discount-apply>Apply</button>
+                </div>
+                <p class="mt-1 hidden text-xs text-accent" data-error-for="discount_code"></p>
+              </details>
+            </div>
+          )
+        }
         <dl class="mt-4 space-y-1 border-t border-rule pt-4 text-sm">
           <div class="flex justify-between"><dt>Subtotal</dt><dd class="font-semibold text-ink" data-summary-subtotal data-amount={directSubtotal}>{directLine ? fmt({ amount: directSubtotal, currency: config.currency }) : '—'}</dd></div>
+          <div class:list={['flex justify-between', !directDiscount && 'hidden']} data-summary-discount-row><dt>Discount</dt><dd class="font-semibold text-ink" data-summary-discount>−{fmt({ amount: directDiscount, currency: config.currency })}</dd></div>
           <div class="flex justify-between"><dt>Shipping</dt><dd class="font-semibold text-ink" data-summary-shipping>{options[0]?.price.amount ? fmt(options[0].price) : 'Free'}</dd></div>
-          <div class="flex justify-between border-t border-rule pt-2 text-base"><dt class="font-semibold text-ink">Total</dt><dd class="font-bold text-ink" data-summary-total>{directLine ? fmt({ amount: directSubtotal + (options[0]?.price.amount ?? 0), currency: config.currency }) : '—'}</dd></div>
+          <div class="flex justify-between border-t border-rule pt-2 text-base"><dt class="font-semibold text-ink">Total</dt><dd class="font-bold text-ink" data-summary-total>{directLine ? fmt({ amount: directSubtotal - directDiscount + (options[0]?.price.amount ?? 0), currency: config.currency }) : '—'}</dd></div>
         </dl>
       </aside>
     </div>
   </div>
 </BaseLayout>
 
-<script define:vars={{ currency: config.currency, locale: config.locale, direct: !!directLine }}>
-  window.__checkoutConfig = { currency, locale, direct }
+<script define:vars={{ currency: config.currency, locale: config.locale, direct: !!directLine, preset }}>
+  window.__checkoutConfig = { currency, locale, direct, preset }
 </script>
 <script>
   import { cartStore } from '../../lib/cart.client'
   import { cartToCheckoutItems, formatMoney } from '@skuio/storefront'
 
-  const cfg = (window as unknown as { __checkoutConfig: { currency: string; locale: string; direct: boolean } }).__checkoutConfig
+  type PublicDiscount = { code: string; label: string; percentOff: number | null; amountOff: number | null }
+  const cfg = (window as unknown as { __checkoutConfig: { currency: string; locale: string; direct: boolean; preset: PublicDiscount | null } }).__checkoutConfig
   const form = document.querySelector<HTMLFormElement>('[data-checkout-form]')!
   const itemsInput = form.querySelector<HTMLInputElement>('[data-items]')!
   const country = form.querySelector<HTMLInputElement>('[data-country]')!
@@ -199,6 +246,8 @@ const labelClass = 'block text-xs font-semibold tracking-wide text-ink uppercase
   const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!)
   const fmt = (amount: number) => formatMoney({ amount, currency: cfg.currency }, cfg.locale)
   let subtotal = 0
+  let discount: PublicDiscount | null = cfg.preset
+  const discountOff = () => (!discount ? 0 : discount.percentOff !== null ? Math.round((subtotal * discount.percentOff) / 100) : Math.min(discount.amountOff ?? 0, subtotal))
 
   // Cart path: the lines come from localStorage; only SKUs and quantities are posted.
   function renderCart() {
@@ -241,7 +290,11 @@ const labelClass = 'block text-xs font-semibold tracking-wide text-ink uppercase
     const shipping = Number(chosen?.dataset.amount ?? 0)
     document.querySelector<HTMLElement>('[data-summary-subtotal]')!.textContent = fmt(subtotal)
     document.querySelector<HTMLElement>('[data-summary-shipping]')!.textContent = shipping ? fmt(shipping) : 'Free'
-    document.querySelector<HTMLElement>('[data-summary-total]')!.textContent = fmt(subtotal + shipping)
+    const off = discountOff()
+    document.querySelector<HTMLElement>('[data-summary-discount-row]')?.classList.toggle('hidden', !off)
+    const discountCell = document.querySelector<HTMLElement>('[data-summary-discount]')
+    if (discountCell) discountCell.textContent = `−${fmt(off)}`
+    document.querySelector<HTMLElement>('[data-summary-total]')!.textContent = fmt(subtotal - off + shipping)
   }
 
   function showErrors(details: Record<string, string> | null, message: string) {
@@ -285,6 +338,8 @@ const labelClass = 'block text-xs font-semibold tracking-wide text-ink uppercase
         country: data.get('ship_country'),
       },
       shipping_option: data.get('shipping_option'),
+      discount_code: discount?.code ?? '',
+      payment_method: data.get('payment_method') ?? undefined,
       notes: data.get('notes'),
     }
     try {
@@ -302,6 +357,48 @@ const labelClass = 'block text-xs font-semibold tracking-wide text-ink uppercase
       label.textContent = 'Continue to payment'
     }
   })
+
+  // Discount codes: previewed through /api/discount, priced again by /api/checkout.
+  const box = document.querySelector<HTMLElement>('[data-discount]')
+  function showDiscount(d: PublicDiscount | null) {
+    discount = d
+    if (!box) return
+    box.querySelector<HTMLInputElement>('[data-discount-input]')!.value = d?.code ?? ''
+    box.querySelector<HTMLElement>('[data-discount-applied]')!.classList.toggle('hidden', !d)
+    box.querySelector<HTMLElement>('[data-discount-entry]')!.classList.toggle('hidden', !!d)
+    if (d) {
+      box.querySelector<HTMLElement>('[data-discount-code]')!.textContent = d.code
+      box.querySelector<HTMLElement>('[data-discount-label]')!.textContent = d.label
+    }
+    renderTotals()
+  }
+  if (box) {
+    const field = box.querySelector<HTMLInputElement>('[data-discount-field]')!
+    const error = box.querySelector<HTMLElement>('[data-error-for="discount_code"]')!
+    const apply = async () => {
+      const code = field.value.trim()
+      if (!code) return
+      error.classList.add('hidden')
+      try {
+        const res = await fetch(`/api/discount?code=${encodeURIComponent(code)}`, { headers: { accept: 'application/json' } })
+        const body = (await res.json()) as { ok: boolean; discount?: PublicDiscount }
+        if (body.ok && body.discount) showDiscount(body.discount)
+        else {
+          error.textContent = 'That code is not valid.'
+          error.classList.remove('hidden')
+        }
+      } catch {
+        error.textContent = 'Could not check the code. Please try again.'
+        error.classList.remove('hidden')
+      }
+    }
+    box.querySelector('[data-discount-apply]')!.addEventListener('click', apply)
+    field.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); void apply() } })
+    box.querySelector('[data-discount-remove]')!.addEventListener('click', () => {
+      document.cookie = 'sf_discount=; Max-Age=0; path=/'
+      showDiscount(null)
+    })
+  }
 
   country.addEventListener('change', applyCountry)
   form.addEventListener('change', (e) => { if ((e.target as HTMLElement).matches('input[name=shipping_option]')) renderTotals() })

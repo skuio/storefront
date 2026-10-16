@@ -13,3 +13,7 @@ export {
   cartToCheckoutItems, parseCart, serializeCart, type Cart, type CartLine,
 } from './cart'
 export { sameOrigin, clientAddress } from './http'
+export {
+  DISCOUNT_COOKIE, normalizeDiscountCode, findDiscount, discountAmount, commissionAmount, publicDiscount,
+  type DiscountCode, type PublicDiscount, type ReferralSettings,
+} from './discounts'

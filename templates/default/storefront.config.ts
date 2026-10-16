@@ -43,6 +43,10 @@ export default defineStorefront({
     collectPhone: true,
   },
 
+  // Codes the store prices itself; a `partner` gets attributed sales and a private report at
+  // /partners/<partner>/?key=… Share a partner link as https://your-store/?code=WELCOME10.
+  discounts: [{ code: 'WELCOME10', percentOff: 10, partner: 'demo-partner', commissionPercent: 10 }],
+
   inventory: {
     // Stock at or below this shows "only N left". Only SKUs SKU.io tracks are affected.
     lowStockThreshold: 3,
