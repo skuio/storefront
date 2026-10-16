@@ -84,6 +84,10 @@ const number = `${config.orders.numberPrefix}${order.number}`
         setTimeout(() => (b.textContent = 'Copy'), 1500)
       })
     )
+    // The server renders in UTC; show the hold time in the buyer's own clock.
+    root.querySelectorAll<HTMLElement>('[data-expires]').forEach((el) => {
+      el.textContent = new Date(el.dataset.expires!).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+    })
     let shownAddress = root.querySelector('[data-address]')?.textContent
     async function poll() {
       try {
