@@ -330,6 +330,14 @@
         {
           "from": "pages/api/admin/connections/revoke.ts",
           "to": "src/pages/api/admin/connections/revoke.ts"
+        },
+        {
+          "from": "pages/admin/orders.astro",
+          "to": "src/pages/admin/orders.astro"
+        },
+        {
+          "from": "pages/admin/partners.astro",
+          "to": "src/pages/admin/partners.astro"
         }
       ],
       "registryDependencies": [

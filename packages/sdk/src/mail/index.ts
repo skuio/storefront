@@ -5,3 +5,4 @@ export {
 } from './templates'
 export { consoleMail, type ConsoleMailOptions } from './console'
 export { sendgridMail, MailSendError, type SendgridMailOptions } from './sendgrid'
+export { cloudflareMail, type CloudflareMailOptions, type CloudflareSendEmailBinding } from './cloudflare'

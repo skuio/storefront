@@ -98,6 +98,13 @@ export class OrdersService {
     return order ?? null
   }
 
+  /** Newest first, for the owner's order list. Unpaid processor checkouts are left out unless asked for. */
+  async recent(opts: { limit?: number; includeUnpaid?: boolean } = {}): Promise<Order[]> {
+    const limit = Math.min(Math.max(opts.limit ?? 100, 1), 500)
+    const where = opts.includeUnpaid ? '' : ` WHERE o.payment_status != 'unpaid' OR COALESCE(o.payment_provider, 'manual') = 'manual'`
+    return this.hydrate(`${ORDER_SELECT}${where} ORDER BY o.created_at DESC, o.number DESC LIMIT ?`, [limit])
+  }
+
   async count(): Promise<number> {
     const row = await this.ctx.db.prepare(`SELECT COUNT(*) AS n FROM orders`).first<{ n: number }>()
     return row?.n ?? 0

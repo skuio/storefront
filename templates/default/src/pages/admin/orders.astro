@@ -1,0 +1,75 @@
+---
+import { formatMoney, type Order } from '@skuio/storefront'
+import AdminShell from '../../components/AdminShell.astro'
+import { config, store } from '../../lib/store'
+import { requireOwner } from '../../lib/admin'
+
+/**
+ * Every order the store has taken, newest first: who, what, how it was paid
+ * (with the processor's reference), the code used, and where it is in
+ * fulfilment. Read-only — operations happen in SKU.io once connected.
+ */
+export const prerender = false
+
+const owner = await requireOwner(Astro)
+if (owner instanceof Response) return owner
+
+const showAll = Astro.url.searchParams.get('all') === '1'
+const orders = await store(Astro).orders.recent({ limit: 200, includeUnpaid: showAll })
+const fmt = (m: { amount: number; currency: string }) => formatMoney(m, config.locale)
+const date = (iso: string) => new Date(iso).toLocaleString(config.locale, { dateStyle: 'medium', timeStyle: 'short' })
+const countries = new Intl.DisplayNames([config.locale], { type: 'region' })
+const statusLabel: Record<Order['status'], string> = {
+  pending_payment: 'Awaiting payment',
+  paid: 'Paid — to ship',
+  processing: 'Processing',
+  partially_fulfilled: 'Partly shipped',
+  fulfilled: 'Shipped',
+  cancelled: 'Cancelled',
+  refunded: 'Refunded',
+}
+const paid = orders.filter((o) => o.payment.status === 'paid')
+const revenue = paid.reduce((n, o) => n + o.total.amount, 0)
+---
+
+<AdminShell title="Orders" owner={owner}>
+  <p class="mt-2 text-sm text-body/70">
+    {paid.length} paid · {fmt({ amount: revenue, currency: config.currency })} taken.
+    {showAll ? <a href="/admin/orders/" class="underline">Hide abandoned checkouts</a> : <a href="/admin/orders/?all=1" class="underline">Show abandoned checkouts too</a>}
+  </p>
+  {
+    orders.length === 0 ? (
+      <p class="mt-8 rounded-md border border-rule p-4 text-sm">No orders yet.</p>
+    ) : (
+      <ul class="mt-6 space-y-3" data-admin-orders>
+        {orders.map((o) => {
+          const shipped = o.fulfillments.find((f) => f.trackingNumber)
+          return (
+            <li class="rounded-lg border border-rule p-4 text-sm" data-order={o.number}>
+              <div class="flex flex-wrap items-baseline justify-between gap-2">
+                <span class="font-semibold text-ink">
+                  {config.orders.numberPrefix}{o.number} · {fmt(o.total)}
+                </span>
+                <span class="text-xs font-semibold tracking-wide uppercase">{statusLabel[o.status] ?? o.status}</span>
+              </div>
+              <p class="mt-1 text-body/80">
+                {o.customer.name ?? o.customer.email} · {o.customer.email}
+                {o.shippingAddress.country && <> · {countries.of(o.shippingAddress.country)}</>} · {date(o.createdAt)}
+              </p>
+              <p class="mt-1 text-body/80">
+                {o.lines.map((l) => `${l.quantity} × ${l.sku}`).join(', ')}
+                {o.discount.amount > 0 && <> · −{fmt(o.discount)}{o.discountCode && <> ({o.discountCode}{o.partner && <>, {o.partner.id}: {fmt(o.partner.commission)}</>})</>}</>}
+              </p>
+              <p class="mt-1 text-xs text-body/60">
+                {o.payment.provider ?? 'no payment yet'}
+                {o.payment.reference && <> · ref <code>{o.payment.reference}</code></>}
+                {o.externalReference && <> · SKU.io {o.externalReference}</>}
+                {shipped && <> · tracking {shipped.carrier ? `${shipped.carrier} ` : ''}{shipped.trackingNumber}</>}
+              </p>
+            </li>
+          )
+        })}
+      </ul>
+    )
+  }
+</AdminShell>

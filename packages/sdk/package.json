@@ -58,6 +58,10 @@
       "types": "./dist/mail/console.d.ts",
       "import": "./dist/mail/console.js"
     },
+    "./mail/cloudflare": {
+      "types": "./dist/mail/cloudflare.d.ts",
+      "import": "./dist/mail/cloudflare.js"
+    },
     "./db/migrations/*": "./db/migrations/*",
     "./package.json": "./package.json"
   },
