@@ -78,7 +78,7 @@ const statusText: Record<typeof order.status, string> = {
       <section>
         <h2 class="text-[11px] font-semibold tracking-widest text-body/60 uppercase">Payment</h2>
         <p class="mt-2 text-sm">
-          {order.payment.status === 'paid' ? `Paid${order.payment.methodLabel ? ` by ${order.payment.methodLabel.toLowerCase()}` : ''}` : order.payment.status === 'refunded' ? 'Refunded' : order.payment.status === 'failed' ? 'Payment failed' : 'Not paid yet'}
+          {order.payment.status === 'paid' ? `Paid${order.payment.methodLabel ? ` by ${order.payment.methodLabel}` : ''}` : order.payment.status === 'refunded' ? 'Refunded' : order.payment.status === 'failed' ? 'Payment failed' : 'Not paid yet'}
         </p>
       </section>
     </div>
