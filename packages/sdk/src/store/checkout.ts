@@ -1,5 +1,5 @@
 import { MAX_CART_LINES } from '../cart'
-import { commissionAmount, discountAmount, findDiscount, normalizeDiscountCode, type DiscountCode } from '../discounts'
+import { commissionAmount, discountAmount, findDiscount, normalizeDiscountCode, quantityTier, type DiscountCode, type QuantityDiscount } from '../discounts'
 import type { DbStatement } from '../db/driver'
 import { regionForCountry, shippingForRegion, type ShippingOption } from '../shipping'
 import type { Address, Order } from '../types'
@@ -45,8 +45,10 @@ export interface Quote {
   subtotal: number
   /** Minor units off the merchandise subtotal; 0 without a code. */
   discount: number
-  /** The code that priced `discount`, or null. */
+  /** The code the buyer used, or null. Kept for attribution even when a quantity tier saved more. */
   discountCode: DiscountCode | null
+  /** The quantity tier that priced `discount` instead of the code, or null. */
+  quantityTier: QuantityDiscount | null
   /** What the code's partner is owed for this order, minor units; 0 without a partner. */
   commission: number
   shipping: number
@@ -109,13 +111,18 @@ export class CheckoutService {
     if (discountCode && normalizeDiscountCode(discountCode) && !code) details.discount_code = 'is not a valid code'
     if (Object.keys(details).length || !option) throw invalid('Checkout could not be priced', details)
     const subtotal = lines.reduce((sum, l) => sum + l.totalAmount, 0)
-    const discount = code ? discountAmount(code, subtotal) : 0
+    const codeOff = code ? discountAmount(code, subtotal) : 0
+    const tier = quantityTier(this.ctx.config.quantityDiscounts, lines.reduce((n, l) => n + l.quantity, 0))
+    const tierOff = tier ? Math.min(subtotal, Math.round((subtotal * tier.percentOff) / 100)) : 0
+    // Never stacked: the larger saving wins. The code still attributes the order either way.
+    const discount = Math.max(codeOff, tierOff)
     const commission = code ? commissionAmount(code, subtotal, discount) : 0
     return {
       lines,
       subtotal,
       discount,
       discountCode: code,
+      quantityTier: tierOff > codeOff ? tier : null,
       commission,
       shipping: option.price.amount,
       total: subtotal - discount + option.price.amount,
@@ -196,7 +203,9 @@ export class CheckoutService {
       this.events.statement(orderId, 'created', {
         lines: quote.lines.length,
         total: quote.total,
-        ...(quote.discountCode ? { discount_code: normalizeDiscountCode(quote.discountCode.code), discount: quote.discount } : {}),
+        ...(quote.discountCode ? { discount_code: normalizeDiscountCode(quote.discountCode.code) } : {}),
+        ...(quote.quantityTier ? { quantity_tier: quote.quantityTier.minQuantity } : {}),
+        ...(quote.discount ? { discount: quote.discount } : {}),
       }),
     ]
     await db.batch(statements)

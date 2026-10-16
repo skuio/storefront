@@ -1,6 +1,6 @@
 import { defineRoutes, type RoutePatterns, type Routes } from './routes'
 import type { ShippingOption } from './shipping'
-import { validateDiscounts, type DiscountCode, type ReferralSettings } from './discounts'
+import { validateDiscounts, validateQuantityDiscounts, type DiscountCode, type QuantityDiscount, type ReferralSettings } from './discounts'
 
 export interface StorefrontInput {
   /** Store name, used in titles, emails and the Store API health check. */
@@ -42,11 +42,13 @@ export interface StorefrontInput {
    * under every payment adapter and land on the order.
    */
   discounts?: DiscountCode[]
+  /** Percent off by units in the order (see discounts.ts). Never stacks with a code: the larger saving wins. */
+  quantityDiscounts?: QuantityDiscount[]
   /** `?code=` links that apply a code for a while. Defaults: param "code", 30 days. */
   referral?: Partial<ReferralSettings>
 }
 
-export interface StorefrontConfig extends Omit<StorefrontInput, 'routes' | 'locale' | 'checkout' | 'inventory' | 'orders' | 'discounts' | 'referral'> {
+export interface StorefrontConfig extends Omit<StorefrontInput, 'routes' | 'locale' | 'checkout' | 'inventory' | 'orders' | 'discounts' | 'quantityDiscounts' | 'referral'> {
   locale: string
   routes: Routes
   checkout: {
@@ -61,6 +63,7 @@ export interface StorefrontConfig extends Omit<StorefrontInput, 'routes' | 'loca
     numberPrefix: string
   }
   discounts: DiscountCode[]
+  quantityDiscounts: QuantityDiscount[]
   referral: ReferralSettings
 }
 
@@ -74,6 +77,7 @@ export function defineStorefront(input: StorefrontInput): StorefrontConfig {
   if (!input.shipping.length) throw new Error('storefront.shipping needs at least one option')
   if (!input.shipToCountries.length) throw new Error('storefront.shipToCountries needs at least one country')
   validateDiscounts(input.discounts ?? [], input.currency)
+  validateQuantityDiscounts(input.quantityDiscounts ?? [])
   const referralParam = input.referral?.param ?? 'code'
   if (!/^[a-z][a-z0-9_]{0,31}$/.test(referralParam)) throw new Error(`storefront.referral.param "${referralParam}" must be a short lower-case query parameter`)
 
@@ -93,6 +97,7 @@ export function defineStorefront(input: StorefrontInput): StorefrontConfig {
       numberPrefix: input.orders?.numberPrefix ?? '',
     },
     discounts: input.discounts ?? [],
+    quantityDiscounts: input.quantityDiscounts ?? [],
     referral: {
       param: referralParam,
       cookieDays: input.referral?.cookieDays ?? 30,

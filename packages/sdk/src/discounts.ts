@@ -32,6 +32,40 @@ export interface DiscountCode {
   active?: boolean
 }
 
+/**
+ * Quantity pricing: the more units in the order, the bigger the percentage off
+ * the merchandise subtotal. Tiers count units across every line.
+ *
+ * It does not stack with a discount code: the buyer gets whichever saves
+ * more, and a partner's code still attributes the order (and earns its
+ * commission on what was actually charged) even when the tier wins.
+ */
+export interface QuantityDiscount {
+  minQuantity: number
+  percentOff: number
+  /** Shown to the buyer, e.g. "Two-miner pack". Defaults to "Buy N+, save X%". */
+  label?: string
+}
+
+export function validateQuantityDiscounts(tiers: QuantityDiscount[]): void {
+  const seen = new Set<number>()
+  for (const t of tiers) {
+    if (!(Number.isInteger(t.minQuantity) && t.minQuantity >= 2)) throw new Error(`quantity discount minQuantity must be an integer >= 2, got ${t.minQuantity}`)
+    if (!(t.percentOff > 0 && t.percentOff < 100)) throw new Error(`quantity discount for ${t.minQuantity}+ needs percentOff in (0, 100)`)
+    if (seen.has(t.minQuantity)) throw new Error(`quantity discount for ${t.minQuantity}+ is defined twice`)
+    seen.add(t.minQuantity)
+  }
+}
+
+/** The best tier the unit count reaches, or null. */
+export function quantityTier(tiers: QuantityDiscount[] | undefined, units: number): QuantityDiscount | null {
+  return (tiers ?? []).filter((t) => units >= t.minQuantity).sort((a, b) => b.percentOff - a.percentOff)[0] ?? null
+}
+
+export function quantityLabel(t: QuantityDiscount): string {
+  return t.label ?? `Buy ${t.minQuantity}+, save ${t.percentOff}%`
+}
+
 /** What a buyer is shown about a code. Never includes the partner or the commission. */
 export interface PublicDiscount {
   code: string

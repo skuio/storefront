@@ -19,6 +19,7 @@ const withCodes = defineStorefront({
   ],
   shipToCountries: ['US', 'CA', 'GB'],
   discounts: codes,
+  quantityDiscounts: [{ minQuantity: 2, percentOff: 5 }, { minQuantity: 3, percentOff: 20 }],
 })
 
 describe('discount codes', () => {
@@ -87,5 +88,28 @@ describe('discount codes', () => {
     expect(await store.partners.verifyReportKey('orbit-show', key.replace(/.$/, '0') === key ? key.replace(/.$/, '1') : key.replace(/.$/, '0'))).toBe(false)
     expect(await store.partners.verifyReportKey('someone-else', key)).toBe(false)
     expect(store.partners.lookupCode('podcast')).toEqual({ code: 'PODCAST', label: '10% off', percentOff: 10, amountOff: null })
+  })
+
+  it('prices quantity tiers, never stacked with a code, and keeps the partner on the order', async () => {
+    const { store } = rig({}, withCodes)
+    await seed(store)
+    const one = await placeOrder(store, { items: [{ sku: 'VDCTOYTAC9504', quantity: 1 }] })
+    expect(one.discount.amount).toBe(0)
+    const two = await placeOrder(store, { items: [{ sku: 'VDCTOYTAC9504', quantity: 2 }] })
+    expect(two.discount.amount).toBe(Math.round(219800 * 0.05))
+    // 2 units: the 10% code beats the 5% tier.
+    const twoCode = await placeOrder(store, { items: [{ sku: 'VDCTOYTAC9504', quantity: 2 }], discountCode: 'PODCAST' })
+    expect(twoCode.discount.amount).toBe(21980)
+    // 3 units: the 20% tier beats the code, but the partner still gets the order — on what was charged.
+    const three = await placeOrder(store, { items: [{ sku: 'VDCTOYTAC9504', quantity: 3 }], discountCode: 'PODCAST' })
+    expect(three.discount.amount).toBe(65940)
+    expect(three.discountCode).toBe('PODCAST')
+    expect(three.partner?.commission.amount).toBe(Math.round((329700 - 65940) * 0.15))
+  })
+
+  it('validates quantity tiers', () => {
+    const base = { name: 'X', url: 'https://x.test', currency: 'usd', shipping: config.shipping, shipToCountries: ['US'] }
+    expect(() => defineStorefront({ ...base, quantityDiscounts: [{ minQuantity: 1, percentOff: 5 }] })).toThrow(/>= 2/)
+    expect(() => defineStorefront({ ...base, quantityDiscounts: [{ minQuantity: 2, percentOff: 0 }] })).toThrow(/percentOff/)
   })
 })

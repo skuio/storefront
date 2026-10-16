@@ -1,5 +1,5 @@
 ---
-import { formatMoney, hasInternationalRegion, shippingForRegion } from '@skuio/storefront'
+import { formatMoney, hasInternationalRegion, quantityTier, shippingForRegion } from '@skuio/storefront'
 import BaseLayout from '../../layouts/BaseLayout.astro'
 import Breadcrumbs from '../../components/Breadcrumbs.astro'
 import { config, paymentMethods, store } from '../../lib/store'
@@ -47,7 +47,10 @@ const presetCode = referredCode(Astro)
 const preset = presetCode ? s.partners.lookupCode(presetCode) : null
 const hasCodes = config.discounts.length > 0
 const methods = paymentMethods(Astro).map((m) => ({ id: m.id, label: m.label }))
-const directDiscount = preset && directLine ? (preset.percentOff !== null ? Math.round((directSubtotal * preset.percentOff) / 100) : Math.min(preset.amountOff ?? 0, directSubtotal)) : 0
+const presetOff = preset && directLine ? (preset.percentOff !== null ? Math.round((directSubtotal * preset.percentOff) / 100) : Math.min(preset.amountOff ?? 0, directSubtotal)) : 0
+// Quantity tiers never stack with a code: the larger saving wins (the same rule /api/checkout prices with).
+const directTier = directLine ? quantityTier(config.quantityDiscounts, directLine.quantity) : null
+const directDiscount = Math.max(presetOff, directTier ? Math.round((directSubtotal * directTier.percentOff) / 100) : 0)
 const inputClass = 'mt-1.5 w-full rounded-md border border-rule px-3 py-2.5 text-sm focus:border-accent focus:ring-2 focus:ring-accent/25 focus:outline-none'
 const labelClass = 'block text-xs font-semibold tracking-wide text-ink uppercase'
 ---
@@ -228,15 +231,16 @@ const labelClass = 'block text-xs font-semibold tracking-wide text-ink uppercase
   </div>
 </BaseLayout>
 
-<script define:vars={{ currency: config.currency, locale: config.locale, direct: !!directLine, preset }}>
-  window.__checkoutConfig = { currency, locale, direct, preset }
+<script define:vars={{ currency: config.currency, locale: config.locale, direct: !!directLine, preset, tiers: config.quantityDiscounts, directUnits: directLine?.quantity ?? 0 }}>
+  window.__checkoutConfig = { currency, locale, direct, preset, tiers, directUnits }
 </script>
 <script>
   import { cartStore } from '../../lib/cart.client'
   import { cartToCheckoutItems, formatMoney } from '@skuio/storefront'
 
   type PublicDiscount = { code: string; label: string; percentOff: number | null; amountOff: number | null }
-  const cfg = (window as unknown as { __checkoutConfig: { currency: string; locale: string; direct: boolean; preset: PublicDiscount | null } }).__checkoutConfig
+  type Tier = { minQuantity: number; percentOff: number }
+  const cfg = (window as unknown as { __checkoutConfig: { currency: string; locale: string; direct: boolean; preset: PublicDiscount | null; tiers: Tier[]; directUnits: number } }).__checkoutConfig
   const form = document.querySelector<HTMLFormElement>('[data-checkout-form]')!
   const itemsInput = form.querySelector<HTMLInputElement>('[data-items]')!
   const country = form.querySelector<HTMLInputElement>('[data-country]')!
@@ -247,7 +251,12 @@ const labelClass = 'block text-xs font-semibold tracking-wide text-ink uppercase
   const fmt = (amount: number) => formatMoney({ amount, currency: cfg.currency }, cfg.locale)
   let subtotal = 0
   let discount: PublicDiscount | null = cfg.preset
-  const discountOff = () => (!discount ? 0 : discount.percentOff !== null ? Math.round((subtotal * discount.percentOff) / 100) : Math.min(discount.amountOff ?? 0, subtotal))
+  let units = cfg.directUnits
+  const discountOff = () => {
+    const code = !discount ? 0 : discount.percentOff !== null ? Math.round((subtotal * discount.percentOff) / 100) : Math.min(discount.amountOff ?? 0, subtotal)
+    const tier = cfg.tiers.filter((t) => units >= t.minQuantity).sort((a, b) => b.percentOff - a.percentOff)[0]
+    return Math.max(code, tier ? Math.round((subtotal * tier.percentOff) / 100) : 0)
+  }
 
   // Cart path: the lines come from localStorage; only SKUs and quantities are posted.
   function renderCart() {
@@ -265,6 +274,7 @@ const labelClass = 'block text-xs font-semibold tracking-wide text-ink uppercase
         <span class="font-semibold text-ink">${fmt(l.unitPrice.amount * l.quantity)}</span>
       </li>`).join('')
     subtotal = cartStore.subtotal(cfg.currency).amount
+    units = cart.lines.reduce((n, l) => n + l.quantity, 0)
   }
 
   // Shipping options follow the destination: scoped options for their countries, the rest for everyone else.
