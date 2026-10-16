@@ -23,6 +23,11 @@ jobs:
       - name: Reference template builds
         run: npm run template:build
       - name: Template guardrail (structural; Stripe step skips without a key)
-        run: npx playwright install --with-deps chromium && npm run template:e2e
+        # The guardrail runs against the template's LOCAL D1: create the schema and seed the demo catalogue first.
+        run: |
+          npx playwright install --with-deps chromium
+          npm run db:migrate:local --workspace templates/default
+          npm run seed --workspace templates/default
+          npm run template:e2e
         env:
           CI: true
