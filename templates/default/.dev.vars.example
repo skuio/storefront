@@ -8,7 +8,7 @@ STORE_API_KEY=
 SESSION_SECRET=
 
 # Comma list, in the order checkout offers them: stripe (hosted Checkout), paypal (Orders v2),
-# btcpay (Bitcoin / Lightning via BTCPay Server), manual (pay later; operations marks the order paid).
+# btcpay (Bitcoin / Lightning via BTCPay Server), bitcoin (on-chain to a hardware wallet's zpub), manual (pay later; operations marks the order paid).
 # Each processor's webhook points at /api/payments/webhook?provider=<id>.
 PAYMENT_PROVIDER=manual
 STRIPE_SECRET_KEY=
@@ -22,6 +22,10 @@ BTCPAY_URL=
 BTCPAY_STORE_ID=
 BTCPAY_API_KEY=
 BTCPAY_WEBHOOK_SECRET=
+# bitcoin: on-chain to a hardware wallet. The account PUBLIC key (zpub…), never a seed or private key.
+BITCOIN_XPUB=
+# Optional block explorer API (default https://mempool.space/api)
+BITCOIN_EXPLORER=
 
 # console (log every email — fine for development) or sendgrid.
 MAIL_PROVIDER=console

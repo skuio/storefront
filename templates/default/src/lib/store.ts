@@ -7,6 +7,7 @@ import { manualPayments } from '@skuio/storefront/payments/manual'
 import { stripePayments } from '@skuio/storefront/payments/stripe'
 import { paypalPayments } from '@skuio/storefront/payments/paypal'
 import { btcpayPayments } from '@skuio/storefront/payments/btcpay'
+import { bitcoinPayments } from '@skuio/storefront/payments/bitcoin'
 import config from '../../storefront.config'
 
 /**
@@ -123,6 +124,9 @@ function adapterFor(ctx: StoreContext, id: string): PaymentAdapter {
         apiKey: required('BTCPAY_API_KEY'),
         webhookSecret: readEnv(ctx, 'BTCPAY_WEBHOOK_SECRET'),
       })
+    case 'bitcoin':
+      // On-chain, non-custodial: an account PUBLIC key (zpub) from a hardware wallet. Never a private key.
+      return bitcoinPayments({ xpub: required('BITCOIN_XPUB'), ...(readEnv(ctx, 'BITCOIN_EXPLORER') ? { explorer: readEnv(ctx, 'BITCOIN_EXPLORER') } : {}) })
     case 'manual':
       return manualPayments()
     default:

@@ -18,7 +18,7 @@ if (order && order.payment.status === 'paid') return Astro.redirect(`/checkout/s
 let start: Awaited<ReturnType<ReturnType<typeof payment>['start']>> | null = null
 if (order && order.status === 'pending_payment') {
   try {
-    start = await payment(Astro).start(order, paymentContext(Astro))
+    start = await payment(Astro, order.payment.provider).start(order, paymentContext(Astro))
   } catch (error) {
     console.error('pending page: adapter start failed', error)
   }
