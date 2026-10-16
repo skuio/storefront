@@ -42,6 +42,10 @@
       "types": "./dist/payments/btcpay.d.ts",
       "import": "./dist/payments/btcpay.js"
     },
+    "./payments/bitcoin": {
+      "types": "./dist/payments/bitcoin.d.ts",
+      "import": "./dist/payments/bitcoin.js"
+    },
     "./mail": {
       "types": "./dist/mail.d.ts",
       "import": "./dist/mail.js"
@@ -82,5 +86,9 @@
     "tsup": "^8.5.0",
     "typescript": "^5.9.3",
     "vitest": "^3.2.4"
+  },
+  "dependencies": {
+    "@scure/bip32": "^2.4.0",
+    "@scure/btc-signer": "^2.4.1"
   }
 }

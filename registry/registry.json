@@ -157,10 +157,23 @@
         {
           "from": "api/payments/webhook.ts",
           "to": "src/pages/api/payments/webhook.ts"
+        },
+        {
+          "from": "checkout/bitcoin.astro",
+          "to": "src/pages/checkout/bitcoin.astro"
+        },
+        {
+          "from": "api/payments/bitcoin.ts",
+          "to": "src/pages/api/payments/bitcoin.ts"
+        },
+        {
+          "from": "lib/payment-sweep.ts",
+          "to": "src/lib/payment-sweep.ts"
         }
       ],
       "dependencies": [
-        "stripe"
+        "stripe",
+        "uqr"
       ],
       "registryDependencies": [
         "breadcrumbs",
