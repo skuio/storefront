@@ -170,7 +170,7 @@ describe('discount codes', () => {
   it('describes a referral for the welcome banner', () => {
     const { store } = rig({}, withCodes)
     expect(store.partners.referral('podcast')).toEqual({
-      partner: { id: 'orbit-show', name: 'The Orbit Show', welcome: 'Tune in.' },
+      partner: { id: 'orbit-show', name: 'The Orbit Show', contact: 'Dana Host', welcome: 'Tune in.' },
       discount: { code: 'PODCAST', label: '10% off', percentOff: 10, amountOff: null },
     })
     expect(store.partners.referral('TENOFF')).toBeNull() // a code with no partner is not a referral

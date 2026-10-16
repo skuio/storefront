@@ -1,5 +1,5 @@
 ---
-import { formatMoney, hasInternationalRegion, quantityTier, shippingForRegion } from '@skuio/storefront'
+import { addressFormats, formatMoney, hasInternationalRegion, quantityTier, shippingForRegion } from '@skuio/storefront'
 import BaseLayout from '../../layouts/BaseLayout.astro'
 import Breadcrumbs from '../../components/Breadcrumbs.astro'
 import { config, paymentMethods, store } from '../../lib/store'
@@ -42,6 +42,9 @@ const options = config.shipping.map((o) => ({
 const countryNames = new Intl.DisplayNames([config.locale], { type: 'region' })
 const countries = config.shipToCountries.map((code) => ({ code, name: countryNames.of(code) ?? code })).sort((a, b) => a.name.localeCompare(b.name))
 const defaultCountry = domestic.countries[0] ?? config.shipToCountries[0]!
+// What the region and postal fields are called (State + ZIP code, Province, Postcode…) per country.
+const formats = addressFormats(config.shipToCountries)
+const af = formats[defaultCountry]!
 // A partner's link (or a code typed on an earlier visit) arrives applied; the order is priced again on submit.
 const presetCode = referredCode(Astro)
 const preset = presetCode ? s.partners.lookupCode(presetCode) : null
@@ -124,12 +127,18 @@ const labelClass = 'block text-xs font-semibold tracking-wide text-ink uppercase
               <p class="mt-1 hidden text-xs text-accent" data-error-for="shipping_address.city"></p>
             </div>
             <div>
-              <label for="ship_state" class={labelClass}>State / province</label>
-              <input id="ship_state" name="ship_state" type="text" autocomplete="shipping address-level1" class={inputClass} />
+              <label id="ship_state_label" for="ship_state" class={labelClass} data-region-label>{af.regionLabel}</label>
+              <select id="ship_state" name={af.regions ? 'ship_state' : undefined} required={af.regions ? af.regionRequired : undefined} hidden={!af.regions} disabled={!af.regions} autocomplete="shipping address-level1" class={inputClass} data-region-select>
+                <option value="">Select…</option>
+                {af.regions?.map(([code, name]) => <option value={code}>{name}</option>)}
+              </select>
+              <input id="ship_state_text" name={af.regions ? undefined : 'ship_state'} type="text" required={!af.regions && af.regionRequired ? true : undefined} hidden={!!af.regions} disabled={!!af.regions} aria-labelledby="ship_state_label" autocomplete="shipping address-level1" class={inputClass} data-region-input />
+              <p class="mt-1 hidden text-xs text-accent" data-error-for="shipping_address.state"></p>
             </div>
             <div>
-              <label for="ship_postal_code" class={labelClass}>Postal code</label>
-              <input id="ship_postal_code" name="ship_postal_code" type="text" autocomplete="shipping postal-code" class={inputClass} />
+              <label for="ship_postal_code" class={labelClass} data-postal-label>{af.postalLabel}</label>
+              <input id="ship_postal_code" name="ship_postal_code" type="text" required={af.postalRequired ? true : undefined} pattern={af.postalPattern} placeholder={af.postalExample} autocomplete="shipping postal-code" class={inputClass} data-postal />
+              <p class="mt-1 hidden text-xs text-accent" data-error-for="shipping_address.postal_code"></p>
             </div>
           </div>
         </section>
@@ -231,8 +240,8 @@ const labelClass = 'block text-xs font-semibold tracking-wide text-ink uppercase
   </div>
 </BaseLayout>
 
-<script define:vars={{ currency: config.currency, locale: config.locale, direct: !!directLine, preset, tiers: config.quantityDiscounts, directUnits: directLine?.quantity ?? 0 }}>
-  window.__checkoutConfig = { currency, locale, direct, preset, tiers, directUnits }
+<script define:vars={{ currency: config.currency, locale: config.locale, direct: !!directLine, preset, tiers: config.quantityDiscounts, directUnits: directLine?.quantity ?? 0, formats }}>
+  window.__checkoutConfig = { currency, locale, direct, preset, tiers, directUnits, formats }
 </script>
 <script>
   import { cartStore } from '../../lib/cart.client'
@@ -278,8 +287,40 @@ const labelClass = 'block text-xs font-semibold tracking-wide text-ink uppercase
   }
 
   // Shipping options follow the destination: scoped options for their countries, the rest for everyone else.
+  // Relabel and re-validate the region and postal fields for the chosen country.
+  type Format = { regionLabel: string; regions?: [string, string][]; regionRequired: boolean; postalLabel: string; postalRequired: boolean; postalPattern?: string; postalExample?: string }
+  const formats = (window as unknown as { __checkoutConfig: { formats: Record<string, Format> } }).__checkoutConfig.formats
+  const regionSelect = form.querySelector<HTMLInputElement>('[data-region-select]')! // a <select>; typed as an input because workers-types shadows HTMLSelectElement
+  const regionInput = form.querySelector<HTMLInputElement>('[data-region-input]')!
+  const postal = form.querySelector<HTMLInputElement>('[data-postal]')!
+  let formatFor = ''
+  function applyAddressFormat(code: string) {
+    if (code === formatFor) return
+    formatFor = code
+    const f = formats[code] ?? { regionLabel: 'State / province / region', regionRequired: false, postalLabel: 'Postal code', postalRequired: false }
+    form.querySelector('[data-region-label]')!.textContent = f.regionLabel
+    form.querySelector('[data-postal-label]')!.textContent = f.postalLabel
+    const useList = !!f.regions
+    const select = regionSelect as unknown as { innerHTML: string; value: string }
+    select.innerHTML = '<option value="">Select…</option>' + (f.regions ?? []).map(([c, n]) => `<option value="${esc(c)}">${esc(n)}</option>`).join('')
+    for (const [el, on] of [[regionSelect, useList], [regionInput, !useList]] as const) {
+      el.hidden = !on
+      el.disabled = !on
+      if (on) el.setAttribute('name', 'ship_state')
+      else el.removeAttribute('name')
+      el.required = on && f.regionRequired
+    }
+    regionInput.value = ''
+    form.querySelector<HTMLLabelElement>('[data-region-label]')!.htmlFor = useList ? 'ship_state' : 'ship_state_text'
+    postal.required = f.postalRequired
+    if (f.postalPattern) postal.pattern = f.postalPattern
+    else postal.removeAttribute('pattern')
+    postal.placeholder = f.postalExample ?? ''
+  }
+
   function applyCountry() {
     const code = country.value
+    applyAddressFormat(code)
     const scopedMatch = optionItems.some((li) => li.dataset.scoped === '1' && (li.dataset.countries ?? '').split(',').includes(code))
     let first: HTMLInputElement | null = null
     for (const li of optionItems) {

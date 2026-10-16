@@ -6,7 +6,7 @@ describe('mail templates', () => {
   it('render an order confirmation with lines, totals and the status link', async () => {
     const { store } = rig()
     await seed(store)
-    const order = await placeOrder(store, { items: [{ sku: 'VDCTOYTAC9504', quantity: 2 }], shippingAddress: { name: 'Ada <Lovelace>', line1: '1 Way', city: 'Austin', country: 'US' } })
+    const order = await placeOrder(store, { items: [{ sku: 'VDCTOYTAC9504', quantity: 2 }], shippingAddress: { name: 'Ada <Lovelace>', line1: '1 Way', city: 'Austin', state: 'TX', postalCode: '78701', country: 'US' } })
     const mail = orderConfirmationMail(order, { config, siteUrl: 'https://store.test' })
     expect(mail.subject).toBe('Order 1001 received — Test Store')
     expect(mail.html).toContain('Ada &lt;Lovelace&gt;')

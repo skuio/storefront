@@ -74,7 +74,7 @@ export interface PartnerProfile {
   id: string
   /** The public name visitors know — a show, channel or brand: "Welcome, friend of <name>". */
   name: string
-  /** The person behind it, who signs in: "Welcome back, <first name>" on the dashboard and in the sign-in email. Defaults to `name`. */
+  /** The person behind it: a store may greet referred visitors as their friend, and the dashboard and sign-in email greet them by first name. Defaults to `name`. */
   contact?: string
   /** Where their portal sign-in link is sent. Without it they can only use a key link. */
   email?: string

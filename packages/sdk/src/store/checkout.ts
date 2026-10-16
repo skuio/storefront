@@ -1,3 +1,4 @@
+import { checkAddressFormat } from '../address'
 import { MAX_CART_LINES } from '../cart'
 import { commissionAmount, discountAmount, findDiscount, normalizeDiscountCode, quantityTier, type DiscountCode, type QuantityDiscount } from '../discounts'
 import type { DbStatement } from '../db/driver'
@@ -142,6 +143,7 @@ export class CheckoutService {
     if (!shipTo.city) details['shipping_address.city'] = 'is required'
     if (!shipTo.country || shipTo.country.length !== 2) details['shipping_address.country'] = 'is required'
     else shipTo.country = shipTo.country.toUpperCase()
+    if (shipTo.country) Object.assign(details, checkAddressFormat(shipTo))
     if (this.ctx.config.checkout.collectPhone && !input.phone?.trim()) details.phone = 'is required'
     let quote: Quote | null = null
     try {

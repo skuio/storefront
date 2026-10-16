@@ -18,3 +18,4 @@ export {
   quantityTier, quantityLabel,
   type DiscountCode, type PartnerProfile, type PublicDiscount, type QuantityDiscount, type ReferralSettings,
 } from './discounts'
+export { addressFormat, addressFormats, checkAddressFormat, type AddressFormat } from './address'

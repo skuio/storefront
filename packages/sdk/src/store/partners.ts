@@ -117,9 +117,10 @@ export class PartnersService {
   referral(code: string | null | undefined): { partner: PartnerProfile; discount: PublicDiscount } | null {
     const d = findDiscount(this.ctx.config.discounts, code, new Date(this.ctx.now()))
     if (!d?.partner) return null
-    // Public fields only: this feeds a page, and the email and contact are not the visitor's business.
-    const { id, name, welcome, avatar } = this.profile(d.partner)
-    return { partner: { id, name, ...(welcome ? { welcome } : {}), ...(avatar ? { avatar } : {}) }, discount: publicDiscount(d, this.ctx.config.currency, this.ctx.config.locale) }
+    // Public fields only: this feeds a page. The contact's name is public (the banner greets
+    // visitors as their friend); their email is not.
+    const { id, name, contact, welcome, avatar } = this.profile(d.partner)
+    return { partner: { id, name, ...(contact ? { contact } : {}), ...(welcome ? { welcome } : {}), ...(avatar ? { avatar } : {}) }, discount: publicDiscount(d, this.ctx.config.currency, this.ctx.config.locale) }
   }
 
   // ── Traffic ─────────────────────────────────────────────────────────────

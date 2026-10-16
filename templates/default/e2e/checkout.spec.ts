@@ -78,9 +78,11 @@ test('an order goes cart → checkout → pending → paid → shipped through t
   await page.fill('#phone', '+1 555 0100')
   await page.fill('#ship_line1', '1 Test Street')
   await page.fill('#ship_city', 'Austin')
-  await page.fill('#ship_state', 'TX')
-  await page.fill('#ship_postal_code', '78701')
   await page.selectOption('#ship_country', 'US')
+  // A US address asks for a state from a list and a ZIP code.
+  await expect(page.locator('label[for=ship_postal_code]')).toHaveText('ZIP code')
+  await page.selectOption('#ship_state', 'TX')
+  await page.fill('#ship_postal_code', '78701')
   await page.locator('[data-checkout-form] button[type=submit]').click()
 
   // manual adapter: the order is placed and waits for payment.

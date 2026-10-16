@@ -230,10 +230,29 @@ describe('checkout', () => {
       'shipping_address.name': 'is required',
       'shipping_address.line1': 'is required',
       'shipping_address.city': 'is required',
+      'shipping_address.state': 'is required',
+      'shipping_address.postal_code': 'is required',
       'items.VDCHCIV0611': 'is sold out',
       'items.NOPE': 'is not a product in this store',
     })
     await expect(placeOrder(store, { items: [] })).rejects.toMatchObject({ details: { items: 'is empty' } })
+  })
+})
+
+describe('address formats', () => {
+  it('asks a US address for a state and ZIP code, and normalises the state', async () => {
+    const { checkAddressFormat, addressFormat } = await import('../src/address')
+    expect(addressFormat('us')).toMatchObject({ regionLabel: 'State', postalLabel: 'ZIP code', regionRequired: true })
+    const a = { country: 'US', state: 'nevada', postalCode: '89101' }
+    expect(checkAddressFormat(a)).toEqual({})
+    expect(a.state).toBe('NV')
+    expect(checkAddressFormat({ country: 'US', state: 'Narnia', postalCode: '8910' })).toEqual({
+      'shipping_address.state': 'is not a state',
+      'shipping_address.postal_code': "doesn't look like a ZIP code (e.g. 89101)",
+    })
+    expect(checkAddressFormat({ country: 'CA', state: 'ON', postalCode: 'k1a 0b1' })).toEqual({})
+    // Countries without a known format accept any region and no postal code.
+    expect(checkAddressFormat({ country: 'SV' })).toEqual({})
   })
 })
 
