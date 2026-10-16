@@ -19,6 +19,8 @@ const asked = Number(Astro.url.searchParams.get('days'))
 const days = PERIODS.includes(asked) ? asked : 30
 const [traffic, report] = await Promise.all([s.partners.traffic(partner, { days }), s.partners.report(partner)])
 const profile = s.partners.profile(partner)
+// Greet the person , not the show they speak for; the show is what the codes carry.
+const greeting = profile.contact ? `Welcome back, ${profile.contact.split(/\s+/)[0]}` : profile.name
 const fmt = (m: { amount: number; currency: string }) => formatMoney(m, config.locale)
 const num = (n: number) => n.toLocaleString(config.locale)
 const pct = (n: number) => `${(n * 100).toFixed(n && n < 0.1 ? 1 : 0)}%`
@@ -54,8 +56,9 @@ const PRESETS = ['youtube', 'podcast', 'x', 'instagram', 'newsletter', 'nostr', 
   <div class="flex flex-wrap items-end justify-between gap-4">
     <div>
       <p class="text-xs font-semibold tracking-widest text-body/60 uppercase">Partner dashboard</p>
-      <h1 class="display-heading mt-2 text-4xl">{profile.name}</h1>
+      <h1 class="display-heading mt-2 text-4xl">{greeting}</h1>
       <p class="mt-2 text-sm">
+        {profile.contact && <span class="mr-2 font-semibold">{profile.name}</span>}
         {codes.map((c) => <code class="mr-2 rounded bg-rule/60 px-1.5 py-0.5">{c.code} · {c.label}</code>)}
       </p>
     </div>

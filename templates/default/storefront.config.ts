@@ -46,9 +46,9 @@ export default defineStorefront({
   // Codes the store prices itself; a `partner` gets attributed sales and traffic. Share a partner
   // link as https://your-store/?code=WELCOME10 — it applies the code and counts the visit.
   discounts: [{ code: 'WELCOME10', percentOff: 10, partner: 'demo-partner', commissionPercent: 10 }],
-  // Partners by id: the name the welcome banner greets visitors with, and the email that signs
-  // in to the dashboard at /partners/. A partner with no email uses the key link from /admin/partners/.
-  partners: [{ id: 'demo-partner', name: 'Demo Partner', email: 'partner@example.com' }],
+  // Partners by id: `name` is what the welcome banner greets visitors with (the show), `contact`
+  // the person the dashboard greets, and `email` signs in to the dashboard at /partners/. A partner with no email uses the key link from /admin/partners/.
+  partners: [{ id: 'demo-partner', name: 'Demo Podcast', contact: 'Dana Host', email: 'partner@example.com' }],
 
   inventory: {
     // Stock at or below this shows "only N left". Only SKUs SKU.io tracks are affected.

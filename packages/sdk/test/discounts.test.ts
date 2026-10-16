@@ -20,7 +20,7 @@ const withCodes = defineStorefront({
   ],
   shipToCountries: ['US', 'CA', 'GB'],
   discounts: codes,
-  partners: [{ id: 'orbit-show', name: 'The Orbit Show', email: 'host@example.com', welcome: 'Tune in.' }],
+  partners: [{ id: 'orbit-show', name: 'The Orbit Show', contact: 'Dana Host', email: 'host@example.com', welcome: 'Tune in.' }],
   quantityDiscounts: [{ minQuantity: 2, percentOff: 5 }, { minQuantity: 3, percentOff: 20 }],
 })
 
@@ -157,6 +157,7 @@ describe('discount codes', () => {
     expect(await store.partners.sendSignInLink(' HOST@example.com ')).toBe(true)
     const url = mail.sent[0]!.text.match(/https?:\/\/\S+/)![0]
     expect(mail.sent[0]!.to).toBe('host@example.com')
+    expect(mail.sent[0]!.html).toContain('Hi Dana') // the person, not the show
     const token = new URL(url).searchParams.get('token')!
     const session = await store.partners.exchange(token)
     expect(session.partner).toBe('orbit-show')
@@ -169,7 +170,7 @@ describe('discount codes', () => {
   it('describes a referral for the welcome banner', () => {
     const { store } = rig({}, withCodes)
     expect(store.partners.referral('podcast')).toEqual({
-      partner: { id: 'orbit-show', name: 'The Orbit Show', email: 'host@example.com', welcome: 'Tune in.' },
+      partner: { id: 'orbit-show', name: 'The Orbit Show', welcome: 'Tune in.' },
       discount: { code: 'PODCAST', label: '10% off', percentOff: 10, amountOff: null },
     })
     expect(store.partners.referral('TENOFF')).toBeNull() // a code with no partner is not a referral

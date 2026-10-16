@@ -72,8 +72,10 @@ export function quantityLabel(t: QuantityDiscount): string {
  */
 export interface PartnerProfile {
   id: string
-  /** Shown to visitors: "Welcome, friend of <name>". */
+  /** The public name visitors know — a show, channel or brand: "Welcome, friend of <name>". */
   name: string
+  /** The person behind it, who signs in: "Welcome back, <first name>" on the dashboard and in the sign-in email. Defaults to `name`. */
+  contact?: string
   /** Where their portal sign-in link is sent. Without it they can only use a key link. */
   email?: string
   /** A line in their voice for the welcome banner, e.g. "Stack sats, solo mine, have fun." */

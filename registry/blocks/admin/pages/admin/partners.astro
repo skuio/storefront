@@ -28,7 +28,7 @@ const partners = await Promise.all(
       /* SESSION_SECRET missing: no private link */
     }
     const codes = config.discounts.filter((d) => d.partner === id)
-    return { id, name: s.partners.profile(id).name, email: s.partners.profile(id).email, report, traffic, key, codes }
+    return { id, name: s.partners.profile(id).name, contact: s.partners.profile(id).contact, email: s.partners.profile(id).email, report, traffic, key, codes }
   })
 )
 ---
@@ -43,7 +43,7 @@ const partners = await Promise.all(
         {partners.map((p) => (
           <li class="rounded-lg border border-rule p-5 text-sm" data-partner={p.id}>
             <div class="flex flex-wrap items-baseline justify-between gap-2">
-              <span class="text-base font-semibold text-ink">{p.name}</span>
+              <span class="text-base font-semibold text-ink">{p.name}{p.contact && <span class="font-normal text-body/70"> · {p.contact}</span>}</span>
               <span class="text-xs text-body/60">{p.codes.map((c) => `${c.code} · ${c.percentOff ? `${c.percentOff}% off` : ''} · ${c.commissionPercent ?? 0}% commission`).join(' / ')}</span>
             </div>
             <dl class="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">

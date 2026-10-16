@@ -117,7 +117,9 @@ export class PartnersService {
   referral(code: string | null | undefined): { partner: PartnerProfile; discount: PublicDiscount } | null {
     const d = findDiscount(this.ctx.config.discounts, code, new Date(this.ctx.now()))
     if (!d?.partner) return null
-    return { partner: this.profile(d.partner), discount: publicDiscount(d, this.ctx.config.currency, this.ctx.config.locale) }
+    // Public fields only: this feeds a page, and the email and contact are not the visitor's business.
+    const { id, name, welcome, avatar } = this.profile(d.partner)
+    return { partner: { id, name, ...(welcome ? { welcome } : {}), ...(avatar ? { avatar } : {}) }, discount: publicDiscount(d, this.ctx.config.currency, this.ctx.config.locale) }
   }
 
   // ── Traffic ─────────────────────────────────────────────────────────────
@@ -259,7 +261,7 @@ export class PartnersService {
       .bind(await this.tokenHash(token), partner.id, expiresAt, now)
       .run()
     const url = `${this.ctx.siteUrl}/partners/verify/?token=${token}`
-    const mail = partnerSignInMail({ url, name: partner.name, expiresMinutes: PARTNER_LINK_MINUTES }, { config: this.ctx.config, siteUrl: this.ctx.siteUrl })
+    const mail = partnerSignInMail({ url, name: (partner.contact ?? partner.name).split(/\s+/)[0]!, expiresMinutes: PARTNER_LINK_MINUTES }, { config: this.ctx.config, siteUrl: this.ctx.siteUrl })
     await this.ctx.mail.send({ to: partner.email, ...mail })
     return true
   }
