@@ -1,4 +1,5 @@
-import type { Order } from '../types'
+import type { Address, Order } from '../types'
+import type { Quote } from '../store/checkout'
 import { PaymentWebhookError, type PaymentAdapter, type PaymentContext, type PaymentEvent, type PaymentStart } from './index'
 
 export interface PayPalPaymentOptions {
@@ -186,6 +187,10 @@ export function paypalPayments(options: PayPalPaymentOptions): PaymentAdapter {
       const resource = event.resource ?? {}
       switch (event.event_type) {
         case 'CHECKOUT.ORDER.APPROVED': {
+          // An express order (paypalExpress) has no store order until the buyer's browser completes it,
+          // and that path captures. Capturing it here would take money with nothing to ship.
+          const units = (resource.purchase_units as { custom_id?: string }[] | undefined) ?? []
+          if (!units[0]?.custom_id) return [{ type: 'ignored', reason: `PayPal order ${String(resource.id)} is not linked to a store order` }]
           // The buyer approved but may have closed the tab before returning: capture here.
           const captured = await capture(String(resource.id))
           return eventsFromOrder(captured)
@@ -257,4 +262,172 @@ export function decimal(amount: number, currency: string): string {
 
 function minor(value: string, currency: string): number {
   return ZERO_DECIMAL.has(currency.toLowerCase()) ? Math.round(Number(value)) : Math.round(Number(value) * 100)
+}
+
+
+// ── Express checkout ────────────────────────────────────────────────────────────────────────
+//
+// The buyer starts with PayPal (or Venmo / Pay Later) before any store form: PayPal supplies
+// the shipping address and contact from their account, so there is nothing to type. The flow,
+// driven by PayPal's JS SDK buttons and three store routes:
+//
+//   1. create   — a PayPal order priced from the store's quote (items, code, default shipping),
+//                 with shipping_preference GET_FROM_FILE. No store order exists yet.
+//   2. reprice  — when the buyer picks or changes the address in PayPal's window, the store
+//                 re-quotes for that country and PATCHes the amount (or refuses the country).
+//   3. complete — after approval: read the buyer back, create the store order from it, link the
+//                 PayPal order to it (custom_id), capture, and mark the order paid.
+//
+// The store prices everything; PayPal never does. A PayPal order that is approved but never
+// completed is never captured (the webhook skips orders without a custom_id).
+
+export interface ExpressBuyer {
+  paypalOrderId: string
+  status: string
+  email: string
+  name: string | null
+  phone: string | null
+  shippingAddress: Address
+  /** What the buyer approved, minor units. */
+  amount: { amount: number; currency: string }
+}
+
+export interface PayPalExpress {
+  create(quote: Quote, opts: { brandName: string }): Promise<string>
+  reprice(paypalOrderId: string, quote: Quote): Promise<void>
+  buyer(paypalOrderId: string): Promise<ExpressBuyer>
+  attach(paypalOrderId: string, order: Order, invoicePrefix: string): Promise<void>
+  capture(paypalOrderId: string): Promise<PaymentEvent[]>
+}
+
+interface PayPalOrderDetail extends PayPalOrder {
+  payer?: { email_address?: string; name?: { given_name?: string; surname?: string }; phone?: { phone_number?: { national_number?: string } } }
+  purchase_units?: (NonNullable<PayPalOrder['purchase_units']>[number] & {
+    shipping?: { name?: { full_name?: string }; address?: { address_line_1?: string; address_line_2?: string; admin_area_2?: string; admin_area_1?: string; postal_code?: string; country_code?: string } }
+  })[]
+}
+
+export function paypalExpress(options: PayPalPaymentOptions): PayPalExpress {
+  const base = options.environment === 'live' ? 'https://api-m.paypal.com' : 'https://api-m.sandbox.paypal.com'
+  const http = options.fetch ?? fetch
+  let token: { value: string; expires: number } | null = null
+  async function accessToken(): Promise<string> {
+    if (token && token.expires > Date.now() + 60_000) return token.value
+    const res = await http(`${base}/v1/oauth2/token`, {
+      method: 'POST',
+      headers: { authorization: `Basic ${btoa(`${options.clientId}:${options.clientSecret}`)}`, 'content-type': 'application/x-www-form-urlencoded' },
+      body: 'grant_type=client_credentials',
+    })
+    if (!res.ok) throw new Error(`PayPal auth failed: ${res.status} ${await res.text()}`)
+    const body = (await res.json()) as { access_token: string; expires_in: number }
+    token = { value: body.access_token, expires: Date.now() + body.expires_in * 1000 }
+    return token.value
+  }
+  async function api<T>(method: string, path: string, body?: unknown, extraHeaders: Record<string, string> = {}): Promise<T> {
+    const res = await http(`${base}${path}`, {
+      method,
+      headers: { authorization: `Bearer ${await accessToken()}`, 'content-type': 'application/json', prefer: 'return=representation', ...extraHeaders },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    })
+    const text = await res.text()
+    if (!res.ok) throw new PayPalError(res.status, `PayPal ${method} ${path} failed: ${res.status} ${text}`, text)
+    return (text ? JSON.parse(text) : {}) as T
+  }
+  const path = (id: string) => `/v2/checkout/orders/${encodeURIComponent(id)}`
+  const unit = "/purchase_units/@reference_id=='default'"
+
+  return {
+    async create(quote, opts) {
+      const created = await api<PayPalOrder>('POST', '/v2/checkout/orders', {
+        intent: 'CAPTURE',
+        purchase_units: [{ reference_id: 'default', amount: expressAmount(quote), items: expressItems(quote) }],
+        payment_source: {
+          paypal: {
+            experience_context: {
+              brand_name: opts.brandName.slice(0, 127),
+              // PayPal supplies the address from the buyer's account — the whole point of express.
+              shipping_preference: 'GET_FROM_FILE',
+              user_action: 'PAY_NOW',
+            },
+          },
+        },
+      })
+      return created.id
+    },
+
+    async reprice(paypalOrderId, quote) {
+      await api('PATCH', path(paypalOrderId), [
+        { op: 'replace', path: `${unit}/amount`, value: expressAmount(quote) },
+        { op: 'replace', path: `${unit}/items`, value: expressItems(quote) },
+      ])
+    },
+
+    async buyer(paypalOrderId) {
+      const o = await api<PayPalOrderDetail>('GET', path(paypalOrderId))
+      const u = o.purchase_units?.[0]
+      const a = u?.shipping?.address ?? {}
+      const given = [o.payer?.name?.given_name, o.payer?.name?.surname].filter(Boolean).join(' ') || null
+      const currency = (u?.amount?.currency_code ?? 'USD').toLowerCase()
+      return {
+        paypalOrderId: o.id,
+        status: o.status,
+        email: o.payer?.email_address ?? '',
+        name: given,
+        phone: o.payer?.phone?.phone_number?.national_number ?? null,
+        shippingAddress: {
+          name: u?.shipping?.name?.full_name ?? given ?? undefined,
+          line1: a.address_line_1,
+          line2: a.address_line_2,
+          city: a.admin_area_2,
+          state: a.admin_area_1,
+          postalCode: a.postal_code,
+          country: a.country_code,
+        },
+        amount: { amount: minor(u?.amount?.value ?? '0', currency), currency },
+      }
+    },
+
+    async attach(paypalOrderId, order, invoicePrefix) {
+      await api('PATCH', path(paypalOrderId), [
+        { op: 'add', path: `${unit}/custom_id`, value: order.id },
+        { op: 'add', path: `${unit}/invoice_id`, value: `${invoicePrefix}${order.number}-${order.id.slice(-6)}` },
+      ])
+    },
+
+    async capture(paypalOrderId) {
+      let captured: PayPalOrder
+      try {
+        captured = await api<PayPalOrder>('POST', `${path(paypalOrderId)}/capture`, {}, { 'paypal-request-id': `capture-${paypalOrderId}` })
+      } catch (e) {
+        if (e instanceof PayPalError && e.status === 422 && e.body.includes('ORDER_ALREADY_CAPTURED')) captured = await api<PayPalOrder>('GET', path(paypalOrderId))
+        else throw e
+      }
+      return eventsFromOrder(captured)
+    },
+  }
+}
+
+function expressAmount(q: Quote) {
+  const c = q.currency.toUpperCase()
+  const v = (n: number) => decimal(n, q.currency)
+  return {
+    currency_code: c,
+    value: v(q.total),
+    breakdown: {
+      item_total: { currency_code: c, value: v(q.subtotal) },
+      shipping: { currency_code: c, value: v(q.shipping) },
+      ...(q.discount ? { discount: { currency_code: c, value: v(q.discount) } } : {}),
+    },
+  }
+}
+
+function expressItems(q: Quote) {
+  const c = q.currency.toUpperCase()
+  return q.lines.map((l) => ({
+    name: l.name.slice(0, 127),
+    sku: l.sku.slice(0, 127),
+    quantity: String(l.quantity),
+    unit_amount: { currency_code: c, value: decimal(l.unitAmount, q.currency) },
+    category: 'PHYSICAL_GOODS',
+  }))
 }

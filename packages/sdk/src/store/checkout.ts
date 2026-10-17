@@ -30,6 +30,11 @@ export interface CheckoutInput {
   discountCode?: string | null
   notes?: string | null
   metadata?: Record<string, string>
+  /**
+   * The contact and address came from a wallet (PayPal express): the buyer typed nothing, so a phone
+   * the store would normally require is optional — wallets share one only if the buyer allows it.
+   */
+  walletContact?: boolean
 }
 
 export interface PricedLine {
@@ -132,6 +137,14 @@ export class CheckoutService {
     }
   }
 
+  /**
+   * Price items for a destination using its first shipping option, for flows where the buyer never
+   * picks one (express checkout: the address arrives from PayPal). Same rules and errors as quote().
+   */
+  async quoteDefault(items: CheckoutItem[], country: string, discountCode?: string | null): Promise<Quote> {
+    return this.quote(items, country, this.optionsForCountry(country)[0]?.id ?? '', discountCode)
+  }
+
   /** Create a pending order the payment adapter can take from here. */
   async createOrder(input: CheckoutInput): Promise<Order> {
     const details: Record<string, string> = {}
@@ -144,7 +157,7 @@ export class CheckoutService {
     if (!shipTo.country || shipTo.country.length !== 2) details['shipping_address.country'] = 'is required'
     else shipTo.country = shipTo.country.toUpperCase()
     if (shipTo.country) Object.assign(details, checkAddressFormat(shipTo))
-    if (this.ctx.config.checkout.collectPhone && !input.phone?.trim()) details.phone = 'is required'
+    if (this.ctx.config.checkout.collectPhone && !input.walletContact && !input.phone?.trim()) details.phone = 'is required'
     let quote: Quote | null = null
     try {
       quote = await this.quote(input.items, shipTo.country ?? '', input.shippingOptionId, input.discountCode)

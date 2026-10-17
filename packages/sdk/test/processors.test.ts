@@ -3,7 +3,7 @@ import Stripe from 'stripe'
 import { defineStorefront, flatRate, freeShipping } from '../src'
 import { applyPaymentEvents, PaymentWebhookError } from '../src/payments'
 import { btcpayPayments, validSignature } from '../src/payments/btcpay'
-import { decimal, paypalPayments } from '../src/payments/paypal'
+import { decimal, paypalExpress, paypalPayments } from '../src/payments/paypal'
 import { stripePayments } from '../src/payments/stripe'
 import { placeOrder, rig, seed } from './helpers'
 
@@ -100,11 +100,70 @@ describe('paypal adapter', () => {
       new Request('https://store.test/api/payments/webhook?provider=paypal', {
         method: 'POST',
         headers: { 'paypal-transmission-id': 't', 'paypal-transmission-sig': 'sig', 'paypal-transmission-time': 'now', 'paypal-cert-url': 'u', 'paypal-auth-algo': 'SHA256withRSA' },
-        body: JSON.stringify({ event_type: 'CHECKOUT.ORDER.APPROVED', resource: { id: 'PP9' } }),
+        body: JSON.stringify({ event_type: 'CHECKOUT.ORDER.APPROVED', resource: { id: 'PP9', purchase_units: [{ custom_id: order.id }] } }),
       })
     await expect(adapter.handleWebhook(req(), { store, siteUrl: '' })).rejects.toBeInstanceOf(PaymentWebhookError)
     verdict = 'SUCCESS'
     expect(await adapter.handleWebhook(req(), { store, siteUrl: '' })).toMatchObject([{ type: 'paid', orderId: order.id, reference: 'CAP9' }])
+  })
+
+  it('never captures an approved express order that no store order owns yet', async () => {
+    const { store } = await discountedOrder()
+    const { fetch, calls } = fakeFetch({
+      ...token,
+      'POST https://api-m.sandbox.paypal.com/v1/notifications/verify-webhook-signature': () => ({ body: { verification_status: 'SUCCESS' } }),
+    })
+    const adapter = paypalPayments({ clientId: 'c', clientSecret: 's', webhookId: 'W', fetch })
+    const req = new Request('https://store.test/api/payments/webhook?provider=paypal', {
+      method: 'POST',
+      headers: { 'paypal-transmission-id': 't', 'paypal-transmission-sig': 'sig' },
+      body: JSON.stringify({ event_type: 'CHECKOUT.ORDER.APPROVED', resource: { id: 'PPX', purchase_units: [{ reference_id: 'default' }] } }),
+    })
+    expect(await adapter.handleWebhook(req, { store, siteUrl: '' })).toMatchObject([{ type: 'ignored' }])
+    expect(calls.some((c) => c.url.endsWith('/capture'))).toBe(false)
+  })
+
+  it('express: prices from the store quote, reprices by country, reads the buyer, links and captures', async () => {
+    const { store } = await discountedOrder()
+    const { fetch, calls } = fakeFetch({
+      ...token,
+      'POST https://api-m.sandbox.paypal.com/v2/checkout/orders/PPE/capture': () => ({
+        body: { id: 'PPE', status: 'COMPLETED', purchase_units: [{ custom_id: 'ORD', payments: { captures: [{ id: 'CAPE', status: 'COMPLETED', custom_id: 'ORD', amount: { currency_code: 'USD', value: '1029.10' } }] } }] },
+      }),
+      'POST https://api-m.sandbox.paypal.com/v2/checkout/orders': () => ({ body: { id: 'PPE', status: 'CREATED' } }),
+      'PATCH https://api-m.sandbox.paypal.com/v2/checkout/orders/PPE': () => ({ body: '' }),
+      'GET https://api-m.sandbox.paypal.com/v2/checkout/orders/PPE': () => ({
+        body: {
+          id: 'PPE',
+          status: 'APPROVED',
+          payer: { email_address: 'buyer@example.com', name: { given_name: 'Ada', surname: 'Lovelace' } },
+          purchase_units: [{ amount: { currency_code: 'USD', value: '1029.10' }, shipping: { name: { full_name: 'Ada Lovelace' }, address: { address_line_1: '1 Way', admin_area_2: 'Toronto', admin_area_1: 'ON', postal_code: 'M5V 2T6', country_code: 'CA' } } }],
+        },
+      }),
+    })
+    const x = paypalExpress({ clientId: 'c', clientSecret: 's', webhookId: 'W', fetch })
+    const items = [{ sku: 'VDCTOYTAC9504', quantity: 1 }]
+    const us = await store.checkout.quoteDefault(items, 'US', 'podcast')
+    expect(await x.create(us, { brandName: 'Test Store' })).toBe('PPE')
+    const created = calls.find((c) => c.method === 'POST' && c.url.endsWith('/v2/checkout/orders'))!.body as any
+    expect(created.purchase_units[0].custom_id).toBeUndefined() // unlinked until a store order exists
+    expect(created.payment_source.paypal.experience_context.shipping_preference).toBe('GET_FROM_FILE')
+    expect(created.purchase_units[0].amount).toMatchObject({ value: '989.10', breakdown: { item_total: { value: '1099.00' }, discount: { value: '109.90' }, shipping: { value: '0.00' } } })
+
+    const ca = await store.checkout.quoteDefault(items, 'CA', 'podcast')
+    await x.reprice('PPE', ca)
+    const patch = calls.filter((c) => c.method === 'PATCH').at(-1)!.body as any
+    expect(JSON.parse(patch as string)[0].value).toMatchObject({ value: '1029.10', breakdown: { shipping: { value: '40.00' } } })
+
+    const buyer = await x.buyer('PPE')
+    expect(buyer).toMatchObject({ email: 'buyer@example.com', name: 'Ada Lovelace', shippingAddress: { line1: '1 Way', city: 'Toronto', state: 'ON', country: 'CA' }, amount: { amount: 102910 } })
+
+    const order = await store.checkout.createOrder({ items, email: buyer.email, name: buyer.name, shippingAddress: buyer.shippingAddress, shippingOptionId: ca.option.id, discountCode: 'podcast', walletContact: true })
+    expect(order.total.amount).toBe(buyer.amount.amount)
+    await x.attach('PPE', order, 'T-')
+    const link = JSON.parse(calls.filter((c) => c.method === 'PATCH').at(-1)!.body as string)
+    expect(link[0]).toMatchObject({ op: 'add', value: order.id })
+    expect(await x.capture('PPE')).toMatchObject([{ type: 'paid', reference: 'CAPE' }])
   })
 
   it('formats amounts in major units', () => {
