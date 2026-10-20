@@ -19,6 +19,7 @@
     "seed": "node scripts/seed-store.mjs --local",
     "seed:sqlite": "node scripts/seed-store.mjs --sqlite",
     "seed:remote": "node scripts/seed-store.mjs --remote",
+    "backup": "node scripts/backup.mjs",
     "owner:create": "node scripts/owner-create.mjs --remote",
     "owner:create:local": "node scripts/owner-create.mjs --local",
     "owner:create:sqlite": "node scripts/owner-create.mjs --sqlite",

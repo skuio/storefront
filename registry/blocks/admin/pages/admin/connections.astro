@@ -25,7 +25,7 @@ const ordered = [...connections].sort((a, b) => Number(!!a.revokedAt) - Number(!
     ordered.length === 0 ? (
       <div class="mt-8 rounded-md border border-rule bg-panel p-4 text-sm">
         <p class="font-semibold text-ink">No connections yet.</p>
-        <p class="mt-1 text-body/80">Start from SKU.io: Integrations → Storefront → Connect. You will be asked to approve the request here.</p>
+        <p class="mt-1 text-body/80">Start from your operations system — in SKU.io: Integrations → Storefront → Connect. You will be asked to approve the request here. Any other system connects the same way (see the kit's docs/store-api.md).</p>
       </div>
     ) : (
       <ul class="mt-8 space-y-4">

@@ -102,16 +102,72 @@ run a shop that has no operations system yet and to see that orders are flowing.
 Real operations live in the ERP, and the ERP pushes the results back into the
 store.
 
-## Other operations systems
+## Portability: your ERP, your host, your data
 
-Nothing in the store is specific to SKU.io except names. The Store API is a
-versioned, documented contract (`docs/store-api.md`, OpenAPI in `docs/api/`),
-and the store treats every client the same: a connection with its own key that
-the owner can revoke. Any ERP or OMS that can poll orders over HTTP and push
-stock and shipments back can connect today, using the connect flow or a key
-issued by the owner. Two things are SKU.io-flavoured and would be renamed or
-aliased for a neutral release: the route prefix `/api/skuio/v1`, and the
-"Start from SKU.io" wording on the empty connections page.
+A store built on the kit is not locked to SKU.io, to a host, or to the kit.
+
+**Any ERP or OMS.** The store talks to operations systems only through the
+Store API, a versioned contract (`docs/store-api.md`, OpenAPI in `docs/api/`)
+served at `/api/store/v1` (and at `/api/skuio/v1`, the same API at the path
+SKU.io calls). SKU.io is one client of it, with no private hooks. Another
+system needs a connector that does five things:
+
+| Step | Call |
+|---|---|
+| Read new orders | `GET /orders?updated_since=…` |
+| Write its own order number back | `PATCH /orders/{id}` with `external_reference` |
+| Send shipments and tracking (the store emails the buyer) | `POST /orders/{id}/fulfillments` |
+| Send stock levels | `PUT /inventory` |
+| Optionally own the catalogue | `PUT /products`, `PUT /categories` |
+
+Against any ERP with a usable API (NetSuite, Odoo, Cin7, QuickBooks Commerce…)
+that is days of work, not weeks, and an integration platform such as n8n can do
+it without code. The owner approves each system once at `/admin/connect` (any
+`client_id`; SKU.io's is `skuio`), and each gets its own revocable key, so an old
+and a new ERP can run side by side during a switch.
+
+**Any host.** Cloudflare Workers + D1 or any Node server with SQLite (see
+"How a store works" above); moving between them is copying the database.
+
+**Your data.** The store's database is plain SQLite: catalogue, customers,
+orders, payments, fulfilments, discount codes, partners. `wrangler d1 export
+<db> --remote --output store.sql` (or copying the SQLite file on Node) gives a
+complete dump any system can import, and the Store API can read every order and
+product for a live migration.
+
+## Backups: set one up for every live store
+
+The store's database is the system of record for its orders and customers
+(the operations system keeps a copy of orders, not of sessions, partners or
+store settings). **The kit does not back it up for you**, and nothing should go
+live without a backup you have restored at least once.
+
+What exists by default:
+
+- **Cloudflare D1** keeps Time Travel: restore the database to any minute in
+  the last 30 days (Workers Paid; 7 days on Free) with
+  `wrangler d1 time-travel restore <db> --timestamp=…`. It covers a bad deploy or
+  deleted rows. It does **not** cover deleting the database, losing the account,
+  or anything older than the window, and it is not a copy outside Cloudflare.
+- **A Node host** has nothing: the SQLite file is the only copy.
+
+Suggestions, cheapest first:
+
+1. **Nightly export to object storage you control.** `npm run backup` (the
+   template's `scripts/backup.mjs`) writes a gzipped SQL dump — `wrangler d1
+   export` on Cloudflare, SQLite's online backup on Node — and uploads it to
+   `BACKUP_S3_URI` (any S3-compatible store: AWS S3, Cloudflare R2, Backblaze B2,
+   Wasabi) with the `aws` CLI. Run it from cron, a scheduled GitHub Action or an
+   existing backup server. Give it write-only credentials and let a bucket
+   lifecycle rule expire old dumps (30–90 days).
+2. **Continuous replication on Node.** Litestream streams every SQLite change
+   to S3, so a lost server loses seconds, not a day.
+3. **Restore drills.** A backup is only real once it has been restored: load the
+   latest dump into a scratch database (`wrangler d1 execute <scratch> --file`,
+   or `sqlite3 scratch.db < dump.sql`) and check the order count against the
+   live store's `GET /health`.
+4. **Alert on silence.** Have the job report success somewhere you watch, and
+   alert when no fresh dump has landed in 26 hours.
 
 ## What's in here
 
@@ -175,8 +231,16 @@ stay underneath.
 - The buy form and the cart carry **SKUs and quantities, and no price**.
   `/api/checkout` prices every line from the database.
 - Card data never touches the store: the processor's hosted page collects it.
-- The Store API is a bearer secret (`STORE_API_KEY`) compared in constant time;
-  the order's buyer-facing access key never leaves the store.
+- **The Store API cannot create orders.** Orders come only from the store's own
+  checkout, priced from its database. The API reads orders, stamps a reference,
+  records a payment or cancellation and adds shipments; a leaked key cannot
+  invent a sale or change what was bought.
+- Each connection's key is limited to the scopes the owner approved (orders,
+  payments, fulfillments, inventory, catalog), enforced per endpoint; marking an
+  order paid needs `payments`, approved separately; keys are stored only
+  as hashes and can be revoked at `/admin/connections`. The `STORE_API_KEY`
+  break-glass secret is compared in constant time; the order's buyer-facing
+  access key never leaves the store.
 - Sessions and magic links are stored as HMAC hashes (`SESSION_SECRET`).
 - Secrets are platform secrets (Worker secrets, or the process environment on
   Node), read through `readEnv`; nothing is committed.

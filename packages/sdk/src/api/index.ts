@@ -1,5 +1,5 @@
 import type { Connection, Store } from '../store'
-import { API_KEY_PREFIX } from '../store/connections'
+import { API_KEY_PREFIX, type ConnectScope } from '../store/connections'
 import { secretsEqual } from '../store/crypto'
 import { StoreError } from '../store/errors'
 import { serializeCategory, serializeFulfillment, serializeOrder, serializeProduct } from './serialize'
@@ -22,6 +22,13 @@ export interface StoreApiOptions {
 /** Who a request authenticated as: the environment key, or an approved connection. */
 export type ApiCaller = { kind: 'env' } | { kind: 'connection'; connection: Connection }
 
+/**
+ * Where the Store API is served. `/api/store/v1` is the neutral path for any
+ * operations system; `/api/skuio/v1` is the original path SKU.io's Storefront
+ * integration calls, kept for good. Same handler, same keys, same responses.
+ */
+export const STORE_API_BASES = ['/api/store/v1', '/api/skuio/v1'] as const
+/** @deprecated The SKU.io path; use STORE_API_BASES. */
 export const STORE_API_BASE = '/api/skuio/v1'
 
 const json = (body: unknown, status = 200, headers: Record<string, string> = {}) =>
@@ -32,13 +39,15 @@ const error = (status: number, code: string, message: string, details: Record<st
 
 /**
  * The Store API (`docs/store-api.md`) as one fetch-style handler. Mount it on
- * a catch-all route under `/api/skuio/v1` and hand it every method.
+ * a catch-all route under `/api/store/v1` (and `/api/skuio/v1`, the path SKU.io
+ * calls) and hand it every method.
  */
 export async function handleStoreApi(request: Request, options: StoreApiOptions): Promise<Response> {
-  const base = (options.basePath ?? STORE_API_BASE).replace(/\/+$/, '')
   const url = new URL(request.url)
+  const bases = options.basePath ? [options.basePath] : [...STORE_API_BASES]
+  const base = bases.map((b) => b.replace(/\/+$/, '')).find((b) => url.pathname.includes(b))
+  if (!base) return error(404, 'not_found', 'No such endpoint')
   const at = url.pathname.indexOf(base)
-  if (at < 0) return error(404, 'not_found', 'No such endpoint')
   const path = url.pathname.slice(at + base.length).replace(/\/+$/, '') || '/'
   const method = request.method.toUpperCase()
 
@@ -51,6 +60,12 @@ export async function handleStoreApi(request: Request, options: StoreApiOptions)
 
     const caller = await authorized(request, options.apiKey, options.store)
     if (!caller) return error(401, 'unauthorized', 'A valid bearer key is required: a connection key issued through /admin/connect, or the STORE_API_KEY secret')
+
+    // A connection may use only what the owner approved; the STORE_API_KEY secret may use everything.
+    const scope = scopeFor(path)
+    if (scope && caller.kind === 'connection' && !caller.connection.scopes.includes(scope)) {
+      return error(403, 'forbidden', `This connection was not approved for "${scope}"; reconnect and approve it at /admin/connect`)
+    }
 
     return await route(method, path, url, request, options.store, caller)
   } catch (e) {
@@ -106,6 +121,19 @@ async function readJson(request: Request): Promise<Record<string, unknown>> {
   return parsed as Record<string, unknown>
 }
 
+/**
+ * The scope an endpoint needs. There is deliberately no endpoint that creates
+ * an order: orders come only from the store's own checkout, priced from its
+ * database, so a leaked key cannot invent sales.
+ */
+function scopeFor(path: string): ConnectScope | null {
+  const first = path.split('/').filter(Boolean)[0]
+  if (first === 'orders') return /^\/orders\/[^/]+\/fulfillments$/.test(path) ? 'fulfillments' : 'orders'
+  if (first === 'inventory') return 'inventory'
+  if (first === 'products' || first === 'categories') return 'catalog'
+  return null // /health, /connect
+}
+
 async function route(method: string, path: string, url: URL, request: Request, store: Store, caller: ApiCaller): Promise<Response> {
   const segments = path.split('/').filter(Boolean)
 
@@ -142,6 +170,11 @@ async function route(method: string, path: string, url: URL, request: Request, s
       if (method === 'GET') return json({ data: serializeOrder(await store.orders.require(id), store.config.orders.numberPrefix) })
       if (method === 'PATCH') {
         const patch = validateOrderPatch(await readJson(request))
+        // Recording a payment is its own scope: a key that may read and stamp orders cannot
+        // turn an unpaid order into a paid one unless the owner approved that too.
+        if (patch.payment && caller.kind === 'connection' && !caller.connection.scopes.includes('payments')) {
+          return error(403, 'forbidden', 'This connection was not approved for "payments"; reconnect and approve it at /admin/connect')
+        }
         let order = await store.orders.require(id)
         if (patch.external_reference !== undefined) order = await store.orders.setExternalReference(id, patch.external_reference)
         if (patch.payment) order = await store.orders.setPaymentStatus(id, patch.payment)

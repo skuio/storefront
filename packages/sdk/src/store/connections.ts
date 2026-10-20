@@ -5,12 +5,27 @@ import { RateLimiter } from './ratelimit'
 
 export const CONNECT_CODE_MINUTES = 10
 export const API_KEY_PREFIX = 'sk_store_'
-export const CONNECT_CLIENT_IDS = ['skuio'] as const
-export const CONNECT_SCOPES = ['orders', 'fulfillments', 'inventory', 'catalog'] as const
+/**
+ * Operations systems the store can name on its approval screen. Any other
+ * client id may connect too — an ERP, an OMS, a script — because nothing is
+ * granted until the owner approves the request in /admin/connect, which shows
+ * the client, the account and the exact host the browser returns to.
+ */
+export const KNOWN_CONNECT_CLIENTS: Readonly<Record<string, string>> = { skuio: 'SKU.io' }
+/** @deprecated Every well-formed client id is accepted; see KNOWN_CONNECT_CLIENTS. */
+export const CONNECT_CLIENT_IDS = Object.keys(KNOWN_CONNECT_CLIENTS) as readonly string[]
+const CLIENT_ID = /^[a-z0-9][a-z0-9._-]{1,62}$/
+
+/** The display name for a client id: a known system's name, else the id itself. */
+export function connectClientName(clientId: string): string {
+  return KNOWN_CONNECT_CLIENTS[clientId] ?? clientId
+}
+export const CONNECT_SCOPES = ['orders', 'payments', 'fulfillments', 'inventory', 'catalog'] as const
 export type ConnectScope = (typeof CONNECT_SCOPES)[number]
 
 export const SCOPE_DESCRIPTIONS: Record<ConnectScope, string> = {
-  orders: 'Read orders, record payments and cancellations',
+  orders: 'Read orders, stamp its own order number on them and cancel them',
+  payments: 'Mark orders paid, refunded or failed (for payments taken outside this store)',
   fulfillments: 'Push shipments and tracking to orders',
   inventory: 'Update available stock',
   catalog: 'Read and update products and categories',
@@ -41,6 +56,8 @@ export interface AuthorizeParams {
 /** A validated connect request, ready to show the owner. */
 export interface AuthorizeRequest {
   clientId: string
+  /** Display name: "SKU.io" for skuio, else the client id. */
+  clientName: string
   redirectUri: string
   redirectHost: string
   state: string
@@ -105,7 +122,7 @@ export class ConnectionsService {
   validateAuthorize(params: AuthorizeParams): AuthorizeRequest {
     const details: Record<string, string> = {}
     const clientId = (params.client_id ?? '').trim()
-    if (!(CONNECT_CLIENT_IDS as readonly string[]).includes(clientId)) details.client_id = 'is not a known consumer'
+    if (!CLIENT_ID.test(clientId)) details.client_id = 'must be 2-63 lowercase letters, digits, dots, dashes or underscores'
     const state = (params.state ?? '').trim()
     if (!state) details.state = 'is required'
     else if (state.length > 1024) details.state = 'must be at most 1024 characters'
@@ -136,7 +153,7 @@ export class ConnectionsService {
     else if (unknown.length) details.scope = `unknown scope: ${unknown.join(', ')}`
 
     if (Object.keys(details).length) throw new StoreError('validation_failed', 'Invalid connect request', details)
-    return { clientId, redirectUri: redirect!.href, redirectHost: redirect!.host, state, tenant, scopes: scopes as ConnectScope[] }
+    return { clientId, clientName: connectClientName(clientId), redirectUri: redirect!.href, redirectHost: redirect!.host, state, tenant, scopes: scopes as ConnectScope[] }
   }
 
   /** The owner said yes: create the connection and a one-time code. Returns the URL to send the browser to. */
@@ -145,7 +162,7 @@ export class ConnectionsService {
     const id = newId('con')
     const code = randomToken(32)
     const expiresAt = new Date(new Date(now).getTime() + CONNECT_CODE_MINUTES * 60_000).toISOString()
-    const name = `${request.tenant} on SKU.io`
+    const name = `${request.tenant} on ${request.clientName}`
     await this.ctx.db.batch([
       this.ctx.db
         .prepare(`INSERT INTO connections (id, name, tenant, redirect_host, scopes_json, created_by_owner_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`)

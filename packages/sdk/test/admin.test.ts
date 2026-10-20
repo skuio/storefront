@@ -159,7 +159,8 @@ describe('connect: authorize', () => {
     expect(v({ redirect_uri: 'not a url' })).toMatchObject({ redirect_uri: 'must be an absolute URL' })
     expect(v({ redirect_uri: 'http://localhost:8000/cb' })).toBeNull()
     expect(v({ redirect_uri: 'http://acme.sku.test/cb' })).toBeNull()
-    expect(v({ client_id: 'someone-else' })).toMatchObject({ client_id: 'is not a known consumer' })
+    expect(v({ client_id: 'Not An Id!' })).toMatchObject({ client_id: expect.stringContaining('lowercase') })
+    expect(v({ client_id: 'netsuite' })).toBeNull() // any operations system the owner approves
     expect(v({ scope: 'orders,launch_codes' })).toMatchObject({ scope: 'unknown scope: launch_codes' })
     expect(v({ scope: '' })).toMatchObject({ scope: 'is required' })
     expect(v({ state: '' })).toMatchObject({ state: 'is required' })
@@ -298,5 +299,111 @@ describe('connect: token exchange and keys', () => {
     await store.connections.prune()
     const row = await store.db.prepare(`SELECT COUNT(*) AS n FROM connections`).first<{ n: number }>()
     expect(row?.n).toBe(0)
+  })
+})
+
+describe('any operations system, on the neutral path', () => {
+  const at = (store: Store, base: string) => async (method: string, path: string, body?: unknown, key: string | null = null) => {
+    const h: Record<string, string> = {}
+    if (key !== null) h.authorization = `Bearer ${key}`
+    if (body !== undefined) h['content-type'] = 'application/json'
+    const response = await handleStoreApi(new Request(`https://store.test${base}${path}`, { method, headers: h, body: body === undefined ? undefined : JSON.stringify(body) }), { store, apiKey: ENV_KEY })
+    const text = await response.text()
+    return { status: response.status, body: text ? JSON.parse(text) : null }
+  }
+
+  it('connects a non-SKU.io client through /api/store/v1, and its key works on both paths', async () => {
+    const { store } = rig()
+    await seed(store)
+    await placeOrder(store)
+    const me = await owner(store)
+    const request = store.connections.validateAuthorize({ ...REQUEST, client_id: 'netsuite', tenant: 'Acme Corp', redirect_uri: 'https://erp.example.com/cb' })
+    expect(request).toMatchObject({ clientId: 'netsuite', clientName: 'netsuite' })
+    const approved = await store.connections.approve(request, me.id)
+    expect(approved.connection.name).toBe('Acme Corp on netsuite')
+    const code = new URL(approved.redirectTo).searchParams.get('code')!
+
+    const neutral = at(store, '/api/store/v1')
+    const exchanged = await neutral('POST', '/connect/token', { code, redirect_uri: 'https://erp.example.com/cb' })
+    expect(exchanged.status).toBe(201)
+    const key = exchanged.body.data.api_key as string
+    expect((await neutral('GET', '/orders', undefined, key)).body.data).toHaveLength(1)
+    expect((await at(store, '/api/skuio/v1')('GET', '/orders', undefined, key)).status).toBe(200)
+    expect((await neutral('GET', '/orders')).status).toBe(401)
+    expect((await at(store, '/api/elsewhere/v1')('GET', '/orders', undefined, key)).status).toBe(404)
+  })
+
+  it('enforces the approved scopes per endpoint, and no key can create an order', async () => {
+    const { store } = rig()
+    await seed(store)
+    await placeOrder(store)
+    const me = await owner(store)
+    const request = store.connections.validateAuthorize({ ...REQUEST, client_id: 'reporting', scope: 'orders', redirect_uri: 'https://erp.example.com/cb' })
+    const code = new URL((await store.connections.approve(request, me.id)).redirectTo).searchParams.get('code')!
+    const neutral = at(store, '/api/store/v1')
+    const key = (await neutral('POST', '/connect/token', { code, redirect_uri: 'https://erp.example.com/cb' })).body.data.api_key as string
+
+    expect((await neutral('GET', '/orders', undefined, key)).status).toBe(200)
+    expect((await neutral('GET', '/health', undefined, key)).status).toBe(200)
+    for (const [method, path, body] of [
+      ['PUT', '/products', [{ sku: 'X', name: 'X', price: { amount: 1, currency: 'usd' } }]],
+      ['GET', '/products', undefined],
+      ['PUT', '/inventory', [{ sku: 'X', available: 1 }]],
+      ['POST', '/orders/whatever/fulfillments', { lines: [] }],
+    ] as const) {
+      const res = await neutral(method, path, body, key)
+      expect(res.status, `${method} ${path}`).toBe(403)
+      expect(res.body.error.code).toBe('forbidden')
+    }
+
+    // Not even the unscoped STORE_API_KEY secret can create an order.
+    const before = (await neutral('GET', '/orders', undefined, ENV_KEY)).body.data.length
+    for (const method of ['POST', 'PUT']) {
+      const res = await neutral(method, '/orders', { items: [{ sku: 'ANY', quantity: 1 }], email: 'x@example.com' }, ENV_KEY)
+      expect(res.status, method).toBe(404)
+    }
+    expect((await neutral('GET', '/orders', undefined, ENV_KEY)).body.data.length).toBe(before)
+  })
+
+  it('marking an order paid needs the payments scope; stamping and reading do not', async () => {
+    const { store, db } = rig()
+    await seed(store)
+    const order = await placeOrder(store)
+    const me = await owner(store)
+    const neutral = at(store, '/api/store/v1')
+    const keyFor = async (scope: string) => {
+      const request = store.connections.validateAuthorize({ ...REQUEST, scope })
+      const code = new URL((await store.connections.approve(request, me.id)).redirectTo).searchParams.get('code')!
+      return (await neutral('POST', '/connect/token', { code, redirect_uri: REQUEST.redirect_uri })).body.data.api_key as string
+    }
+    const paid = { payment: { status: 'paid', provider: 'manual', reference: 'r-1' } }
+
+    // SKU.io's request before the payments scope existed: four scopes.
+    const legacy = await keyFor('orders,fulfillments,inventory,catalog')
+    expect((await neutral('PATCH', `/orders/${order.id}`, { external_reference: 'SO-1' }, legacy)).status).toBe(200)
+    const refused = await neutral('PATCH', `/orders/${order.id}`, paid, legacy)
+    expect(refused.status).toBe(403)
+    expect(refused.body.error.message).toContain('payments')
+    expect((await neutral('GET', `/orders/${order.id}`, undefined, legacy)).body.data.payment.status).not.toBe('paid')
+
+    // Connections approved before the scope existed are upgraded by migration 0007: their
+    // owner approved "record payments" as part of `orders`.
+    const { readFileSync } = await import('node:fs')
+    db.raw.exec(readFileSync(new URL('../db/migrations/0007_payments_scope.sql', import.meta.url), 'utf8'))
+    expect((await neutral('PATCH', `/orders/${order.id}`, paid, legacy)).status).toBe(200)
+
+    // A connection without `orders` gains nothing from the migration.
+    const stockOnly = await keyFor('inventory')
+    db.raw.exec(readFileSync(new URL('../db/migrations/0007_payments_scope.sql', import.meta.url), 'utf8'))
+    expect((await neutral('GET', '/connect', undefined, stockOnly)).body.data.scopes).toEqual(['inventory'])
+
+    // New connections ask for it explicitly.
+    const withPayments = await keyFor('orders,payments')
+    expect((await neutral('PATCH', `/orders/${order.id}`, { payment: { status: 'refunded', provider: 'manual', reference: 'r-1' } }, withPayments)).status).toBe(200)
+  })
+
+  it('still names SKU.io for its own client id', async () => {
+    const { store } = rig()
+    expect(store.connections.validateAuthorize(REQUEST)).toMatchObject({ clientId: 'skuio', clientName: 'SKU.io' })
   })
 })
