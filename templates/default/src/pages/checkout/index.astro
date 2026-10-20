@@ -188,7 +188,7 @@ const labelClass = 'block text-xs font-semibold tracking-wide text-ink uppercase
         </section>
 
         <div>
-          <button type="submit" class="w-full rounded-md bg-accent px-8 py-3.5 text-sm font-bold tracking-wide text-white uppercase transition hover:bg-accent-dark disabled:opacity-60" data-submit>
+          <button type="submit" class="w-full rounded-md bg-accent px-8 py-3.5 text-sm font-bold tracking-wide text-on-accent uppercase transition hover:bg-accent-dark disabled:opacity-60" data-submit>
             <span data-submit-label>Continue to payment</span>
           </button>
           <p class="mt-3 hidden rounded-md border border-accent/30 bg-accent/5 px-3 py-2 text-xs text-accent" role="alert" data-form-error></p>
@@ -196,12 +196,12 @@ const labelClass = 'block text-xs font-semibold tracking-wide text-ink uppercase
         </div>
       </form>
 
-      <aside class="h-fit rounded-lg border border-rule bg-[#fafafa] p-5 lg:sticky lg:top-24" data-summary>
+      <aside class="order-first h-fit rounded-lg border border-rule bg-panel p-5 lg:order-none lg:sticky lg:top-24" data-summary>
         <h2 class="text-sm font-bold tracking-wide text-ink uppercase">Your order</h2>
         <ul class="mt-4 divide-y divide-rule" data-summary-lines>
           {directLine && (
             <li class="flex items-center gap-3 py-3 text-sm">
-              {directLine.image ? <img src={directLine.image} alt="" width="56" height="42" class="h-[42px] w-14 shrink-0 rounded border border-rule bg-white object-contain" /> : <span class="h-[42px] w-14 shrink-0 rounded border border-rule" />}
+              {directLine.image ? <img src={directLine.image} alt="" width="56" height="42" class="h-[42px] w-14 shrink-0 rounded border border-rule bg-panel-2 object-contain" /> : <span class="h-[42px] w-14 shrink-0 rounded border border-rule" />}
               <span class="min-w-0 flex-1"><span class="font-semibold text-ink">{directLine.name}</span><span class="block text-[11px] tracking-wide text-body/60 uppercase">SKU {directLine.sku} · × {directLine.quantity}</span></span>
               <span class="font-semibold text-ink">{fmt({ amount: directLine.unitPrice.amount * directLine.quantity, currency: directLine.unitPrice.currency })}</span>
             </li>
@@ -278,7 +278,7 @@ const labelClass = 'block text-xs font-semibold tracking-wide text-ink uppercase
     emptyNote.hidden = cart.lines.length > 0
     lines.innerHTML = cart.lines.map((l) => `
       <li class="flex items-center gap-3 py-3 text-sm">
-        ${l.image ? `<img src="${esc(l.image)}" alt="" width="56" height="42" class="h-[42px] w-14 shrink-0 rounded border border-rule bg-white object-contain">` : '<span class="h-[42px] w-14 shrink-0 rounded border border-rule"></span>'}
+        ${l.image ? `<img src="${esc(l.image)}" alt="" width="56" height="42" class="h-[42px] w-14 shrink-0 rounded border border-rule bg-panel-2 object-contain">` : '<span class="h-[42px] w-14 shrink-0 rounded border border-rule"></span>'}
         <span class="min-w-0 flex-1"><span class="font-semibold text-ink">${esc(l.name)}</span><span class="block text-[11px] tracking-wide text-body/60 uppercase">SKU ${esc(l.sku)} · × ${l.quantity}</span></span>
         <span class="font-semibold text-ink">${fmt(l.unitPrice.amount * l.quantity)}</span>
       </li>`).join('')

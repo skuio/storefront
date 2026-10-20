@@ -13,7 +13,7 @@ export const prerender = false
     <h1 class="display-heading mt-6 text-5xl">Your cart</h1>
 
     <noscript>
-      <p class="mt-6 rounded-md border border-rule bg-[#fafafa] p-4 text-sm">
+      <p class="mt-6 rounded-md border border-rule bg-panel p-4 text-sm">
         The cart needs JavaScript. Every product page has a <strong>Buy now</strong> button that works without it.
       </p>
     </noscript>
@@ -22,7 +22,7 @@ export const prerender = false
 
     <div hidden data-cart-empty class="mt-8 text-sm">
       <p>Your cart is empty.</p>
-      <a href={routes.shop()} class="mt-6 inline-block rounded-full border-2 border-ink px-7 py-2.5 text-sm font-semibold transition hover:bg-ink hover:text-white">Browse the shop</a>
+      <a href={routes.shop()} class="mt-6 inline-block rounded-full border-2 border-ink px-7 py-2.5 text-sm font-semibold transition hover:bg-ink hover:text-page">Browse the shop</a>
     </div>
 
     <div hidden data-cart-full>
@@ -34,7 +34,7 @@ export const prerender = false
       </div>
 
       {/* Only SKUs and quantities leave the browser; checkout re-prices on the server. */}
-      <a href="/checkout/" class="mt-6 block w-full rounded-md bg-accent px-8 py-3.5 text-center text-sm font-bold tracking-wide text-white uppercase transition hover:bg-accent-dark">
+      <a href="/checkout/" class="mt-6 block w-full rounded-md bg-accent px-8 py-3.5 text-center text-sm font-bold tracking-wide text-on-accent uppercase transition hover:bg-accent-dark">
         Checkout
       </a>
       <p class="mt-3 text-center text-xs text-body/70">Secure checkout. Card, Apple Pay and Google Pay accepted.</p>
@@ -64,7 +64,7 @@ export const prerender = false
     if (!has) return
     list.innerHTML = cart.lines.map((l) => `
       <li class="flex items-center gap-4 p-4 text-sm" data-sku="${esc(l.sku)}">
-        ${l.image ? `<img src="${esc(l.image)}" alt="" width="72" height="54" class="h-14 w-[72px] shrink-0 rounded border border-rule object-contain bg-white">` : '<span class="h-14 w-[72px] shrink-0 rounded border border-rule"></span>'}
+        ${l.image ? `<img src="${esc(l.image)}" alt="" width="72" height="54" class="h-14 w-[72px] shrink-0 rounded border border-rule object-contain bg-panel-2">` : '<span class="h-14 w-[72px] shrink-0 rounded border border-rule"></span>'}
         <div class="min-w-0 flex-1">
           ${l.url ? `<a href="${esc(l.url)}" class="font-semibold text-ink hover:text-accent">${esc(l.name)}</a>` : `<span class="font-semibold text-ink">${esc(l.name)}</span>`}
           <p class="mt-0.5 text-[11px] tracking-wide text-body/60 uppercase">SKU ${esc(l.sku)} · ${formatMoney(l.unitPrice, cfg.locale)} each</p>

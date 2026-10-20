@@ -24,7 +24,7 @@ const inputClass = 'mt-1.5 w-full rounded-md border border-rule px-3 py-2.5 text
         <label for="email" class="block text-xs font-semibold tracking-wide text-ink uppercase">Email address</label>
         <input id="email" name="email" type="email" required autocomplete="email" class={inputClass} />
       </div>
-      <button type="submit" class="w-full rounded-md bg-accent px-8 py-3 text-sm font-bold tracking-wide text-white uppercase transition hover:bg-accent-dark">Email me a sign-in link</button>
+      <button type="submit" class="w-full rounded-md bg-accent px-8 py-3 text-sm font-bold tracking-wide text-on-accent uppercase transition hover:bg-accent-dark">Email me a sign-in link</button>
     </form>
     <p class="mt-6 text-xs text-body/60">Not a partner yet? Write to us{config.contact?.email && <> at <a class="underline" href={`mailto:${config.contact.email}`}>{config.contact.email}</a></>}.</p>
   </div>

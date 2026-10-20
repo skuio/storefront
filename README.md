@@ -19,6 +19,72 @@ npm run dev
 Then open `CLAUDE.md` in the new store. It explains the shape of the project
 to whatever agent you point at it, and names the one test that has to stay green.
 
+## How it fits together
+
+```mermaid
+flowchart LR
+  subgraph KIT["skuio/storefront (this repo)"]
+    SDK["@skuio/storefront SDK<br/>store core · Store API<br/>payment + mail adapters"]
+    REG["registry/ blocks<br/>+ templates/default"]
+    CLI["@skuio/cli<br/>create · add"]
+  end
+
+  subgraph SITE["A store, e.g. basicsolominer.com<br/>(its own private repo, one Cloudflare Worker + D1)"]
+    UI["Owned UI<br/>copied blocks, redesigned freely"]
+    CORE["Store core from the SDK<br/>catalogue · checkout · orders · D1"]
+    BUY["/account<br/>buyer portal"]
+    PART["/partners<br/>affiliate dashboard"]
+    OWN["/admin<br/>owner admin (light)"]
+    API["Store API<br/>/api/skuio/v1"]
+  end
+
+  PAY["Payment processors<br/>Stripe · PayPal · BTCPay · on-chain"]
+  ERP["SKU.io<br/>operations system (ERP)"]
+  OPS(["Seller's team<br/>works in SKU.io"])
+
+  SDK -- "npm dependency<br/>(npm update)" --> CORE
+  REG -- "copy-and-own<br/>(skuio add)" --> UI
+  CLI -. "scaffolds" .-> SITE
+  CORE -- "hosted payment page" --> PAY
+  PAY -- "webhooks: paid / refunded" --> CORE
+  ERP -- "pulls orders · pushes stock,<br/>shipments, products" --> API
+  API --- CORE
+  OPS --> ERP
+```
+
+**The kit** is this repo. **A store** is a separate private repo that depends on
+the SDK from npm and owns copies of the blocks, so a store has no git
+relationship to the kit. **SKU.io** never runs inside the store. It connects
+from outside as a client of the Store API: the owner approves the connection at
+`/admin/connect`, SKU.io polls new orders, stamps its own order number back, and
+pushes stock, shipments (the store emails tracking) and, if it owns the
+catalogue, products and categories.
+
+## Who uses what
+
+| Person | Where | What they do |
+|---|---|---|
+| Buyer | `/account` (emailed sign-in link), `/account/order-lookup` (guest) | Order history, tracking, reorder |
+| Partner / affiliate | `/partners` (emailed sign-in link) | Traffic, funnel, sources, link builder, commission owed |
+| Store owner | `/admin` (password) | Orders and payments at a glance, partners and commissions, approve or revoke the connections that may use the Store API. Read-only on purpose |
+| Seller's operations team | **SKU.io**, not the store | Inventory, purchasing, fulfilment and shipping, returns, accounting, B2B. Everything that changes stock or ships a box |
+
+The seller side is deliberately split. The store's `/admin` is just enough to
+run a shop that has no operations system yet and to see that orders are flowing.
+Real operations live in the ERP, and the ERP pushes the results back into the
+store.
+
+## Other operations systems
+
+Nothing in the store is specific to SKU.io except names. The Store API is a
+versioned, documented contract (`docs/store-api.md`, OpenAPI in `docs/api/`),
+and the store treats every client the same: a connection with its own key that
+the owner can revoke. Any ERP or OMS that can poll orders over HTTP and push
+stock and shipments back can connect today, using the connect flow or a key
+issued by the owner. Two things are SKU.io-flavoured and would be renamed or
+aliased for a neutral release: the route prefix `/api/skuio/v1`, and the
+"Start from SKU.io" wording on the empty connections page.
+
 ## What's in here
 
 | Path | What | Published as |
@@ -63,6 +129,13 @@ stay underneath.
   shipments; the store emails tracking.
 - **Portal**: sign-in by emailed link, order history with tracking, reorder.
   Guest lookup by order number + email.
+- **Attribution**: first and last touch (utm tags, ad click ids, referrers)
+  ride on every order's metadata as `src_first` / `src_last`, so the operations
+  system knows which channel sold it.
+- **Express checkout**: PayPal / Venmo / Pay Later buttons beside the buy
+  button (`paypal-express` block). The address comes from the buyer's PayPal
+  account, and the store refuses to capture if the approved amount differs
+  from its own price.
 
 ## Security model
 

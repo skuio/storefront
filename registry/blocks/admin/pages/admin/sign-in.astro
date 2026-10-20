@@ -40,14 +40,14 @@ const message =
           <input id="password" name="password" type="password" required autocomplete="current-password"
             class="mt-1.5 w-full rounded-md border border-rule px-3 py-2.5 text-sm focus:border-accent focus:ring-2 focus:ring-accent/25 focus:outline-none" />
         </div>
-        <button type="submit" class="w-full rounded-md bg-accent px-8 py-3 text-sm font-bold tracking-wide text-white uppercase transition hover:bg-accent-dark">Sign in</button>
+        <button type="submit" class="w-full rounded-md bg-accent px-8 py-3 text-sm font-bold tracking-wide text-on-accent uppercase transition hover:bg-accent-dark">Sign in</button>
         <p class="text-xs text-body/70"><a href="/admin/forgot-password/" class="font-semibold text-accent">Forgot your password?</a></p>
       </form>
     ) : (
-      <div class="mt-6 rounded-md border border-rule bg-[#fafafa] p-4 text-sm">
+      <div class="mt-6 rounded-md border border-rule bg-panel p-4 text-sm">
         <p class="font-semibold text-ink">No owner has been set up yet.</p>
         <p class="mt-2">Create one from the store's checkout with:</p>
-        <pre class="mt-2 overflow-x-auto rounded bg-ink px-3 py-2 text-xs text-white">npm run owner:create -- --email you@example.com --name "Your Name"</pre>
+        <pre class="mt-2 overflow-x-auto rounded bg-ink px-3 py-2 text-xs text-page">npm run owner:create -- --email you@example.com --name "Your Name"</pre>
         <p class="mt-2 text-xs text-body/70">It prompts for a password and writes the owner straight to the database. There is no public sign-up.</p>
       </div>
     )

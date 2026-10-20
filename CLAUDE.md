@@ -42,6 +42,11 @@ only in the template (pages, layout, config, styles, data) are edited in place.
   `config`, `routes`, `readEnv`, `payment`, `paymentContext`, `mail`, `siteUrl`;
   `src/lib/images.ts` exporting `resolveImage`. Noted in `registry.json` →
   `conventions`. Do not add more assumptions without documenting them there.
+- **Blocks use colour tokens, never literal colours.** `ink`, `body`, `shell`,
+  `rule`, `accent`, `accent-dark`, `on-accent`, `page`, `panel`, `panel-2` from
+  the template's `global.css`. No `bg-white`, `text-white` on an accent or ink
+  fill, or hex values: a dark-themed store (basicsolominer.com) must be able to
+  take a block unchanged. Status colours (green "Shipped" badges) are the one exception.
 - **Every page is server-rendered.** The header needs the category tree from
   D1, so no page can be prerendered; `<Image>` from `astro:assets` has no
   runtime transformer on Cloudflare — blocks use `<img>` with `resolveImage`.

@@ -19,7 +19,7 @@ const onSale = product.compareAtPrice && product.compareAtPrice.amount > product
 
 <article class="group h-full">
   <a href={href} class="flex h-full flex-col overflow-hidden rounded-lg border border-rule transition hover:shadow-md">
-    <div class="relative aspect-4/3 overflow-hidden bg-white">
+    <div class="relative aspect-4/3 overflow-hidden bg-panel-2">
       {
         img ? (
           <img
@@ -37,14 +37,14 @@ const onSale = product.compareAtPrice && product.compareAtPrice.amount > product
       }
       {
         onSale && (
-          <span class="absolute top-3 left-3 rounded-full bg-accent px-2.5 py-1 text-[11px] font-bold tracking-wide text-white uppercase">
+          <span class="absolute top-3 left-3 rounded-full bg-accent px-2.5 py-1 text-[11px] font-bold tracking-wide text-on-accent uppercase">
             Sale
           </span>
         )
       }
       {
         !product.available && (
-          <span class="absolute top-3 right-3 rounded-full bg-ink/80 px-2.5 py-1 text-[11px] font-bold tracking-wide text-white uppercase">
+          <span class="absolute top-3 right-3 rounded-full bg-ink/80 px-2.5 py-1 text-[11px] font-bold tracking-wide text-page uppercase">
             Sold out
           </span>
         )

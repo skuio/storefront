@@ -23,7 +23,7 @@ const ordered = [...connections].sort((a, b) => Number(!!a.revokedAt) - Number(!
 
   {
     ordered.length === 0 ? (
-      <div class="mt-8 rounded-md border border-rule bg-[#fafafa] p-4 text-sm">
+      <div class="mt-8 rounded-md border border-rule bg-panel p-4 text-sm">
         <p class="font-semibold text-ink">No connections yet.</p>
         <p class="mt-1 text-body/80">Start from SKU.io: Integrations → Storefront → Connect. You will be asked to approve the request here.</p>
       </div>
@@ -31,7 +31,7 @@ const ordered = [...connections].sort((a, b) => Number(!!a.revokedAt) - Number(!
       <ul class="mt-8 space-y-4">
         {ordered.map((c) => (
           <li class:list={['rounded-lg border border-rule', c.revokedAt && 'opacity-60']} data-connection={c.id}>
-            <div class="flex flex-wrap items-baseline justify-between gap-3 border-b border-rule bg-[#fafafa] px-4 py-3 text-sm">
+            <div class="flex flex-wrap items-baseline justify-between gap-3 border-b border-rule bg-panel px-4 py-3 text-sm">
               <span>
                 <span class="font-semibold text-ink">{c.name}</span>
                 {c.tenant && <span class="text-body/60"> · tenant {c.tenant}</span>}

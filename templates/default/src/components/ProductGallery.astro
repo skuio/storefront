@@ -17,7 +17,7 @@ const heroId = `gallery-hero-${product.sku.replace(/[^a-zA-Z0-9_-]/g, '-')}`
 {
   hero ? (
     <div>
-      <div class="overflow-hidden rounded-lg border border-rule bg-white">
+      <div class="overflow-hidden rounded-lg border border-rule bg-panel-2">
         <img
           src={hero.image.src}
           width={hero.image.width}
@@ -37,7 +37,7 @@ const heroId = `gallery-hero-${product.sku.replace(/[^a-zA-Z0-9_-]/g, '-')}`
             <li>
               <button
                 type="button"
-                class="block w-full overflow-hidden rounded border border-rule bg-white p-1 transition hover:border-accent aria-pressed:border-accent"
+                class="block w-full overflow-hidden rounded border border-rule bg-panel-2 p-1 transition hover:border-accent aria-pressed:border-accent"
                 aria-pressed={i === 0 ? 'true' : 'false'}
                 aria-label={`Show image ${i + 1}`}
                 data-full={g.image.src}

@@ -4,6 +4,7 @@ import Breadcrumbs from '../../components/Breadcrumbs.astro'
 import ProductCard from '../../components/ProductCard.astro'
 import ProductGallery from '../../components/ProductGallery.astro'
 import BuyButton from '../../components/BuyButton.astro'
+import PayPalExpress from '../../components/PayPalExpress.astro'
 import AddToCartButton from '../../components/AddToCartButton.astro'
 import Price from '../../components/Price.astro'
 import { config, routes, store } from '../../lib/store'
@@ -69,6 +70,7 @@ const schema = [
         {plainShort && <p class="mt-5 text-sm leading-relaxed">{plainShort}</p>}
 
         <BuyButton product={product} />
+        <PayPalExpress product={product} />
         <AddToCartButton product={product} />
 
         {product.attributes && Object.keys(product.attributes).length > 0 && (

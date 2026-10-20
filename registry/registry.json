@@ -1,7 +1,7 @@
 {
   "version": 1,
   "conventions": {
-    "note": "Blocks import { store, config, routes, readEnv, payment, paymentMethods, paymentContext, mail, siteUrl } from src/lib/store.ts and { resolveImage } from src/lib/images.ts. Both files ship in the template; keep those exports if you restructure. `store(Astro)` returns the per-request Store (memoised on Astro.locals) — call `await store(Astro).catalog.load()` for the catalogue snapshot.",
+    "note": "Blocks import { store, config, routes, readEnv, payment, paymentMethods, paymentContext, mail, siteUrl } from src/lib/store.ts and { resolveImage } from src/lib/images.ts. Both files ship in the template; keep those exports if you restructure. `store(Astro)` returns the per-request Store (memoised on Astro.locals) \u2014 call `await store(Astro).catalog.load()` for the catalogue snapshot.",
     "sdk": "@skuio/storefront",
     "runtime": "Cloudflare Workers with a D1 binding named DB; see docs/store-platform.md."
   },
@@ -116,7 +116,7 @@
     },
     {
       "name": "discounts",
-      "description": "Store-priced discount codes and the partner program: ?code= links that apply the discount and record the visit (captureReferral, call it from src/middleware.ts), the code preview endpoint the checkout uses, and the partner dashboard — traffic, funnel, sources, link builder and commission — at /partners/ (emailed sign-in link) or /partners/<partner>/?key=.",
+      "description": "Store-priced discount codes and the partner program: ?code= links that apply the discount and record the visit (captureReferral, call it from src/middleware.ts), the code preview endpoint the checkout uses, and the partner dashboard \u2014 traffic, funnel, sources, link builder and commission \u2014 at /partners/ (emailed sign-in link) or /partners/<partner>/?key=.",
       "files": [
         {
           "from": "lib/referral.ts",
@@ -164,7 +164,7 @@
     },
     {
       "name": "checkout",
-      "description": "The store’s own checkout: address + shipping method page, order creation, adapter-neutral payment start, success and pending pages, processor webhook.",
+      "description": "The store\u2019s own checkout: address + shipping method page, order creation, adapter-neutral payment start, success and pending pages, processor webhook.",
       "files": [
         {
           "from": "checkout/index.astro",
@@ -206,7 +206,8 @@
       "registryDependencies": [
         "breadcrumbs",
         "cart",
-        "discounts"
+        "discounts",
+        "attribution"
       ]
     },
     {
@@ -370,6 +371,42 @@
       ],
       "registryDependencies": [
         "store-api"
+      ]
+    },
+    {
+      "name": "attribution",
+      "description": "First- and last-touch channel on every order: captureTouch() (call it from src/middleware.ts) records utm_* and ad click ids in two first-party cookies; checkout copies them onto the order's metadata (src_first, src_last) for the operations system.",
+      "files": [
+        {
+          "from": "lib/attribution.ts",
+          "to": "src/lib/attribution.ts"
+        }
+      ],
+      "dependencies": [],
+      "registryDependencies": []
+    },
+    {
+      "name": "paypal-express",
+      "description": "PayPal / Venmo / Pay Later buttons beside the buy button: the buyer starts in PayPal and the address comes from their account, priced and re-priced by the store, never captured if the approved amount differs. Renders only when PAYMENT_PROVIDER includes paypal.",
+      "files": [
+        {
+          "from": "PayPalExpress.astro",
+          "to": "src/components/PayPalExpress.astro"
+        },
+        {
+          "from": "lib/paypal-express.ts",
+          "to": "src/lib/paypal-express.ts"
+        },
+        {
+          "from": "api/paypal-express.ts",
+          "to": "src/pages/api/paypal-express.ts"
+        }
+      ],
+      "dependencies": [],
+      "registryDependencies": [
+        "buy-button",
+        "discounts",
+        "attribution"
       ]
     }
   ]

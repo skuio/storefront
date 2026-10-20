@@ -194,3 +194,29 @@ test('the Store API refuses a missing or wrong key', async ({ request }) => {
   expect((await request.get('/api/skuio/v1/health')).status()).toBe(401)
   expect((await request.get('/api/skuio/v1/health', { headers: { Authorization: 'Bearer nope' } })).status()).toBe(401)
 })
+
+test('every order records the channel that brought the buyer, first and last touch', async ({ page, request }) => {
+  await page.goto('/?utm_source=newsletter&utm_medium=email&utm_campaign=spring')
+  await page.goto('/?fbclid=e2e-click') // a later ad click becomes the last touch; the first never moves
+  await page.goto('/shop/')
+  await page.locator('a[href^="/products/"]').first().click()
+  const sku = await page.locator('form[action="/checkout/"] input[name=sku]').inputValue()
+
+  // page.request shares the browser's cookies, as the checkout form would.
+  const res = await page.request.post('/api/checkout', {
+    headers: { ...browser, 'content-type': 'application/json' },
+    data: {
+      items: [{ sku, quantity: 1 }],
+      email: 'e2e-attribution@example.com',
+      name: 'Grace Hopper',
+      phone: '+1 555 0100',
+      shipping_address: { name: 'Grace Hopper', line1: '1 Compiler Way', city: 'Austin', state: 'TX', postal_code: '78701', country: 'US' },
+      shipping_option: 'us-standard',
+    },
+  })
+  expect(res.status()).toBe(200)
+  const placed = await (await request.get(`/api/skuio/v1/orders/${(await res.json()).order.id}`, { headers: api })).json()
+  expect(placed.data.metadata.src_first).toBe('newsletter / email / spring')
+  expect(placed.data.metadata.src_last).toBe('meta / paid')
+  expect(placed.data.metadata.src_last_click).toBe('fbclid')
+})

@@ -5,6 +5,9 @@ import ContactForm from '../components/ContactForm.astro'
 import { config } from '../lib/store'
 export const prerender = false
 const { phone, phoneE164, email } = config.contact ?? {}
+// Link here with ?message=… rather than to a mailto: a mailto does nothing in Facebook's and
+// Instagram's in-app browsers, where most ad visitors land.
+const prefill = (Astro.url.searchParams.get('message') ?? '').slice(0, 500)
 ---
 
 <BaseLayout title="Contact" description={`Get in touch with ${config.name}.`}>
@@ -26,7 +29,7 @@ const { phone, phoneE164, email } = config.contact ?? {}
           </div>
         )}
       </dl>
-      <div><ContactForm /></div>
+      <div><ContactForm message={prefill} /></div>
     </div>
   </div>
 </BaseLayout>
