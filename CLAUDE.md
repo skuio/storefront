@@ -75,6 +75,26 @@ npm run template:build
 npm run template:e2e        # needs the template's local D1: cd templates/default && npm run db:migrate:local && npm run seed
 ```
 
+## Releasing (no human step)
+
+npm trusted publishing: each package's npm settings trust this repo's
+`.github/workflows/publish.yml`, so a run of that workflow on a version tag
+publishes with a short-lived OIDC credential — no token stored, no passkey.
+
+1. Bump `packages/sdk` and `packages/cli` to the same version (and the CLI's
+   `sdkRange`; `npm run check` enforces it), merge to `main` with CI green.
+2. `git tag vX.Y.Z <merge sha> && git push origin vX.Y.Z`
+3. `gh workflow run publish.yml --ref vX.Y.Z` (tag pushes do not reliably start
+   workflows on this repo), then `gh run watch` and `npm view @skuio/storefront version`.
+4. `gh release create vX.Y.Z --notes …`
+
+The workflow refuses a run that is not on a tag or whose tag does not match both
+versions, and skips a version that is already on npm. If publishing fails with
+an auth error, the trust was removed or the workflow file renamed: someone with
+the npm account's passkey re-runs
+`npx -y npm@latest trust github <pkg> --file publish.yml --repo skuio/storefront --allow-publish --yes`
+for each package.
+
 ## Versioning
 
 SDK and CLI are versioned together. Stores pin `@skuio/storefront` with a

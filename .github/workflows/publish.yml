@@ -8,6 +8,10 @@ name: Publish
 on:
   push:
     tags: ['v*']
+  # Run by hand (or by an agent: `gh workflow run publish.yml --ref v0.6.0`) for a tag
+  # whose push did not start the workflow. Must be run ON the tag: the version check
+  # below compares the tag name with both package versions.
+  workflow_dispatch:
 
 jobs:
   publish:
@@ -26,6 +30,7 @@ jobs:
       - run: npm install -g npm@^11.5.1
       - name: The tag matches both package versions
         run: |
+          [ "$GITHUB_REF_TYPE" = "tag" ] || { echo "Run this on a version tag (gh workflow run publish.yml --ref vX.Y.Z), not on $GITHUB_REF_NAME"; exit 1; }
           tag="${GITHUB_REF_NAME#v}"
           for p in packages/sdk packages/cli; do
             v=$(node -p "require('./$p/package.json').version")
