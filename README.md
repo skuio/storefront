@@ -22,34 +22,44 @@ to whatever agent you point at it, and names the one test that has to stay green
 ## How it fits together
 
 ```mermaid
-flowchart LR
-  subgraph KIT["skuio/storefront (this repo)"]
-    SDK["@skuio/storefront SDK<br/>store core · Store API<br/>payment + mail adapters"]
-    REG["registry/ blocks<br/>+ templates/default"]
-    CLI["@skuio/cli<br/>create · add"]
+flowchart TB
+  subgraph KIT["skuio/storefront — this repo, the framework"]
+    direction LR
+    SDK["<b>@skuio/storefront</b> SDK<br/>store core · Store API<br/>payment + mail adapters"]
+    REG["<b>registry/</b> blocks<br/>+ reference template"]
+    CLI["<b>@skuio/cli</b><br/>create · add"]
   end
 
-  subgraph SITE["A store, e.g. basicsolominer.com<br/>(its own private repo, one Cloudflare Worker + D1)"]
-    UI["Owned UI<br/>copied blocks, redesigned freely"]
-    CORE["Store core from the SDK<br/>catalogue · checkout · orders · D1"]
-    BUY["/account<br/>buyer portal"]
-    PART["/partners<br/>affiliate dashboard"]
-    OWN["/admin<br/>owner admin (light)"]
+  subgraph SITE["A store — its own private repo, e.g. basicsolominer.com · one Cloudflare Worker + D1"]
+    direction LR
+    subgraph FACES["Pages the store owns (copied blocks, redesigned freely)"]
+      direction TB
+      SHOP["Shop + checkout"]
+      BUY["/account<br/>buyer portal"]
+      PART["/partners<br/>affiliate dashboard"]
+      OWN["/admin<br/>owner admin (light)"]
+    end
+    CORE[("Store core from the SDK<br/>catalogue · orders · customers<br/>in the store's D1")]
     API["Store API<br/>/api/skuio/v1"]
+    FACES --> CORE
+    API --> CORE
   end
+
+  REG -- "copy-and-own (skuio add)" --> FACES
+  SDK -- "npm dependency (npm update)" --> CORE
+  CLI -. "scaffolds a new store" .-> SITE
+
+  BUYER(["Buyer"]) --> SHOP
+  BUYER --> BUY
+  AFF(["Affiliate"]) --> PART
+  OWNER(["Store owner"]) --> OWN
 
   PAY["Payment processors<br/>Stripe · PayPal · BTCPay · on-chain"]
-  ERP["SKU.io<br/>operations system (ERP)"]
-  OPS(["Seller's team<br/>works in SKU.io"])
+  CORE <-- "hosted payment · webhooks" --> PAY
 
-  SDK -- "npm dependency<br/>(npm update)" --> CORE
-  REG -- "copy-and-own<br/>(skuio add)" --> UI
-  CLI -. "scaffolds" .-> SITE
-  CORE -- "hosted payment page" --> PAY
-  PAY -- "webhooks: paid / refunded" --> CORE
-  ERP -- "pulls orders · pushes stock,<br/>shipments, products" --> API
-  API --- CORE
-  OPS --> ERP
+  ERP["<b>SKU.io</b> (or another ERP)<br/>inventory · purchasing · fulfilment<br/>returns · accounting · B2B"]
+  ERP -- "pulls orders<br/>pushes stock, shipments, products" --> API
+  TEAM(["Seller's operations team"]) --> ERP
 ```
 
 **The kit** is this repo. **A store** is a separate private repo that depends on
