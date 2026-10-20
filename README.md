@@ -21,6 +21,11 @@ to whatever agent you point at it, and names the one test that has to stay green
 
 ## How it fits together
 
+![How the kit, a store, payment processors and SKU.io (or another ERP) fit together](docs/assets/architecture.png)
+
+<details>
+<summary>The same diagram as text (Mermaid)</summary>
+
 ```mermaid
 flowchart TB
   subgraph KIT["skuio/storefront — this repo, the framework"]
@@ -61,6 +66,8 @@ flowchart TB
   ERP -- "pulls orders<br/>pushes stock, shipments, products" --> API
   TEAM(["Seller's operations team"]) --> ERP
 ```
+
+</details>
 
 **The kit** is this repo. **A store** is a separate private repo that depends on
 the SDK from npm and owns copies of the blocks, so a store has no git
