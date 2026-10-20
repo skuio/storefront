@@ -220,3 +220,15 @@ test('every order records the channel that brought the buyer, first and last tou
   expect(placed.data.metadata.src_last).toBe('meta / paid')
   expect(placed.data.metadata.src_last_click).toBe('fbclid')
 })
+
+test('the Store API answers on the neutral path and on the SKU.io path, with the same key', async ({ request }) => {
+  for (const base of ['/api/store/v1', '/api/skuio/v1']) {
+    const health = await request.get(`${base}/health`, { headers: api })
+    expect(health.status(), base).toBe(200)
+    expect((await health.json()).data.counts.products).toBeGreaterThan(0)
+    expect((await request.get(`${base}/orders?limit=1`)).status(), base).toBe(401)
+    // No key can create an order through the API: orders come only from checkout.
+    const create = await request.post(`${base}/orders`, { headers: api, data: { items: [{ sku: 'ANY', quantity: 1 }], email: 'x@example.com' } })
+    expect(create.status(), base).toBe(404)
+  }
+})

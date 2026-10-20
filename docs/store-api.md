@@ -1,6 +1,7 @@
 # Store API v1 — the contract between a store and its operations system
 
-Base URL: `https://<store>/api/skuio/v1` · Auth: `Authorization: Bearer <key>` — a connection key issued by the
+Base URL: `https://<store>/api/store/v1` — or `https://<store>/api/skuio/v1`, the same API at the
+path SKU.io's Storefront integration calls (both are permanent) · Auth: `Authorization: Bearer <key>` — a connection key issued by the
 owner-approved connect flow below, or the `STORE_API_KEY` secret as a break-glass
 · JSON in and out · money is `{ "amount": <integer minor units>, "currency": "USD" }` ·
 timestamps are ISO-8601 UTC · errors are `{ "error": { "code", "message", "details" } }`.
@@ -35,7 +36,8 @@ consumer in the browser, and the consumer trades a one-time code for a key it al
    against the deployed store. `GET /health` reports `owner_configured: true` from then on;
    until it does, there is nobody to approve anything and the consumer should say so.
 2. **Browser step.** The consumer sends the owner's browser to
-   `https://<store>/admin/connect?client_id=skuio&redirect_uri=<https url>&state=<opaque>&tenant=<name>&scope=orders,fulfillments,inventory,catalog`.
+   `https://<store>/admin/connect?client_id=<your system>&redirect_uri=<https url>&state=<opaque>&tenant=<account name>&scope=orders,fulfillments,inventory,catalog`
+   (SKU.io sends `client_id=skuio`).
    The store asks the owner to sign in (password, or an emailed reset if forgotten), then shows who
    is asking, what it may do, and the host the browser will be sent to. Approve → `302 <redirect_uri>?code=…&state=…`.
    Deny → `302 <redirect_uri>?error=access_denied&state=…`. `state` is opaque to the store and
@@ -49,9 +51,16 @@ consumer in the browser, and the consumer trades a one-time code for a key it al
 
 Redirect rules: `redirect_uri` must be absolute `https` (plain `http` is allowed only for
 `localhost`, `*.localhost` and `*.test`, so a developer's SKU.io works), must not carry a fragment
-or credentials, and `client_id` must be one the store knows (`skuio`). Scopes are the four listed;
-they describe intent to the owner and travel with the connection — v1 does not yet enforce them
-per endpoint.
+or credentials, and `client_id` is any 2–63 lowercase letters, digits, dots, dashes or underscores
+naming your system (`skuio` is shown as "SKU.io"; others are shown as sent). Scopes are the four listed;
+they are shown to the owner, travel with the connection and are **enforced per endpoint**:
+`orders` for `GET`/`PATCH /orders…`, `fulfillments` for `POST /orders/{id}/fulfillments`,
+`inventory` for `PUT /inventory`, `catalog` for `/products…` and `/categories…`. A connection that
+lacks one gets `403 forbidden`. The `STORE_API_KEY` secret is not scoped.
+
+**There is no endpoint that creates an order.** Orders come only from the store's own checkout,
+which prices every line from the store's database; the API can read orders, stamp a reference,
+record a payment, cancel and add shipments — never invent a sale or change what was bought.
 
 The owner can see every connection at `/admin/connections` (name, tenant, key prefix, last used) and
 revoke any of them. Revoking in the store and `DELETE /connect` from the consumer are the same
@@ -62,6 +71,23 @@ The owner's order list is `/admin/orders` (search by number, email or name; stat
 `"woocommerce"`) and `metadata.original_number`: the list tags them, and search finds them by the old number. Keep
 their `updated_at` before the consumer's import start date so the Store API's `updated_since` never hands them out as
 new.
+
+### Connecting an operations system other than SKU.io
+
+Nothing in the store is specific to SKU.io. Any ERP, OMS or integration platform (NetSuite, Odoo,
+Cin7, an n8n or Make workflow, a script) connects the same way:
+
+1. Get a key: run the connect flow above with your own `client_id`, or have the owner set
+   `STORE_API_KEY` for a quick start.
+2. Poll `GET /orders?updated_since=<last cursor>` (every few minutes) and create the order in your
+   system; `PATCH /orders/{id}` with `external_reference` so both sides share the number.
+3. Push shipments with `POST /orders/{id}/fulfillments` (the store emails tracking to the buyer).
+4. Push stock with `PUT /inventory`.
+5. Optionally own the catalogue: `PUT /products`, `PUT /categories` (or read the store's with
+   `GET /products`, `GET /categories` to import and map it first).
+
+Several systems can be connected at once, each with its own revocable key — useful for running an
+old and a new ERP side by side during a switch.
 
 **Break-glass.** The `STORE_API_KEY` Worker secret still authenticates every endpoint, so a store
 whose owner is unreachable can be operated, and a brand-new store can be seeded before an owner

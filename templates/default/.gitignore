@@ -12,3 +12,4 @@ test-results/
 playwright-report/
 migrations/
 data/
+backups/

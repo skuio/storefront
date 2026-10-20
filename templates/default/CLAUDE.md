@@ -18,7 +18,8 @@ src/pages/                 routes; Astro routes by filename; every page renders 
 src/pages/checkout/        the store's own checkout, success and pending pages
 src/pages/api/checkout.ts  creates the order, hands it to the payment adapter
 src/pages/api/payments/    the processor webhook (adapter-neutral)
-src/pages/api/skuio/v1/    the Store API — what SKU.io talks to
+src/pages/api/store/v1/    the Store API — what an operations system talks to
+src/pages/api/skuio/v1/    the same Store API at the path SKU.io calls (keep both)
 src/pages/account/         portal: sign-in by emailed link, orders, order detail
 src/data/*.json            a catalogue to seed the database from (npm run seed)
 src/assets/products/       product images, matched to products by filename
@@ -77,7 +78,7 @@ prerendered pages: the header needs the live category tree.
    `src/lib/images.ts` must keep exporting `resolveImage`. Registry blocks
    import those names.
 
-8. **The Store API is the contract with SKU.io.** Do not change its paths,
+8. **The Store API is the contract with SKU.io and any other operations system.** Do not change its paths,
    payloads or status codes (`docs/store-api.md` in the kit); the handler
    lives in the SDK and the route only delegates to it.
 

@@ -282,11 +282,15 @@
     },
     {
       "name": "store-api",
-      "description": "The Store API route (/api/skuio/v1/*) that SKU.io pulls orders from and pushes inventory, fulfilments and products to. Auth: a connection key issued through the admin block's approval screen, or the STORE_API_KEY secret as a break-glass.",
+      "description": "The Store API that an operations system pulls orders from and pushes inventory, fulfilments and products to: /api/store/v1/* for any system, and /api/skuio/v1/* (the same handler) for SKU.io's Storefront integration. Auth: a connection key issued through the admin block's approval screen, or the STORE_API_KEY secret as a break-glass.",
       "files": [
         {
           "from": "api/skuio/v1/[...path].ts",
           "to": "src/pages/api/skuio/v1/[...path].ts"
+        },
+        {
+          "from": "api/store/v1/[...path].ts",
+          "to": "src/pages/api/store/v1/[...path].ts"
         }
       ]
     },

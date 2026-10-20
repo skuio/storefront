@@ -5,10 +5,11 @@ import { config, store } from '../../lib/store'
 import { requireOwner, sameOrigin } from '../../lib/admin'
 
 /**
- * The authorization screen. A consumer (SKU.io) sends the owner's browser here
+ * The authorization screen. A consumer (SKU.io, or any operations system) sends the owner's browser here
  * with client_id, redirect_uri, state, tenant and scope. The owner sees who is
  * asking and where the browser will go, and approves or denies. Approval mints
- * a one-time code the consumer trades for its key at /api/skuio/v1/connect/token.
+ * a one-time code the consumer trades for its key at /api/store/v1/connect/token
+ * (or /api/skuio/v1/connect/token, the path SKU.io calls).
  */
 export const prerender = false
 
@@ -41,7 +42,7 @@ if (request && Astro.request.method === 'POST') {
 }
 ---
 
-<AdminShell title="Connect to SKU.io" owner={owner} width="narrow">
+<AdminShell title={request ? `Connect to ${request.clientName}` : 'Connect a system'} owner={owner} width="narrow">
   {
     problems ? (
       <div class="mt-6 rounded-md border border-accent/30 bg-accent/5 p-4 text-sm" role="alert">
@@ -49,12 +50,12 @@ if (request && Astro.request.method === 'POST') {
         <ul class="mt-2 list-disc pl-5 text-body/80">
           {Object.entries(problems).map(([field, problem]) => <li><span class="font-mono text-xs">{field}</span> {problem}</li>)}
         </ul>
-        <p class="mt-3 text-xs text-body/70">Start again from SKU.io. Nothing was changed.</p>
+        <p class="mt-3 text-xs text-body/70">Start again from the system you were connecting. Nothing was changed.</p>
       </div>
     ) : (
       <>
         <p class="mt-3 text-sm">
-          <span class="font-semibold text-ink">{request!.tenant}</span> on SKU.io wants to connect to <span class="font-semibold text-ink">{config.name}</span>.
+          <span class="font-semibold text-ink">{request!.tenant}</span> on {request!.clientName} wants to connect to <span class="font-semibold text-ink">{config.name}</span>.
         </p>
         <div class="mt-5 rounded-lg border border-rule">
           <div class="border-b border-rule bg-panel px-4 py-2.5 text-[11px] font-semibold tracking-wide text-body/60 uppercase">It will be allowed to</div>
@@ -66,7 +67,7 @@ if (request && Astro.request.method === 'POST') {
           After you approve, your browser goes to
           <span class="mt-1 block rounded bg-ink px-3 py-2 font-mono text-xs text-page">{request!.redirectHost}</span>
         </p>
-        <p class="mt-2 text-xs text-body/70">Only approve if that is the SKU.io address you signed in to. The key never appears on screen; you can revoke it any time under Connections.</p>
+        <p class="mt-2 text-xs text-body/70">Only approve if that is the {request!.clientName} address you signed in to. The key never appears on screen; you can revoke it any time under Connections.</p>
 
         <form method="POST" class="mt-6 flex gap-3">
           <input type="hidden" name="client_id" value={request!.clientId} />
