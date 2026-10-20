@@ -35,3 +35,34 @@ lost its hidden `sku` input or no longer points at `/checkout/`; the checkout
 page's field names changed without `src/pages/api/checkout.ts`;
 `storefront.config.ts` changed `routes` without the page files moving; the
 local database was never migrated or seeded.
+
+## Against the live store, and with real processors
+
+The e2e runs `manual` payments only. Before launch and after any payment
+change, walk each offered method in a browser — sandbox / test mode first,
+then one small real purchase you refund. Things that have wasted hours:
+
+- **PayPal's sandbox popup needs a headed, real browser.** In a headless
+  browser the PayPal window opens blank or never completes the login. Run the
+  browser headed (real Chrome) and log in with a sandbox *personal* account
+  from the PayPal developer dashboard, not the business one.
+- **Stripe Link's "save my info" box can block Pay.** On Stripe Checkout, the
+  Link sign-up checkbox opens a phone field that is then required; untick it
+  (or fill it) before concluding the Pay button is broken.
+- **Apple Pay needs the domain registered, per mode and per host.** Register
+  each domain the button appears on (apex *and* www, the preview host) in the
+  processor's dashboard, separately for test and live mode. An unregistered
+  domain hides the button silently; it does not error.
+- **Ad-platform server events only with a test event code.** When checking a
+  purchase event sent server-side (Meta Conversions API, TikTok Events API,
+  Google Ads), send it with the platform's test event code and look in its
+  test-events view. A test without it once posted a real purchase into a live
+  ad account, which then optimised against a fake sale.
+- **Express buttons:** on a phone-width viewport, wallet buttons sit above
+  the form, their space is reserved before they load (no jump), and a wallet
+  that is unavailable on this device leaves no empty gap.
+- **iOS:** run the purchase once on a real iPhone (or WebKit). Taps arrive as
+  `pointerType: "mouse"` and `mailto:` is dead in in-app browsers — see
+  `CLAUDE.md` → "Mobile, iOS and in-app browsers".
+- After a processor key or webhook secret changes, wait about a minute before
+  testing: secrets take a moment to propagate.

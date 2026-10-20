@@ -43,3 +43,28 @@ kit's `docs/store-api.md`). Nothing about the store's design changes.
 - A shipment pushed with `POST /orders/{id}/fulfillments` moves the order to
   partially/fully fulfilled and emails the buyer tracking once.
 - A `manual` order is marked paid with `PATCH /orders/{id}` `payment.status = paid`.
+
+## Before you switch it on
+
+- **Seed and demo stock never reaches production.** `npm run seed:remote`
+  writes the demo catalogue and its stock; a store SKU.io will feed must not
+  carry it. If the production database was ever seeded, delete those products
+  (or let SKU.io's first `PUT /products` replace them) and confirm
+  `/health` → `data.counts` matches what SKU.io pushed before taking orders.
+  A demo SKU with demo stock is an order nobody can fulfil.
+- **Dropship and supplier-held stock must be pushed.** If the products ship
+  from a supplier rather than your own warehouse, SKU.io only knows what the
+  supplier feed tells it; set up the supplier's stock in SKU.io so `PUT
+  /inventory` carries real numbers. Otherwise every product reads as sold
+  out (or, with backorders allowed, oversells).
+- **Confirm the product mapping after connecting.** Open a few products in
+  SKU.io's storefront channel and check each listing is linked to the right
+  SKU.io product (same SKU string as the store). An unmapped listing means its
+  orders arrive with lines SKU.io cannot allocate, and its stock never syncs.
+  Place one test order and watch it land as a sales order with every line
+  matched.
+- **Replacing a WooCommerce store cuts its order feed.** If SKU.io already
+  pulls this business's orders from WooCommerce, retiring WooCommerce stops
+  that feed. Connect the Storefront channel and see a test order arrive
+  *before* the old site stops taking orders, then disable the WooCommerce
+  channel so stock is not pushed twice. See `.claude/skills/cutover`.

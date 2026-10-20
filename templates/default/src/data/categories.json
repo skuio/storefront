@@ -23,7 +23,7 @@
     "name": "Gear",
     "slug": "gear",
     "parentId": null,
-    "description": "Bags and carry for the trail and the commute."
+    "description": "<p>Bags and carry for the <strong>trail</strong> and the commute.</p>"
   },
   {
     "id": "gear-bags",

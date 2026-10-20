@@ -3,7 +3,7 @@ import '../styles/global.css'
 import SiteHeader from '../components/SiteHeader.astro'
 import SiteFooter from '../components/SiteFooter.astro'
 import CartBadge from '../components/CartBadge.astro'
-import { config } from '../lib/store'
+import { config, readEnv } from '../lib/store'
 
 interface Props {
   title: string
@@ -26,6 +26,8 @@ const {
   schema = [],
 } = Astro.props
 
+// STORE_PREVIEW=1: a shareable preview of a store that is not open yet — never indexed, banner on every page.
+const preview = readEnv(Astro, 'STORE_PREVIEW') === '1'
 const canonicalUrl = canonical ?? new URL(Astro.url.pathname, config.url).href
 const ogImage = image ? new URL(image, config.url).href : undefined
 const fullTitle = title === config.name ? title : `${title} | ${config.name}`
@@ -39,7 +41,7 @@ const fullTitle = title === config.name ? title : `${title} | ${config.name}`
     <title>{fullTitle}</title>
     <meta name="description" content={description} />
     <link rel="canonical" href={canonicalUrl} />
-    {noindex && <meta name="robots" content="noindex, nofollow" />}
+    {(noindex || preview) && <meta name="robots" content="noindex, nofollow" />}
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content={config.name} />
     <meta property="og:title" content={fullTitle} />
@@ -52,6 +54,11 @@ const fullTitle = title === config.name ? title : `${title} | ${config.name}`
     {schema.map((s) => <script type="application/ld+json" is:inline set:html={JSON.stringify(s)} />)}
   </head>
   <body class="flex min-h-screen flex-col">
+    {preview && (
+      <p class="bg-accent px-4 py-1 text-center text-xs font-semibold text-on-accent" data-preview-banner>
+        Preview — this store is not open for orders yet.
+      </p>
+    )}
     <SiteHeader overlay={overlayHeader}><CartBadge slot="end" /></SiteHeader>
     <main class="flex-1"><slot /></main>
     <SiteFooter />
