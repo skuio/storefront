@@ -105,6 +105,44 @@ export class OrdersService {
     return this.hydrate(`${ORDER_SELECT}${where} ORDER BY o.created_at DESC, o.number DESC LIMIT ?`, [limit])
   }
 
+  /**
+   * The owner's order list: newest first, filtered and paged, with the total for paging. `query` matches the
+   * buyer's email or name, the order number with or without the store's prefix ("VLD4200", "4200", "#4200"), or an
+   * imported order's original number. Orders copied from an earlier platform carry `metadata.imported_from` (e.g.
+   * "woocommerce") and `metadata.original_number`; `source` separates them from the store's own. Unpaid processor
+   * checkouts (abandoned) are left out unless `includeUnpaid`.
+   */
+  async search(
+    opts: { query?: string; status?: OrderStatus; source?: 'store' | 'imported'; includeUnpaid?: boolean; limit?: number; offset?: number } = {}
+  ): Promise<{ orders: Order[]; total: number }> {
+    const where: string[] = []
+    const args: (string | number)[] = []
+    const query = opts.query?.trim()
+    if (query) {
+      const prefix = this.ctx.config.orders.numberPrefix.toLowerCase()
+      let number = query.replace(/^#/, '').trim()
+      if (prefix && number.toLowerCase().startsWith(prefix)) number = number.slice(prefix.length)
+      where.push(`(o.email LIKE ? OR c.name LIKE ? OR CAST(o.number AS TEXT) = ? OR json_extract(o.metadata_json, '$.original_number') LIKE ?)`)
+      args.push(`%${query.toLowerCase()}%`, `%${query}%`, number.trim(), `%${query}%`)
+    }
+    if (opts.status) {
+      where.push('o.status = ?')
+      args.push(opts.status)
+    }
+    if (opts.source === 'imported') where.push(`json_extract(o.metadata_json, '$.imported_from') IS NOT NULL`)
+    if (opts.source === 'store') where.push(`json_extract(o.metadata_json, '$.imported_from') IS NULL`)
+    if (!opts.includeUnpaid) where.push(`(o.payment_status != 'unpaid' OR COALESCE(o.payment_provider, 'manual') = 'manual')`)
+    const clause = where.length ? ` WHERE ${where.join(' AND ')}` : ''
+    const limit = Math.min(Math.max(Math.trunc(opts.limit ?? 50), 1), 200)
+    const offset = Math.max(Math.trunc(opts.offset ?? 0), 0)
+    const counted = await this.ctx.db
+      .prepare(`SELECT COUNT(*) AS n FROM orders o JOIN customers c ON c.id = o.customer_id${clause}`)
+      .bind(...args)
+      .first<{ n: number }>()
+    const orders = await this.hydrate(`${ORDER_SELECT}${clause} ORDER BY o.created_at DESC, o.number DESC LIMIT ? OFFSET ?`, [...args, limit, offset])
+    return { orders, total: counted?.n ?? 0 }
+  }
+
   async count(): Promise<number> {
     const row = await this.ctx.db.prepare(`SELECT COUNT(*) AS n FROM orders`).first<{ n: number }>()
     return row?.n ?? 0

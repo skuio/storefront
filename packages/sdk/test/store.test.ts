@@ -209,6 +209,29 @@ describe('checkout', () => {
     expect(serializeOrder(first).number).toBe('4200')
   })
 
+  it('searches orders for the owner: email, name, number with or without prefix, original number, filters, paging', async () => {
+    const { store, db } = rig({}, { ...config, orders: { numberPrefix: 'VLD', numberStart: 4200 } })
+    await seed(store)
+    const ada = await placeOrder(store)
+    const grace = await placeOrder(store, { email: 'grace@example.com', name: 'Grace Hopper' })
+    const old = await placeOrder(store, { email: 'old@example.com', name: 'Old Buyer' })
+    for (const o of [ada, grace, old]) await store.orders.markPaid(o.id, { provider: 'manual', reference: null, paidAt: null }, { notify: false })
+    await db.prepare(`UPDATE orders SET metadata_json = ? WHERE id = ?`).bind(JSON.stringify({ imported_from: 'woocommerce', original_number: 'VLD4111' }), old.id).run()
+    const numbers = async (opts: Parameters<typeof store.orders.search>[0]) => (await store.orders.search(opts)).orders.map((o) => o.number)
+
+    expect(await numbers({})).toEqual(['4202', '4201', '4200'])
+    expect(await numbers({ query: 'grace@' })).toEqual(['4201'])
+    expect(await numbers({ query: 'Lovelace' })).toEqual(['4200'])
+    expect(await numbers({ query: 'VLD4201' })).toEqual(['4201'])
+    expect(await numbers({ query: '#4200' })).toEqual(['4200'])
+    expect(await numbers({ query: 'vld4111' })).toEqual(['4202'])
+    expect(await numbers({ source: 'imported' })).toEqual(['4202'])
+    expect(await numbers({ source: 'store' })).toEqual(['4201', '4200'])
+    expect(await numbers({ status: 'cancelled' })).toEqual([])
+    const page = await store.orders.search({ limit: 2, offset: 2 })
+    expect([page.total, page.orders.map((o) => o.number)]).toEqual([3, ['4200']])
+  })
+
   it('charges the international rate outside the domestic region and refuses a wrong rate', async () => {
     const { store } = rig()
     await seed(store)

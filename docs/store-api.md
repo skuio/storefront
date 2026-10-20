@@ -57,6 +57,12 @@ The owner can see every connection at `/admin/connections` (name, tenant, key pr
 revoke any of them. Revoking in the store and `DELETE /connect` from the consumer are the same
 operation.
 
+The owner's order list is `/admin/orders` (search by number, email or name; status and source filters; paged), backed by
+`store.orders.search()`. Orders copied in from an earlier platform at cutover carry `metadata.imported_from` (e.g.
+`"woocommerce"`) and `metadata.original_number`: the list tags them, and search finds them by the old number. Keep
+their `updated_at` before the consumer's import start date so the Store API's `updated_since` never hands them out as
+new.
+
 **Break-glass.** The `STORE_API_KEY` Worker secret still authenticates every endpoint, so a store
 whose owner is unreachable can be operated, and a brand-new store can be seeded before an owner
 exists. It is not a connection: `GET /connect` returns `null` for it and `DELETE /connect` is a 409.
