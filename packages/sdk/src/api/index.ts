@@ -170,6 +170,11 @@ async function route(method: string, path: string, url: URL, request: Request, s
       if (method === 'GET') return json({ data: serializeOrder(await store.orders.require(id), store.config.orders.numberPrefix) })
       if (method === 'PATCH') {
         const patch = validateOrderPatch(await readJson(request))
+        // Recording a payment is its own scope: a key that may read and stamp orders cannot
+        // turn an unpaid order into a paid one unless the owner approved that too.
+        if (patch.payment && caller.kind === 'connection' && !caller.connection.scopes.includes('payments')) {
+          return error(403, 'forbidden', 'This connection was not approved for "payments"; reconnect and approve it at /admin/connect')
+        }
         let order = await store.orders.require(id)
         if (patch.external_reference !== undefined) order = await store.orders.setExternalReference(id, patch.external_reference)
         if (patch.payment) order = await store.orders.setPaymentStatus(id, patch.payment)

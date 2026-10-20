@@ -36,7 +36,7 @@ consumer in the browser, and the consumer trades a one-time code for a key it al
    against the deployed store. `GET /health` reports `owner_configured: true` from then on;
    until it does, there is nobody to approve anything and the consumer should say so.
 2. **Browser step.** The consumer sends the owner's browser to
-   `https://<store>/admin/connect?client_id=<your system>&redirect_uri=<https url>&state=<opaque>&tenant=<account name>&scope=orders,fulfillments,inventory,catalog`
+   `https://<store>/admin/connect?client_id=<your system>&redirect_uri=<https url>&state=<opaque>&tenant=<account name>&scope=orders,payments,fulfillments,inventory,catalog`
    (SKU.io sends `client_id=skuio`).
    The store asks the owner to sign in (password, or an emailed reset if forgotten), then shows who
    is asking, what it may do, and the host the browser will be sent to. Approve → `302 <redirect_uri>?code=…&state=…`.
@@ -52,9 +52,10 @@ consumer in the browser, and the consumer trades a one-time code for a key it al
 Redirect rules: `redirect_uri` must be absolute `https` (plain `http` is allowed only for
 `localhost`, `*.localhost` and `*.test`, so a developer's SKU.io works), must not carry a fragment
 or credentials, and `client_id` is any 2–63 lowercase letters, digits, dots, dashes or underscores
-naming your system (`skuio` is shown as "SKU.io"; others are shown as sent). Scopes are the four listed;
+naming your system (`skuio` is shown as "SKU.io"; others are shown as sent). Scopes are the five listed;
 they are shown to the owner, travel with the connection and are **enforced per endpoint**:
-`orders` for `GET`/`PATCH /orders…`, `fulfillments` for `POST /orders/{id}/fulfillments`,
+`orders` for `GET`/`PATCH /orders…`, `payments` additionally for a `PATCH` that carries `payment`
+(marking an order paid, refunded or failed), `fulfillments` for `POST /orders/{id}/fulfillments`,
 `inventory` for `PUT /inventory`, `catalog` for `/products…` and `/categories…`. A connection that
 lacks one gets `403 forbidden`. The `STORE_API_KEY` secret is not scoped.
 

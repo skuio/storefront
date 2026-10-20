@@ -20,11 +20,12 @@ const CLIENT_ID = /^[a-z0-9][a-z0-9._-]{1,62}$/
 export function connectClientName(clientId: string): string {
   return KNOWN_CONNECT_CLIENTS[clientId] ?? clientId
 }
-export const CONNECT_SCOPES = ['orders', 'fulfillments', 'inventory', 'catalog'] as const
+export const CONNECT_SCOPES = ['orders', 'payments', 'fulfillments', 'inventory', 'catalog'] as const
 export type ConnectScope = (typeof CONNECT_SCOPES)[number]
 
 export const SCOPE_DESCRIPTIONS: Record<ConnectScope, string> = {
-  orders: 'Read orders, record payments and cancellations',
+  orders: 'Read orders, stamp its own order number on them and cancel them',
+  payments: 'Mark orders paid, refunded or failed (for payments taken outside this store)',
   fulfillments: 'Push shipments and tracking to orders',
   inventory: 'Update available stock',
   catalog: 'Read and update products and categories',

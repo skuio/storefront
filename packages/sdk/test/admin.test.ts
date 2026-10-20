@@ -365,6 +365,43 @@ describe('any operations system, on the neutral path', () => {
     expect((await neutral('GET', '/orders', undefined, ENV_KEY)).body.data.length).toBe(before)
   })
 
+  it('marking an order paid needs the payments scope; stamping and reading do not', async () => {
+    const { store, db } = rig()
+    await seed(store)
+    const order = await placeOrder(store)
+    const me = await owner(store)
+    const neutral = at(store, '/api/store/v1')
+    const keyFor = async (scope: string) => {
+      const request = store.connections.validateAuthorize({ ...REQUEST, scope })
+      const code = new URL((await store.connections.approve(request, me.id)).redirectTo).searchParams.get('code')!
+      return (await neutral('POST', '/connect/token', { code, redirect_uri: REQUEST.redirect_uri })).body.data.api_key as string
+    }
+    const paid = { payment: { status: 'paid', provider: 'manual', reference: 'r-1' } }
+
+    // SKU.io's request before the payments scope existed: four scopes.
+    const legacy = await keyFor('orders,fulfillments,inventory,catalog')
+    expect((await neutral('PATCH', `/orders/${order.id}`, { external_reference: 'SO-1' }, legacy)).status).toBe(200)
+    const refused = await neutral('PATCH', `/orders/${order.id}`, paid, legacy)
+    expect(refused.status).toBe(403)
+    expect(refused.body.error.message).toContain('payments')
+    expect((await neutral('GET', `/orders/${order.id}`, undefined, legacy)).body.data.payment.status).not.toBe('paid')
+
+    // Connections approved before the scope existed are upgraded by migration 0007: their
+    // owner approved "record payments" as part of `orders`.
+    const { readFileSync } = await import('node:fs')
+    db.raw.exec(readFileSync(new URL('../db/migrations/0007_payments_scope.sql', import.meta.url), 'utf8'))
+    expect((await neutral('PATCH', `/orders/${order.id}`, paid, legacy)).status).toBe(200)
+
+    // A connection without `orders` gains nothing from the migration.
+    const stockOnly = await keyFor('inventory')
+    db.raw.exec(readFileSync(new URL('../db/migrations/0007_payments_scope.sql', import.meta.url), 'utf8'))
+    expect((await neutral('GET', '/connect', undefined, stockOnly)).body.data.scopes).toEqual(['inventory'])
+
+    // New connections ask for it explicitly.
+    const withPayments = await keyFor('orders,payments')
+    expect((await neutral('PATCH', `/orders/${order.id}`, { payment: { status: 'refunded', provider: 'manual', reference: 'r-1' } }, withPayments)).status).toBe(200)
+  })
+
   it('still names SKU.io for its own client id', async () => {
     const { store } = rig()
     expect(store.connections.validateAuthorize(REQUEST)).toMatchObject({ clientId: 'skuio', clientName: 'SKU.io' })

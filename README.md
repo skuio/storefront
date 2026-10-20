@@ -236,7 +236,8 @@ stay underneath.
   records a payment or cancellation and adds shipments; a leaked key cannot
   invent a sale or change what was bought.
 - Each connection's key is limited to the scopes the owner approved (orders,
-  fulfillments, inventory, catalog), enforced per endpoint; keys are stored only
+  payments, fulfillments, inventory, catalog), enforced per endpoint; marking an
+  order paid needs `payments`, approved separately; keys are stored only
   as hashes and can be revoked at `/admin/connections`. The `STORE_API_KEY`
   break-glass secret is compared in constant time; the order's buyer-facing
   access key never leaves the store.
