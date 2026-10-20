@@ -135,18 +135,18 @@ async function route(method: string, path: string, url: URL, request: Request, s
       // Lazy housekeeping: abandoned processor checkouts become cancelled before the consumer sees the list.
       await store.orders.expireAbandoned()
       const page = await store.orders.changedSince(updatedSince ? new Date(updatedSince).toISOString() : null, cursor, limit)
-      return json({ data: page.orders.map(serializeOrder), next_cursor: page.nextCursor })
+      return json({ data: page.orders.map((o) => serializeOrder(o, store.config.orders.numberPrefix)), next_cursor: page.nextCursor })
     }
     const id = segments[1] ? decodeURIComponent(segments[1]) : ''
     if (segments.length === 2 && id) {
-      if (method === 'GET') return json({ data: serializeOrder(await store.orders.require(id)) })
+      if (method === 'GET') return json({ data: serializeOrder(await store.orders.require(id), store.config.orders.numberPrefix) })
       if (method === 'PATCH') {
         const patch = validateOrderPatch(await readJson(request))
         let order = await store.orders.require(id)
         if (patch.external_reference !== undefined) order = await store.orders.setExternalReference(id, patch.external_reference)
         if (patch.payment) order = await store.orders.setPaymentStatus(id, patch.payment)
         if (patch.status === 'cancelled') order = await store.orders.cancel(id, 'Cancelled by the operations system')
-        return json({ data: serializeOrder(order) })
+        return json({ data: serializeOrder(order, store.config.orders.numberPrefix) })
       }
     }
     if (segments.length === 3 && id && segments[2] === 'fulfillments' && method === 'POST') {

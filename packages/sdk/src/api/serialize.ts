@@ -116,11 +116,14 @@ export function serializeFulfillment(f: Fulfillment): ApiFulfillment {
   }
 }
 
-/** The Store API's view of an order. `access_key` never leaves the store. */
-export function serializeOrder(o: Order): ApiOrder {
+/**
+ * The Store API's view of an order. `access_key` never leaves the store. `number` is the human number the buyer
+ * sees, with the store's prefix (VLD4200), so the consumer shows the same number.
+ */
+export function serializeOrder(o: Order, numberPrefix = ''): ApiOrder {
   return {
     id: o.id,
-    number: o.number,
+    number: `${numberPrefix}${o.number}`,
     status: o.status,
     payment: { status: o.payment.status, provider: o.payment.provider, reference: o.payment.reference, method_label: o.payment.methodLabel, paid_at: o.payment.paidAt },
     currency: o.currency.toUpperCase(),

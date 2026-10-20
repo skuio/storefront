@@ -32,8 +32,14 @@ export interface StorefrontInput {
     lowStockThreshold?: number
   }
   orders?: {
-    /** Prefix for human order numbers: 'VLD-' → VLD-1001. */
+    /** Prefix for human order numbers: 'VLD-' → VLD-1001. Shown on pages, emails and receipts, and sent to SKU.io. */
     numberPrefix?: string
+    /**
+     * The lowest number a new order may take (default 1001). New orders take the next number above the highest
+     * order on file, or this, whichever is larger: set it above numbers an earlier platform used (4200 after
+     * WooCommerce's VLD4154) so a new order never repeats an old one.
+     */
+    numberStart?: number
   }
   /**
    * Discount codes the store prices itself (see discounts.ts). A code with a
@@ -63,6 +69,7 @@ export interface StorefrontConfig extends Omit<StorefrontInput, 'routes' | 'loca
   }
   orders: {
     numberPrefix: string
+    numberStart: number
   }
   discounts: DiscountCode[]
   quantityDiscounts: QuantityDiscount[]
@@ -105,6 +112,7 @@ export function defineStorefront(input: StorefrontInput): StorefrontConfig {
     },
     orders: {
       numberPrefix: input.orders?.numberPrefix ?? '',
+      numberStart: Math.max(1, Math.trunc(input.orders?.numberStart ?? 1001)),
     },
     discounts: input.discounts ?? [],
     quantityDiscounts: input.quantityDiscounts ?? [],
