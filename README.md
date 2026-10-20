@@ -30,6 +30,16 @@ npm run dev                               # or: npm run build:node && npm run st
 Then open `CLAUDE.md` in the new store. It explains the shape of the project
 to whatever agent you point at it, and names the one test that has to stay green.
 
+## Built with the kit
+
+| | |
+|---|---|
+| [![basicsolominer.com](docs/assets/showcase-basicsolominer.jpg)](https://basicsolominer.com) | [![verticallambodoors.com](docs/assets/showcase-verticallambodoors.jpg)](https://www.verticallambodoors.com) |
+| **[basicsolominer.com](https://basicsolominer.com)** — one product sold direct: a dark, interactive single-page store with PayPal express, on-chain bitcoin, discount codes and a partner (affiliate) program. | **[verticallambodoors.com](https://www.verticallambodoors.com)** — a 181-product catalogue moved off WooCommerce with its legacy URLs kept, vehicle search, and SKU.io driving stock and shipments. |
+
+Each is its own private repo on Cloudflare Workers + D1: the same SDK and
+blocks underneath, a completely different store on top.
+
 ## How it fits together
 
 ![How the kit, a store, payment processors and SKU.io (or another ERP) fit together](docs/assets/architecture.png)
