@@ -5,20 +5,24 @@ import { config, store } from '../../lib/store'
 import { requireOwner } from '../../lib/admin'
 
 /**
- * Every order the store has taken, newest first: who, what, how it was paid
- * (with the processor's reference), the code used, and where it is in
- * fulfilment. Read-only — operations happen in SKU.io once connected.
+ * Every order on file, newest first: search by order number (with or without the prefix), email or name; filter by
+ * status and by source (the store's own, or copied from an earlier platform, tagged with the number it was placed
+ * under); 50 to a page; each row opens to items, totals, ship-to, payment, discount and partner, SKU.io reference
+ * and tracking. Read-only: operations happen in SKU.io once connected.
  */
 export const prerender = false
 
 const owner = await requireOwner(Astro)
 if (owner instanceof Response) return owner
 
-const showAll = Astro.url.searchParams.get('all') === '1'
-const orders = await store(Astro).orders.recent({ limit: 200, includeUnpaid: showAll })
-const fmt = (m: { amount: number; currency: string }) => formatMoney(m, config.locale)
-const date = (iso: string) => new Date(iso).toLocaleString(config.locale, { dateStyle: 'medium', timeStyle: 'short' })
-const countries = new Intl.DisplayNames([config.locale], { type: 'region' })
+const PAGE = 50
+const params = Astro.url.searchParams
+const q = (params.get('q') ?? '').trim()
+const status = params.get('status') ?? ''
+const source = params.get('source') ?? ''
+const showAll = params.get('all') === '1'
+const page = Math.max(1, Math.trunc(Number(params.get('page')) || 1))
+
 const statusLabel: Record<Order['status'], string> = {
   pending_payment: 'Awaiting payment',
   paid: 'Paid — to ship',
@@ -28,48 +32,118 @@ const statusLabel: Record<Order['status'], string> = {
   cancelled: 'Cancelled',
   refunded: 'Refunded',
 }
-const paid = orders.filter((o) => o.payment.status === 'paid')
-const revenue = paid.reduce((n, o) => n + o.total.amount, 0)
+
+const { orders, total } = await store(Astro).orders.search({
+  query: q || undefined,
+  status: status in statusLabel ? (status as Order['status']) : undefined,
+  source: source === 'store' || source === 'imported' ? source : undefined,
+  includeUnpaid: showAll,
+  limit: PAGE,
+  offset: (page - 1) * PAGE,
+})
+const all = await store(Astro).orders.search({ includeUnpaid: true, limit: 1 })
+const imported = await store(Astro).orders.search({ source: 'imported', includeUnpaid: true, limit: 1 })
+
+const fmt = (m: { amount: number; currency: string }) => formatMoney(m, config.locale)
+const date = (iso: string) => new Date(iso).toLocaleString(config.locale, { dateStyle: 'medium', timeStyle: 'short' })
+const countries = new Intl.DisplayNames([config.locale], { type: 'region' })
+const pages = Math.max(1, Math.ceil(total / PAGE))
+const link = (p: number, all = showAll) => {
+  const u = new URLSearchParams()
+  if (q) u.set('q', q)
+  if (status) u.set('status', status)
+  if (source) u.set('source', source)
+  if (all) u.set('all', '1')
+  if (p > 1) u.set('page', String(p))
+  const s = u.toString()
+  return `/admin/orders/${s ? `?${s}` : ''}`
+}
+const tone: Partial<Record<Order['status'], string>> = { fulfilled: 'text-green-500', cancelled: 'opacity-50', refunded: 'opacity-50', pending_payment: 'text-amber-500' }
+const addr = (a: Order['shippingAddress'] | null) =>
+  a ? [a.name, a.line1, a.line2 !== a.line1 && a.line2, [a.city, a.state, a.postalCode].filter(Boolean).join(' '), a.country && countries.of(a.country)].filter(Boolean).join(', ') : ''
 ---
 
 <AdminShell title="Orders" owner={owner}>
-  <p class="mt-2 text-sm text-body/70">
-    {paid.length} paid · {fmt({ amount: revenue, currency: config.currency })} taken.
-    {showAll ? <a href="/admin/orders/" class="underline">Hide abandoned checkouts</a> : <a href="/admin/orders/?all=1" class="underline">Show abandoned checkouts too</a>}
-  </p>
+  <div class="mt-6 flex flex-wrap items-end justify-between gap-4">
+    <p class="text-sm text-body/70">
+      {all.total} on file{imported.total > 0 && <> · {imported.total} copied from an earlier platform</>} ·
+      <a href={link(1, !showAll)} class="underline">{showAll ? 'Hide' : 'Show'} abandoned checkouts</a>
+    </p>
+    <form method="GET" action="/admin/orders/" class="flex flex-wrap items-center gap-2 text-sm">
+      <input type="search" name="q" value={q} placeholder="Order #, email or name" aria-label="Search orders" class="w-56 rounded-md border border-rule bg-panel px-3 py-2" />
+      <select name="status" aria-label="Status" class="rounded-md border border-rule bg-panel px-3 py-2">
+        <option value="">Any status</option>
+        {Object.entries(statusLabel).map(([v, l]) => <option value={v} selected={status === v}>{l}</option>)}
+      </select>
+      <select name="source" aria-label="Source" class="rounded-md border border-rule bg-panel px-3 py-2">
+        <option value="">All orders</option>
+        <option value="store" selected={source === 'store'}>This store</option>
+        <option value="imported" selected={source === 'imported'}>Copied in</option>
+      </select>
+      {showAll && <input type="hidden" name="all" value="1" />}
+      <button type="submit" class="btn-primary px-4 py-2 text-sm">Search</button>
+      {(q || status || source) && <a href="/admin/orders/" class="text-body/70 underline">Clear</a>}
+    </form>
+  </div>
+
+  <p class="mt-6 text-xs text-body/60">{total} {total === 1 ? 'order' : 'orders'}{pages > 1 && ` · page ${page} of ${pages}`}</p>
   {
     orders.length === 0 ? (
-      <p class="mt-8 rounded-md border border-rule p-4 text-sm">No orders yet.</p>
+      <p class="mt-3 rounded-md border border-rule p-4 text-sm">{q || status || source ? 'No orders match.' : 'No orders yet.'}</p>
     ) : (
-      <ul class="mt-6 space-y-3" data-admin-orders>
+      <ul class="mt-3 divide-y divide-rule rounded-lg border border-rule" data-admin-orders>
         {orders.map((o) => {
+          const from = o.metadata?.imported_from
           const shipped = o.fulfillments.find((f) => f.trackingNumber)
           return (
-            <li class="rounded-lg border border-rule p-4 text-sm" data-order={o.number}>
-              <div class="flex flex-wrap items-baseline justify-between gap-2">
-                <span class="font-semibold text-ink">
-                  {config.orders.numberPrefix}{o.number} · {fmt(o.total)}
-                </span>
-                <span class="text-xs font-semibold tracking-wide uppercase">{statusLabel[o.status] ?? o.status}</span>
-              </div>
-              <p class="mt-1 text-body/80">
-                {o.customer.name ?? o.customer.email} · {o.customer.email}
-                {o.shippingAddress.country && <> · {countries.of(o.shippingAddress.country)}</>} · {date(o.createdAt)}
-              </p>
-              <p class="mt-1 text-body/80">
-                {o.lines.map((l) => `${l.quantity} × ${l.sku}`).join(', ')}
-                {o.discount.amount > 0 && <> · −{fmt(o.discount)}{o.discountCode && <> ({o.discountCode}{o.partner && <>, {o.partner.id}: {fmt(o.partner.commission)}</>})</>}</>}
-              </p>
-              <p class="mt-1 text-xs text-body/60">
-                {o.payment.provider ?? 'no payment yet'}
-                {o.payment.reference && <> · ref <code>{o.payment.reference}</code></>}
-                {o.externalReference && <> · SKU.io {o.externalReference}</>}
-                {shipped && <> · tracking {shipped.carrier ? `${shipped.carrier} ` : ''}{shipped.trackingNumber}</>}
-              </p>
+            <li data-order={o.number}>
+              <details>
+                <summary class="flex cursor-pointer list-none flex-wrap items-center gap-x-4 gap-y-1 px-4 py-3 text-sm hover:bg-panel">
+                  <span class="w-24 font-semibold text-ink">{config.orders.numberPrefix}{o.number}</span>
+                  <span class="w-40 text-body/70">{date(o.createdAt)}</span>
+                  <span class="min-w-0 flex-1 truncate">{o.customer.name ?? o.customer.email} <span class="text-body/50">· {o.customer.email}</span></span>
+                  <span class="w-24 text-right font-semibold text-ink">{fmt(o.total)}</span>
+                  <span class:list={['w-32 text-right text-xs font-semibold tracking-wide uppercase', tone[o.status] ?? 'text-ink']}>{statusLabel[o.status] ?? o.status}</span>
+                  {from && <span class="mono rounded-full bg-white/5 px-2 py-0.5 text-[10px] tracking-wider text-body uppercase" title={`Copied from ${from}`}>{from} {o.metadata.original_number}</span>}
+                </summary>
+                <div class="grid gap-4 border-t border-rule bg-panel/40 px-4 py-4 text-sm sm:grid-cols-2">
+                  <div>
+                    <p class="text-xs font-semibold tracking-wide text-body/60 uppercase">Items</p>
+                    <ul class="mt-1 space-y-1">
+                      {o.lines.map((l) => <li>{l.quantity} × {l.name} <span class="mono text-xs text-body/60">{l.sku}</span> · {fmt(l.totalAmount)}</li>)}
+                    </ul>
+                    <p class="mt-2 text-body/70">
+                      Subtotal {fmt(o.subtotal)} · shipping {o.shipping.amount ? fmt(o.shipping) : 'free'}{o.tax.amount > 0 && <> · tax {fmt(o.tax)}</>}
+                      {o.discount.amount > 0 && <> · −{fmt(o.discount)}{o.discountCode && <> ({o.discountCode}{o.partner && <>, {o.partner.id}: {fmt(o.partner.commission)}</>})</>}</>}
+                    </p>
+                    {o.notes && <p class="mt-2"><span class="text-body/60">Note:</span> {o.notes}</p>}
+                  </div>
+                  <div class="space-y-2">
+                    <p><span class="text-body/60">Ship to:</span> {addr(o.shippingAddress) || '—'}{o.shippingMethod && <> · {o.shippingMethod.name}</>}</p>
+                    {o.customer.phone && <p><span class="text-body/60">Phone:</span> {o.customer.phone}</p>}
+                    <p>
+                      <span class="text-body/60">Payment:</span> {o.payment.methodLabel ?? o.payment.provider ?? 'none yet'} · {o.payment.status}
+                      {o.payment.reference && <> · <code class="text-xs">{o.payment.reference}</code></>}
+                    </p>
+                    {o.externalReference && <p><span class="text-body/60">SKU.io:</span> {o.externalReference}</p>}
+                    {shipped && <p><span class="text-body/60">Tracking:</span> {shipped.carrier ? `${shipped.carrier} ` : ''}{shipped.trackingNumber}</p>}
+                    {from && <p class="text-xs text-body/60">Placed on {from} as {o.metadata.original_number}. History only: it was copied in at cutover and is not sent to SKU.io again.</p>}
+                  </div>
+                </div>
+              </details>
             </li>
           )
         })}
       </ul>
+    )
+  }
+  {
+    pages > 1 && (
+      <nav class="mt-4 flex items-center justify-between text-sm" aria-label="Pages">
+        {page > 1 ? <a href={link(page - 1)} class="underline">← Newer</a> : <span />}
+        <span class="text-body/60">Page {page} of {pages}</span>
+        {page < pages ? <a href={link(page + 1)} class="underline">Older →</a> : <span />}
+      </nav>
     )
   }
 </AdminShell>
