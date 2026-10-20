@@ -185,11 +185,12 @@ export class CheckoutService {
           `INSERT INTO orders (id, number, status, payment_status, currency, subtotal, shipping, tax, discount, total, customer_id, email,
              shipping_address_json, billing_address_json, shipping_method_code, shipping_method_name, notes, metadata_json, access_key, created_at, updated_at,
              discount_code, discount_partner, partner_commission)
-           VALUES (?, (SELECT COALESCE(MAX(number), 1000) + 1 FROM orders), 'pending_payment', 'unpaid', ?, ?, ?, 0, ?, ?, (SELECT id FROM customers WHERE email = ?), ?,
+           VALUES (?, (SELECT MAX(COALESCE(MAX(number), 0) + 1, ?) FROM orders), 'pending_payment', 'unpaid', ?, ?, ?, 0, ?, ?, (SELECT id FROM customers WHERE email = ?), ?,
              ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
         .bind(
           orderId,
+          this.ctx.config.orders.numberStart,
           quote.currency,
           quote.subtotal,
           quote.shipping,

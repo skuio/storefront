@@ -87,6 +87,10 @@ watermark by a minute and de-duplicate by `id`.
 }
 ```
 
+`number` is the human order number the buyer sees, with the store's `orders.numberPrefix` (`"VLD4200"`;
+plain `"1042"` without a prefix). New numbers start at `orders.numberStart` (default 1001) or one above the
+highest order on file, whichever is larger. Address orders by `id`, never by `number`.
+
 Order status: `pending_payment | paid | processing | partially_fulfilled | fulfilled | cancelled | refunded`.
 
 `pending_payment` means the buyer completed the store's checkout (contact, address, shipping

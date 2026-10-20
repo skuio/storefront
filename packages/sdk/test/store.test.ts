@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { StoreError } from '../src/store'
-import { placeOrder, products, rig, seed, usAddress } from './helpers'
+import { serializeOrder } from '../src/api/serialize'
+import { config, placeOrder, products, rig, seed, usAddress } from './helpers'
 
 describe('catalog service', () => {
   it('upserts categories and products and builds the snapshot', async () => {
@@ -195,6 +196,17 @@ describe('checkout', () => {
     expect(second.number).toBe('1002')
     expect(second.customer.id).toBe(order.customer.id)
     expect((await store.events.list(order.id)).map((e) => e.type)).toEqual(['created'])
+  })
+
+  it('starts numbering at orders.numberStart and never goes below it', async () => {
+    const { store } = rig({}, { ...config, orders: { numberPrefix: 'VLD', numberStart: 4200 } })
+    await seed(store)
+    const first = await placeOrder(store)
+    const second = await placeOrder(store)
+    expect([first.number, second.number]).toEqual(['4200', '4201'])
+    // The Store API sends the number the buyer sees, prefix included.
+    expect(serializeOrder(first, 'VLD').number).toBe('VLD4200')
+    expect(serializeOrder(first).number).toBe('4200')
   })
 
   it('charges the international rate outside the domestic region and refuses a wrong rate', async () => {
