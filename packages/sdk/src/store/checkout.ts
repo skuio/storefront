@@ -80,7 +80,7 @@ export class CheckoutService {
   }
 
   /**
-   * Price a set of lines from the catalogue. Quantities are clamped to the
+   * Price a set of lines from the catalog. Quantities are clamped to the
    * store's per-line maximum; unknown or unavailable SKUs fail validation.
    */
   async quote(items: CheckoutItem[], country: string, shippingOptionId: string, discountCode?: string | null): Promise<Quote> {

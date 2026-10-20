@@ -23,7 +23,7 @@ export interface StoreOptions {
   mail?: MailAdapter
   /** Injectable clock for tests. */
   clock?: () => Date
-  /** How long an isolate keeps a catalogue snapshot. 0 disables the cache. */
+  /** How long an isolate keeps a catalog snapshot. 0 disables the cache. */
   catalogCacheTtlMs?: number
   log?: (message: string, data?: unknown) => void
 }

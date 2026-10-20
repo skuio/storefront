@@ -1,6 +1,6 @@
 ---
 name: launch
-description: Take a new store (no previous site) from preview to open for orders — the go-live checklist covering payments, email, catalogue facts, SKU.io, crawl surface and the first real order.
+description: Take a new store (no previous site) from preview to open for orders — the go-live checklist covering payments, email, catalog facts, SKU.io, crawl surface and the first real order.
 ---
 
 # Launch a new store
@@ -21,7 +21,7 @@ default host.
    `CLAUDE.md` → "Choosing a payment processor"). Note any new-account fund
    hold in the plan. Proof: the owner has read the relevant clause, or the
    processor confirmed in writing.
-3. **Catalogue facts are sourced.** Every product's specs, photos and claims
+3. **Catalog facts are sourced.** Every product's specs, photos and claims
    trace to the manufacturer or the owner; nothing left marked `CONFIRM`.
    Prices are integer cents and match the owner's list.
 4. **Policies are real.** Shipping, returns, terms and privacy pages say what

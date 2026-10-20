@@ -18,7 +18,7 @@ import { database, platformEnv } from '~host'
  *
  * `store(Astro)` builds a Store over the D1 binding for this request and
  * memoises it on `Astro.locals`, so every component in the same request
- * shares one catalogue snapshot.
+ * shares one catalog snapshot.
  */
 export { config }
 export const routes = config.routes

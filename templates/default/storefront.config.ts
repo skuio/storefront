@@ -3,9 +3,9 @@ import { defineStorefront, flatRate, freeShipping } from '@skuio/storefront'
 /**
  * The one file that describes this store.
  *
- * The catalogue itself lives in the store's database (Cloudflare D1): seed it
+ * The catalog itself lives in the store's database (Cloudflare D1): seed it
  * from src/data/*.json with `npm run seed`, or let SKU.io push it through the
- * Store API. Nothing here changes when the catalogue does.
+ * Store API. Nothing here changes when the catalog does.
  *
  * `routes` are URL patterns. If you change them, move the files under
  * src/pages to match (they are just files; Astro routes by filename).

@@ -157,7 +157,7 @@ export function serializeOrder(o: Order, numberPrefix = ''): ApiOrder {
   }
 }
 
-/** The Store API's view of a catalogue product — the stored row, not the shopper projection. */
+/** The Store API's view of a catalog product — the stored row, not the shopper projection. */
 export function serializeProduct(p: ProductRecord): ApiProduct {
   return {
     sku: p.sku,

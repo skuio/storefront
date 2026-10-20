@@ -21,7 +21,7 @@ while (cur) {
   cur = cur.parentId ? catalog.category(cur.parentId)! : undefined!
 }
 
-// The description is catalogue HTML (seeded, migrated from WooCommerce or pushed by SKU.io), the same
+// The description is catalog HTML (seeded, migrated from WooCommerce or pushed by SKU.io), the same
 // trusted source as a product description: render it as HTML, and give the meta description its text.
 const plainDescription = (node.description ?? '')
   .replace(/<[^>]+>/g, ' ')

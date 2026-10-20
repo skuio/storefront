@@ -18,7 +18,7 @@ const ordered = [...connections].sort((a, b) => Number(!!a.revokedAt) - Number(!
 ---
 
 <AdminShell title="Connections" owner={owner}>
-  <p class="mt-2 text-sm text-body/70">Systems allowed to read this store's orders and push shipments, stock and catalogue. Each holds its own key; revoking one does not touch the others.</p>
+  <p class="mt-2 text-sm text-body/70">Systems allowed to read this store's orders and push shipments, stock and catalog. Each holds its own key; revoking one does not touch the others.</p>
   {revoked && <p class="mt-4 rounded-md border border-green-600/30 bg-green-50 px-4 py-3 text-sm text-green-800" role="status">Connection revoked. Its key no longer works.</p>}
 
   {

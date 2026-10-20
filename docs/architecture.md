@@ -13,7 +13,7 @@ one engine**.
 So the kit is a **self-contained e-commerce platform** (think WooCommerce
 without WordPress): an Astro site with its own SQL database (D1 on Cloudflare
 Workers by default, or SQLite on any Node host)
-database that owns catalogue, customers, orders, payments and the buyer
+database that owns catalog, customers, orders, payments and the buyer
 portal, plus a **Store API** the operations system talks to. Payments and mail
 are adapters. Nothing in the platform depends on Stripe, on SKU.io, or on any
 other vendor; each is a plug.
@@ -47,7 +47,7 @@ sku.io (private)                    the "Storefront" sales-channel integration: 
 ## What runs where
 
 Every page is **server-rendered per request from the store's database** — the header alone
-needs the category tree, so nothing can be prerendered — and one catalogue
+needs the category tree, so nothing can be prerendered — and one catalog
 snapshot is shared by every component in a request (cached briefly per
 isolate). Static assets (images, CSS, JS) are served by the assets binding.
 Card data goes to the processor's hosted page and never touches the store.
@@ -75,6 +75,6 @@ order number + email works without an account.
 A **Storefront** sales-channel integration that is a client of the Store API:
 poll `GET /orders?updated_since=…` into sales orders, stamp `external_reference`,
 push stock with `PUT /inventory`, push shipments with
-`POST /orders/{id}/fulfillments`, and optionally own the catalogue with
+`POST /orders/{id}/fulfillments`, and optionally own the catalog with
 `PUT /products` / `PUT /categories`. The contract is `store-api.md` +
 `api/store-api-v1.openapi.yaml`.

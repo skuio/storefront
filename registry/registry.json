@@ -1,7 +1,7 @@
 {
   "version": 1,
   "conventions": {
-    "note": "Blocks import { store, config, routes, readEnv, payment, paymentMethods, paymentContext, mail, siteUrl } from src/lib/store.ts and { resolveImage } from src/lib/images.ts. Both files ship in the template; keep those exports if you restructure. `store(Astro)` returns the per-request Store (memoised on Astro.locals) \u2014 call `await store(Astro).catalog.load()` for the catalogue snapshot.",
+    "note": "Blocks import { store, config, routes, readEnv, payment, paymentMethods, paymentContext, mail, siteUrl } from src/lib/store.ts and { resolveImage } from src/lib/images.ts. Both files ship in the template; keep those exports if you restructure. `store(Astro)` returns the per-request Store (memoised on Astro.locals) \u2014 call `await store(Astro).catalog.load()` for the catalog snapshot.",
     "sdk": "@skuio/storefront",
     "runtime": "Cloudflare Workers with a D1 binding named DB; see docs/store-platform.md."
   },
@@ -296,7 +296,7 @@
     },
     {
       "name": "sitemap",
-      "description": "sitemap.xml generated from the live catalogue.",
+      "description": "sitemap.xml generated from the live catalog.",
       "files": [
         {
           "from": "pages/sitemap.xml.ts",

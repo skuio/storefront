@@ -1,7 +1,7 @@
 import type { Category, CategoryNode, Product } from './types'
 
 /**
- * An in-memory snapshot of the catalogue with the tree and the lookups the
+ * An in-memory snapshot of the catalog with the tree and the lookups the
  * pages need. Built from plain data — the store service builds one from the
  * database per request (cached briefly per isolate); tests build one from
  * fixtures.

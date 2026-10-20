@@ -1,6 +1,6 @@
 ---
 name: cutover
-description: Move a live WooCommerce store onto this storefront without losing orders, rankings or revenue — audit the old store's configuration, protect what earns, migrate catalogue and URLs, keep the SKU.io order feed unbroken, then switch DNS.
+description: Move a live WooCommerce store onto this storefront without losing orders, rankings or revenue — audit the old store's configuration, protect what earns, migrate catalog and URLs, keep the SKU.io order feed unbroken, then switch DNS.
 ---
 
 # Cut over from WooCommerce
@@ -29,7 +29,7 @@ live value, what this store will do, and every deliberate difference:
   the supplier's actual terms before copying either.
 - **Order profile** — typical lines per order, countries, order values; it
   decides whether the cart, express checkout or international shipping matter.
-- **Catalogue quirks** — product types (simple/variable), SKUs with HTML
+- **Catalog quirks** — product types (simple/variable), SKUs with HTML
   entities, products whose permalink names a category they are not in.
 
 Open questions go to the owner as decisions, recorded in the same file.
@@ -39,7 +39,7 @@ Open questions go to the owner as decisions, recorded in the same file.
 Before touching URLs or templates, list every source of revenue and traffic
 (`CLAUDE.md` → "SEO migrations"):
 
-- Shopping feeds (Merchant Center) — the new catalogue must produce the same
+- Shopping feeds (Merchant Center) — the new catalog must produce the same
   item ids/links, or the feed must be regenerated and resubmitted on the day.
 - Ad-platform purchase tags and conversion events — they must fire from the
   new success page before cutover, verified with test event codes.
@@ -47,7 +47,7 @@ Before touching URLs or templates, list every source of revenue and traffic
   or gets a 301.
 - Affiliate / partner links and coupon codes in circulation.
 
-## 3. Migrate catalogue and URLs
+## 3. Migrate catalog and URLs
 
 ```
 npm run migrate:woocommerce -- --origin https://old-site.com
@@ -75,7 +75,7 @@ inventory is not pushed to two places.
 
 ## 5. Cutover day
 
-1. Freeze catalogue edits on the old site; re-export if anything changed.
+1. Freeze catalog edits on the old site; re-export if anything changed.
 2. Production Worker with live keys, `PUBLIC_SITE_URL` and `CANONICAL_HOST`
    matching the old canonical host (www or apex — keep whichever ranked).
 3. `node scripts/predeploy.mjs && npm run deploy`; attach the domain; lower

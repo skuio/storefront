@@ -20,7 +20,7 @@ is the first consumer; anything that can speak this contract can run the store.
 | PATCH | `/orders/{id}` | Stamp `external_reference`, record a payment status, or cancel. |
 | POST | `/orders/{id}/fulfillments` | Push a shipment (idempotent per `external_id`); the store emails the buyer. |
 | PUT | `/inventory` | Batch upsert of available quantities per SKU. |
-| GET | `/products` | The catalogue the store holds, oldest-updated first, keyset-paged. |
+| GET | `/products` | The catalog the store holds, oldest-updated first, keyset-paged. |
 | GET | `/products/{sku}` | One product, active or not. |
 | PUT | `/products` | Batch upsert of products (≤ 200 per call). |
 | DELETE | `/products/{sku}` | Deactivate a product (it stays for order history). |
@@ -84,7 +84,7 @@ Cin7, an n8n or Make workflow, a script) connects the same way:
    system; `PATCH /orders/{id}` with `external_reference` so both sides share the number.
 3. Push shipments with `POST /orders/{id}/fulfillments` (the store emails tracking to the buyer).
 4. Push stock with `PUT /inventory`.
-5. Optionally own the catalogue: `PUT /products`, `PUT /categories` (or read the store's with
+5. Optionally own the catalog: `PUT /products`, `PUT /categories` (or read the store's with
    `GET /products`, `GET /categories` to import and map it first).
 
 Several systems can be connected at once, each with its own revocable key — useful for running an
@@ -154,10 +154,10 @@ Returns `201` with the fulfilment the first time and `200` with the same one on 
 The store raises `fulfilled_quantity` on the lines, moves the order to `partially_fulfilled`
 or `fulfilled`, and emails the buyer once per fulfilment.
 
-## Reading the catalogue
+## Reading the catalog
 
 The write endpoints alone make the operations system the only possible source of truth. The
-read endpoints are what let it **import** a store that already has a catalogue, map those
+read endpoints are what let it **import** a store that already has a catalog, map those
 products to its own, and notice drift afterwards — the same import-then-map shape every other
 sales channel uses.
 

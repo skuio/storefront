@@ -3,7 +3,7 @@ import type { ProductImage } from '@skuio/storefront'
 /**
  * Product images live in src/assets/products, imported eagerly so Astro emits
  * them as hashed static assets. A product's `images[].src` is matched to a
- * file by basename, so a catalogue exported from anywhere still resolves to
+ * file by basename, so a catalog exported from anywhere still resolves to
  * the local copy; an absolute URL (a product pushed by SKU.io with hosted
  * images) is used as-is.
  *

@@ -1,5 +1,5 @@
 /**
- * Opaque keyset cursors for the catalogue list endpoints.
+ * Opaque keyset cursors for the catalog list endpoints.
  *
  * A cursor is base64 of a JSON tuple of the sort keys of the last row on the
  * page. It is opaque by contract: callers echo it back and never parse it.

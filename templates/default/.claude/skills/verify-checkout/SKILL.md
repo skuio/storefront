@@ -1,6 +1,6 @@
 ---
 name: verify-checkout
-description: Prove the store still works end to end after a change — catalogue from D1, checkout, order lifecycle through the Store API.
+description: Prove the store still works end to end after a change — catalog from D1, checkout, order lifecycle through the Store API.
 ---
 
 # Verify checkout
@@ -11,7 +11,7 @@ npm run e2e
 ```
 
 What it checks (against the dev server on the local D1, `manual` payments):
-- the home page links into the catalogue and those links resolve
+- the home page links into the catalog and those links resolve
 - a product page has a buy form carrying a SKU and **no price field**, and no `/_image?` URL
 - `/api/checkout` returns 422 with per-field details for an unknown SKU and missing fields
 - an order goes cart → `/checkout/` → `/checkout/pending/`, is read back through

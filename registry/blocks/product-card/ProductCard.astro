@@ -10,7 +10,7 @@ interface Props {
 }
 
 const { product, loading = 'lazy' } = Astro.props
-// One catalogue snapshot per request: store(Astro) is memoised on Astro.locals.
+// One catalog snapshot per request: store(Astro) is memoised on Astro.locals.
 const catalog = await store(Astro).catalog.load()
 const img = resolveImage(product.images[0])
 const href = routes.product(product, catalog)

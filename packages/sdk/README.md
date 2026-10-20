@@ -1,6 +1,6 @@
 # @skuio/storefront
 
-Typed catalogue, checkout and order primitives for storefronts on the SKU.io
+Typed catalog, checkout and order primitives for storefronts on the SKU.io
 storefront kit. Framework-agnostic: takes and returns plain data.
 
 ```ts
@@ -17,7 +17,7 @@ import { createStripeCheckout, parseStripeWebhook } from '@skuio/storefront/stri
   Storefront API: live availability, checkout created by SKU.io on the
   tenant\'s processor, orders born in SKU.io).
 - Stripe helpers behind a separate entry point so non-Stripe stores never
-  bundle it. Prices are only ever read from the catalogue on the server.
+  bundle it. Prices are only ever read from the catalog on the server.
 - Cart functions — pure, browser-agnostic, never trusted for money.
 
 Start a store with `npx @skuio/cli create my-store`. Kit and docs:

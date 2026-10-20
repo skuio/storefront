@@ -115,7 +115,7 @@ const badge = (o: Order): { label: string; cls: string } => {
 <script>
   import { cartStore } from '../../../lib/cart.client'
   // Reorder = put the lines back in the cart. Prices shown come from the order;
-  // checkout re-prices from the catalogue, so a changed price is applied then.
+  // checkout re-prices from the catalog, so a changed price is applied then.
   document.querySelectorAll<HTMLButtonElement>('[data-reorder]').forEach((button) => {
     button.addEventListener('click', () => {
       const lines = JSON.parse(button.dataset.reorder!) as { sku: string; name: string; quantity: number; unitPrice: { amount: number; currency: string }; image?: string }[]
