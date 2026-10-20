@@ -164,7 +164,7 @@ describe('inventory service', () => {
 })
 
 describe('checkout', () => {
-  it('prices from the catalogue, merges duplicate lines and numbers orders from 1001', async () => {
+  it('prices from the catalog, merges duplicate lines and numbers orders from 1001', async () => {
     const { store } = rig()
     await seed(store)
     const order = await placeOrder(store, {

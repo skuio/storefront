@@ -10,7 +10,7 @@ import storefront from './storefront.config'
 //                          D1 and .dev.vars through the platform proxy.
 //   node                 — any Node server; one SQLite file at DATABASE_PATH,
 //                          secrets from the environment. `node dist/server/entry.mjs`.
-// Catalogue pages, checkout, the portal and the Store API render per request
+// Catalog pages, checkout, the portal and the Store API render per request
 // from the database. Only routes that say `export const prerender = true`
 // (policy pages, the cart shell) are static.
 const host = process.env.STORE_HOST ?? 'cloudflare'

@@ -1,7 +1,7 @@
 # The store platform (v2)
 
 The storefront kit is a **self-contained e-commerce platform**: a site built on it owns its
-catalogue, customers, orders, payments and buyer portal in its **own database**, and exposes
+catalog, customers, orders, payments and buyer portal in its **own database**, and exposes
 a **Store API** so an operations system (SKU.io first) can pull orders and push inventory,
 fulfilments and products. Think of it as a WooCommerce replacement that is not WordPress: an
 Astro site with a SQLite-family database behind it: Cloudflare Workers + D1 by default, or any
@@ -22,7 +22,7 @@ buyer ──▶ store (Astro + its DB) ◀────────── Store A
 
 | Concern | Owner | Notes |
 |---|---|---|
-| Catalogue (products, categories, images, prices) | Store DB | Pushed by SKU.io (`PUT /products`, `PUT /categories`); can also be seeded from a file. |
+| Catalog (products, categories, images, prices) | Store DB | Pushed by SKU.io (`PUT /products`, `PUT /categories`); can also be seeded from a file. |
 | Availability | Store DB | Pushed by SKU.io (`PUT /inventory`); status is derived from `available` + thresholds. |
 | Cart, checkout, order creation | Store | Prices are read from the store DB at checkout, never from the client. |
 | Payment | Payment adapter | Stripe hosted Checkout today; `manual` (pay later) ships as the second adapter and the proof that the pipeline is processor-neutral. |

@@ -2,7 +2,7 @@
 
 A self-contained e-commerce platform for coding agents to build stores on:
 an Astro site with its own SQL database, a store core that owns
-catalogue, checkout, orders, payments and the buyer portal, and a **Store
+catalog, checkout, orders, payments and the buyer portal, and a **Store
 API** so an operations system (SKU.io first) can pull orders and push
 inventory, fulfilments and products. Payments and mail are adapters. Think
 WooCommerce without WordPress, and without being tied to any processor or
@@ -13,7 +13,7 @@ server with a SQLite file (`STORE_HOST=node`).
 npx @skuio/cli create my-store
 cd my-store && npm install
 npx wrangler d1 create my-store           # paste the id into wrangler.jsonc
-npm run db:migrate:local && npm run seed  # schema + demo catalogue into the local D1
+npm run db:migrate:local && npm run seed  # schema + demo catalog into the local D1
 cp .dev.vars.example .dev.vars            # manual payments + console mail work with no keys
 npm run dev
 ```
@@ -23,7 +23,7 @@ SQLite file:
 
 ```
 export STORE_HOST=node DATABASE_PATH=data/store.db
-npm run seed:sqlite                       # schema + demo catalogue into the SQLite file
+npm run seed:sqlite                       # schema + demo catalog into the SQLite file
 npm run dev                               # or: npm run build:node && npm run start:node
 ```
 
@@ -35,7 +35,7 @@ to whatever agent you point at it, and names the one test that has to stay green
 | | |
 |---|---|
 | [![basicsolominer.com](docs/assets/showcase-basicsolominer.jpg)](https://basicsolominer.com) | [![verticallambodoors.com](docs/assets/showcase-verticallambodoors.jpg)](https://www.verticallambodoors.com) |
-| **[basicsolominer.com](https://basicsolominer.com)** — one product sold direct: a dark, interactive single-page store with PayPal express, on-chain bitcoin, discount codes and a partner (affiliate) program. | **[verticallambodoors.com](https://www.verticallambodoors.com)** — a 181-product catalogue moved off WooCommerce with its legacy URLs kept, vehicle search, and SKU.io driving stock and shipments. |
+| **[basicsolominer.com](https://basicsolominer.com)** — one product sold direct: a dark, interactive single-page store with PayPal express, on-chain bitcoin, discount codes and a partner (affiliate) program. | **[verticallambodoors.com](https://www.verticallambodoors.com)** — a 181-product catalog moved off WooCommerce with its legacy URLs kept, vehicle search, and SKU.io driving stock and shipments. |
 
 Each is its own private repo on Cloudflare Workers + D1: the same SDK and
 blocks underneath, a completely different store on top.
@@ -65,7 +65,7 @@ flowchart TB
       PART["/partners<br/>affiliate dashboard"]
       OWN["/admin<br/>owner admin (light)"]
     end
-    CORE[("Store core from the SDK<br/>catalogue · orders · customers<br/>in the store's database")]
+    CORE[("Store core from the SDK<br/>catalog · orders · customers<br/>in the store's database")]
     API["Store API<br/>/api/skuio/v1"]
     FACES --> CORE
     API --> CORE
@@ -96,7 +96,7 @@ relationship to the kit. **SKU.io** never runs inside the store. It connects
 from outside as a client of the Store API: the owner approves the connection at
 `/admin/connect`, SKU.io polls new orders, stamps its own order number back, and
 pushes stock, shipments (the store emails tracking) and, if it owns the
-catalogue, products and categories.
+catalog, products and categories.
 
 ## Who uses what
 
@@ -128,7 +128,7 @@ system needs a connector that does five things:
 | Write its own order number back | `PATCH /orders/{id}` with `external_reference` |
 | Send shipments and tracking (the store emails the buyer) | `POST /orders/{id}/fulfillments` |
 | Send stock levels | `PUT /inventory` |
-| Optionally own the catalogue | `PUT /products`, `PUT /categories` |
+| Optionally own the catalog | `PUT /products`, `PUT /categories` |
 
 Against any ERP with a usable API (NetSuite, Odoo, Cin7, QuickBooks Commerce…)
 that is days of work, not weeks, and an integration platform such as n8n can do
@@ -139,7 +139,7 @@ and a new ERP can run side by side during a switch.
 **Any host.** Cloudflare Workers + D1 or any Node server with SQLite (see
 "How a store works" above); moving between them is copying the database.
 
-**Your data.** The store's database is plain SQLite: catalogue, customers,
+**Your data.** The store's database is plain SQLite: catalog, customers,
 orders, payments, fulfilments, discount codes, partners. `wrangler d1 export
 <db> --remote --output store.sql` (or copying the SQLite file on Node) gives a
 complete dump any system can import, and the Store API can read every order and
@@ -183,10 +183,10 @@ Suggestions, cheapest first:
 
 | Path | What | Published as |
 |---|---|---|
-| `packages/sdk` | The store core (`/store`), the Store API handler (`/api`), payment adapters (`/payments`, `/payments/stripe`, `/payments/paypal`, `/payments/btcpay`, `/payments/manual`), mail adapters (`/mail`, `/mail/sendgrid`, `/mail/console`), the D1 schema (`db/migrations`), and the catalogue/routing/money/cart primitives (`.`). Framework-agnostic. | `@skuio/storefront` |
+| `packages/sdk` | The store core (`/store`), the Store API handler (`/api`), payment adapters (`/payments`, `/payments/stripe`, `/payments/paypal`, `/payments/btcpay`, `/payments/manual`), mail adapters (`/mail`, `/mail/sendgrid`, `/mail/console`), the D1 schema (`db/migrations`), and the catalog/routing/money/cart primitives (`.`). Framework-agnostic. | `@skuio/storefront` |
 | `packages/cli` | `create` a store from a template, `add` blocks from the registry. | `@skuio/cli` |
 | `registry/` | UI blocks: source of truth for everything under a store's `src/components` and `src/pages/api`. | copied into stores by `skuio add` |
-| `templates/default` | The reference store. Built from the registry; a complete, deployable site with a demo catalogue. | copied by `skuio create` |
+| `templates/default` | The reference store. Built from the registry; a complete, deployable site with a demo catalog. | copied by `skuio create` |
 | `docs/` | `store-platform.md` (architecture, runtime, env), `store-api.md` + `api/store-api-v1.openapi.yaml` (the contract). | |
 
 ## The model: SDK as a dependency, UI as owned code
@@ -210,7 +210,7 @@ stay underneath.
   default) or `node` (any Node server; one SQLite file at `DATABASE_PATH`,
   migrated on boot). Same SQL, same code, same guardrail test on both; CI runs
   it on each. Another host is another `host.*.ts` file.
-- **Catalogue** lives in the store's database. Seed it from `src/data/*.json`
+- **Catalog** lives in the store's database. Seed it from `src/data/*.json`
   with `npm run seed`, or let SKU.io push it through `PUT /products` and
   `PUT /categories`. Availability comes from `PUT /inventory`.
 - **Checkout** is the store's own page: contact, address, shipping method.

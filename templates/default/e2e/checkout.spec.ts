@@ -22,7 +22,7 @@ const api = { Authorization: `Bearer ${API_KEY}`, 'content-type': 'application/j
 // match the site — correct for production, so the tests send it like a browser would.
 const browser = { Origin: 'http://localhost:4321' }
 
-test('home page lists categories and links into the catalogue', async ({ page, request }) => {
+test('home page lists categories and links into the catalog', async ({ page, request }) => {
   await page.goto('/', { waitUntil: 'load' })
   await expect(page.locator('main h1').first()).toBeVisible({ timeout: 15_000 })
   const links = page.locator('a[href^="/collections/"], a[href^="/products/"]')

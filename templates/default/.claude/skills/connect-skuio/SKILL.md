@@ -27,9 +27,9 @@ kit's `docs/store-api.md`). Nothing about the store's design changes.
    key → **Test connection** (it calls `/health`). Then choose what SKU.io
    owns: orders (polled from `GET /orders?updated_since`), inventory
    (`PUT /inventory`), fulfilments (`POST /orders/{id}/fulfillments`), and
-   optionally the catalogue (`PUT /products`, `PUT /categories`).
+   optionally the catalog (`PUT /products`, `PUT /categories`).
 
-4. If SKU.io owns the catalogue, `src/data/*.json` becomes history: keep it
+4. If SKU.io owns the catalog, `src/data/*.json` becomes history: keep it
    or delete it. Product images pushed by SKU.io are URLs; `resolveImage`
    uses them as-is (keep `src/assets/products/` only for local copies).
 
@@ -47,7 +47,7 @@ kit's `docs/store-api.md`). Nothing about the store's design changes.
 ## Before you switch it on
 
 - **Seed and demo stock never reaches production.** `npm run seed:remote`
-  writes the demo catalogue and its stock; a store SKU.io will feed must not
+  writes the demo catalog and its stock; a store SKU.io will feed must not
   carry it. If the production database was ever seeded, delete those products
   (or let SKU.io's first `PUT /products` replace them) and confirm
   `/health` → `data.counts` matches what SKU.io pushed before taking orders.

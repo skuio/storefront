@@ -125,7 +125,7 @@ paths:
     get:
       operationId: listProducts
       description: |
-        The store's catalogue, oldest-updated first, for an operations system importing
+        The store's catalog, oldest-updated first, for an operations system importing
         or reconciling it. Includes inactive products so a withdrawal is visible.
       parameters:
         - { name: updated_since, in: query, schema: { type: string, format: date-time }, description: Inclusive watermark }
@@ -336,7 +336,7 @@ components:
       properties: { data: { $ref: '#/components/schemas/Order' } }
     Product:
       type: object
-      description: A catalogue product as the store holds it.
+      description: A catalog product as the store holds it.
       required: [sku, name, slug, price, active]
       properties:
         sku: { type: string }

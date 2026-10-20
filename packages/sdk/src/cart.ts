@@ -4,7 +4,7 @@ import { addMoney, multiplyMoney } from './money.js'
 /**
  * A cart is client-side state — lines the customer has chosen, with a snapshot
  * of what they saw (name, price) so the cart page can render without the
- * catalogue. It is never trusted for money: checkout re-prices every SKU on the
+ * catalog. It is never trusted for money: checkout re-prices every SKU on the
  * server. These are pure functions; the browser store wraps them.
  */
 export interface CartLine {

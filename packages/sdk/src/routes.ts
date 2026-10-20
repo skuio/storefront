@@ -13,7 +13,7 @@ import type { Catalog } from './catalog.js'
 export interface RoutePatterns {
   product: string
   category: string
-  /** Where the full catalogue lives. */
+  /** Where the full catalog lives. */
   shop: string
 }
 

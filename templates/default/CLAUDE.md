@@ -21,7 +21,7 @@ src/pages/api/payments/    the processor webhook (adapter-neutral)
 src/pages/api/store/v1/    the Store API — what an operations system talks to
 src/pages/api/skuio/v1/    the same Store API at the path SKU.io calls (keep both)
 src/pages/account/         portal: sign-in by emailed link, orders, order detail
-src/data/*.json            a catalogue to seed the database from (npm run seed)
+src/data/*.json            a catalog to seed the database from (npm run seed)
 src/assets/products/       product images, matched to products by filename
 src/styles/global.css      design tokens; change these and everything follows
 scripts/db-migrate.mjs     applies the SDK's schema to D1 (local or remote)
@@ -40,7 +40,7 @@ prerendered pages: the header needs the live category tree.
 ## Rules
 
 1. **Keep `npm run e2e` green.** It proves the store still works end to end:
-   the catalogue renders from D1, a product page has a buy form, `/api/checkout`
+   the catalog renders from D1, a product page has a buy form, `/api/checkout`
    refuses unknown SKUs and reports missing fields, an order goes
    checkout → pending → paid → shipped through the Store API, and the Store
    API refuses a bad key. Run it after any change to `src/pages/api/`,
@@ -101,10 +101,10 @@ yours. See `.claude/skills/add-block`.
 under `src/pages` to match (`products/[slug].astro`, `collections/[...path].astro`).
 Links use `routes.product()` / `routes.category()` so they follow the config.
 
-**Edit the catalogue.** `src/data/products.json` and `categories.json` seed the
+**Edit the catalog.** `src/data/products.json` and `categories.json` seed the
 database (`npm run seed` locally, `npm run seed:remote` in production; upserts,
 safe to re-run). Prices are integer cents. Every `images[].src` is a filename
-in `src/assets/products/` or an absolute URL. Once SKU.io owns the catalogue it
+in `src/assets/products/` or an absolute URL. Once SKU.io owns the catalog it
 pushes products, categories and stock through the Store API and the JSON is
 just history.
 
@@ -244,7 +244,7 @@ the row. Cap the row at about four buttons — more reads as clutter.
 Merchant Center / shopping feeds, ad-platform purchase tags and conversion
 events, affiliate links, the top landing pages in Search Console and
 analytics. Keep every one working through the cutover (same URLs or 301s, the
-feed regenerated from the new catalogue, purchase events firing from the new
+feed regenerated from the new catalog, purchase events firing from the new
 success page) before polishing anything else. Category pages need their copy:
 a heading plus a product grid is the page search engines decline to index.
 

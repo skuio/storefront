@@ -5,7 +5,7 @@
     "name": "Trailhead Tee — Moss",
     "slug": "trailhead-tee-moss",
     "shortDescription": "Trailhead Tee — Moss from Northwind Outfitters. Replace this copy with the real thing.",
-    "description": "<p>Trailhead Tee — Moss is a placeholder product in the demo catalogue. Its price, image and category are real enough to exercise every page and the checkout.</p><ul><li>Edit <code>src/data/products.json</code> to change it</li><li>Or connect the store to SKU.io and delete the file</li></ul>",
+    "description": "<p>Trailhead Tee — Moss is a placeholder product in the demo catalog. Its price, image and category are real enough to exercise every page and the checkout.</p><ul><li>Edit <code>src/data/products.json</code> to change it</li><li>Or connect the store to SKU.io and delete the file</li></ul>",
     "price": {
       "amount": 3200,
       "currency": "usd"
@@ -35,7 +35,7 @@
     "name": "Trailhead Tee — Slate",
     "slug": "trailhead-tee-slate",
     "shortDescription": "Trailhead Tee — Slate from Northwind Outfitters. Replace this copy with the real thing.",
-    "description": "<p>Trailhead Tee — Slate is a placeholder product in the demo catalogue. Its price, image and category are real enough to exercise every page and the checkout.</p><ul><li>Edit <code>src/data/products.json</code> to change it</li><li>Or connect the store to SKU.io and delete the file</li></ul>",
+    "description": "<p>Trailhead Tee — Slate is a placeholder product in the demo catalog. Its price, image and category are real enough to exercise every page and the checkout.</p><ul><li>Edit <code>src/data/products.json</code> to change it</li><li>Or connect the store to SKU.io and delete the file</li></ul>",
     "price": {
       "amount": 3200,
       "currency": "usd"
@@ -65,7 +65,7 @@
     "name": "Summit Pocket Tee",
     "slug": "summit-pocket-tee",
     "shortDescription": "Summit Pocket Tee from Northwind Outfitters. Replace this copy with the real thing.",
-    "description": "<p>Summit Pocket Tee is a placeholder product in the demo catalogue. Its price, image and category are real enough to exercise every page and the checkout.</p><ul><li>Edit <code>src/data/products.json</code> to change it</li><li>Or connect the store to SKU.io and delete the file</li></ul>",
+    "description": "<p>Summit Pocket Tee is a placeholder product in the demo catalog. Its price, image and category are real enough to exercise every page and the checkout.</p><ul><li>Edit <code>src/data/products.json</code> to change it</li><li>Or connect the store to SKU.io and delete the file</li></ul>",
     "price": {
       "amount": 3800,
       "currency": "usd"
@@ -98,7 +98,7 @@
     "name": "Basecamp Hoodie — Charcoal",
     "slug": "basecamp-hoodie-charcoal",
     "shortDescription": "Basecamp Hoodie — Charcoal from Northwind Outfitters. Replace this copy with the real thing.",
-    "description": "<p>Basecamp Hoodie — Charcoal is a placeholder product in the demo catalogue. Its price, image and category are real enough to exercise every page and the checkout.</p><ul><li>Edit <code>src/data/products.json</code> to change it</li><li>Or connect the store to SKU.io and delete the file</li></ul>",
+    "description": "<p>Basecamp Hoodie — Charcoal is a placeholder product in the demo catalog. Its price, image and category are real enough to exercise every page and the checkout.</p><ul><li>Edit <code>src/data/products.json</code> to change it</li><li>Or connect the store to SKU.io and delete the file</li></ul>",
     "price": {
       "amount": 8900,
       "currency": "usd"
@@ -127,7 +127,7 @@
     "name": "Basecamp Hoodie — Sand",
     "slug": "basecamp-hoodie-sand",
     "shortDescription": "Basecamp Hoodie — Sand from Northwind Outfitters. Replace this copy with the real thing.",
-    "description": "<p>Basecamp Hoodie — Sand is a placeholder product in the demo catalogue. Its price, image and category are real enough to exercise every page and the checkout.</p><ul><li>Edit <code>src/data/products.json</code> to change it</li><li>Or connect the store to SKU.io and delete the file</li></ul>",
+    "description": "<p>Basecamp Hoodie — Sand is a placeholder product in the demo catalog. Its price, image and category are real enough to exercise every page and the checkout.</p><ul><li>Edit <code>src/data/products.json</code> to change it</li><li>Or connect the store to SKU.io and delete the file</li></ul>",
     "price": {
       "amount": 8900,
       "currency": "usd"
@@ -156,7 +156,7 @@
     "name": "Ridge Daypack 22L",
     "slug": "ridge-daypack-22l",
     "shortDescription": "Ridge Daypack 22L from Northwind Outfitters. Replace this copy with the real thing.",
-    "description": "<p>Ridge Daypack 22L is a placeholder product in the demo catalogue. Its price, image and category are real enough to exercise every page and the checkout.</p><ul><li>Edit <code>src/data/products.json</code> to change it</li><li>Or connect the store to SKU.io and delete the file</li></ul>",
+    "description": "<p>Ridge Daypack 22L is a placeholder product in the demo catalog. Its price, image and category are real enough to exercise every page and the checkout.</p><ul><li>Edit <code>src/data/products.json</code> to change it</li><li>Or connect the store to SKU.io and delete the file</li></ul>",
     "price": {
       "amount": 12900,
       "currency": "usd"
@@ -186,7 +186,7 @@
     "name": "Commuter Roll-Top 18L",
     "slug": "commuter-roll-top-18l",
     "shortDescription": "Commuter Roll-Top 18L from Northwind Outfitters. Replace this copy with the real thing.",
-    "description": "<p>Commuter Roll-Top 18L is a placeholder product in the demo catalogue. Its price, image and category are real enough to exercise every page and the checkout.</p><ul><li>Edit <code>src/data/products.json</code> to change it</li><li>Or connect the store to SKU.io and delete the file</li></ul>",
+    "description": "<p>Commuter Roll-Top 18L is a placeholder product in the demo catalog. Its price, image and category are real enough to exercise every page and the checkout.</p><ul><li>Edit <code>src/data/products.json</code> to change it</li><li>Or connect the store to SKU.io and delete the file</li></ul>",
     "price": {
       "amount": 14900,
       "currency": "usd"
@@ -219,7 +219,7 @@
     "name": "Field Tote",
     "slug": "field-tote",
     "shortDescription": "Field Tote from Northwind Outfitters. Replace this copy with the real thing.",
-    "description": "<p>Field Tote is a placeholder product in the demo catalogue. Its price, image and category are real enough to exercise every page and the checkout.</p><ul><li>Edit <code>src/data/products.json</code> to change it</li><li>Or connect the store to SKU.io and delete the file</li></ul>",
+    "description": "<p>Field Tote is a placeholder product in the demo catalog. Its price, image and category are real enough to exercise every page and the checkout.</p><ul><li>Edit <code>src/data/products.json</code> to change it</li><li>Or connect the store to SKU.io and delete the file</li></ul>",
     "price": {
       "amount": 6900,
       "currency": "usd"
@@ -245,7 +245,7 @@
     "name": "Insulated Bottle 750ml",
     "slug": "insulated-bottle-750ml",
     "shortDescription": "Insulated Bottle 750ml from Northwind Outfitters. Replace this copy with the real thing.",
-    "description": "<p>Insulated Bottle 750ml is a placeholder product in the demo catalogue. Its price, image and category are real enough to exercise every page and the checkout.</p><ul><li>Edit <code>src/data/products.json</code> to change it</li><li>Or connect the store to SKU.io and delete the file</li></ul>",
+    "description": "<p>Insulated Bottle 750ml is a placeholder product in the demo catalog. Its price, image and category are real enough to exercise every page and the checkout.</p><ul><li>Edit <code>src/data/products.json</code> to change it</li><li>Or connect the store to SKU.io and delete the file</li></ul>",
     "price": {
       "amount": 3400,
       "currency": "usd"
@@ -275,7 +275,7 @@
     "name": "Trail Flask 500ml",
     "slug": "trail-flask-500ml",
     "shortDescription": "Trail Flask 500ml from Northwind Outfitters. Replace this copy with the real thing.",
-    "description": "<p>Trail Flask 500ml is a placeholder product in the demo catalogue. Its price, image and category are real enough to exercise every page and the checkout.</p><ul><li>Edit <code>src/data/products.json</code> to change it</li><li>Or connect the store to SKU.io and delete the file</li></ul>",
+    "description": "<p>Trail Flask 500ml is a placeholder product in the demo catalog. Its price, image and category are real enough to exercise every page and the checkout.</p><ul><li>Edit <code>src/data/products.json</code> to change it</li><li>Or connect the store to SKU.io and delete the file</li></ul>",
     "price": {
       "amount": 2800,
       "currency": "usd"
@@ -304,7 +304,7 @@
     "name": "Enamel Camp Mug",
     "slug": "enamel-camp-mug",
     "shortDescription": "Enamel Camp Mug from Northwind Outfitters. Replace this copy with the real thing.",
-    "description": "<p>Enamel Camp Mug is a placeholder product in the demo catalogue. Its price, image and category are real enough to exercise every page and the checkout.</p><ul><li>Edit <code>src/data/products.json</code> to change it</li><li>Or connect the store to SKU.io and delete the file</li></ul>",
+    "description": "<p>Enamel Camp Mug is a placeholder product in the demo catalog. Its price, image and category are real enough to exercise every page and the checkout.</p><ul><li>Edit <code>src/data/products.json</code> to change it</li><li>Or connect the store to SKU.io and delete the file</li></ul>",
     "price": {
       "amount": 1800,
       "currency": "usd"
@@ -333,7 +333,7 @@
     "name": "Stoneware Mug — Fog",
     "slug": "stoneware-mug-fog",
     "shortDescription": "Stoneware Mug — Fog from Northwind Outfitters. Replace this copy with the real thing.",
-    "description": "<p>Stoneware Mug — Fog is a placeholder product in the demo catalogue. Its price, image and category are real enough to exercise every page and the checkout.</p><ul><li>Edit <code>src/data/products.json</code> to change it</li><li>Or connect the store to SKU.io and delete the file</li></ul>",
+    "description": "<p>Stoneware Mug — Fog is a placeholder product in the demo catalog. Its price, image and category are real enough to exercise every page and the checkout.</p><ul><li>Edit <code>src/data/products.json</code> to change it</li><li>Or connect the store to SKU.io and delete the file</li></ul>",
     "price": {
       "amount": 2400,
       "currency": "usd"

@@ -146,7 +146,7 @@ export function deriveAvailability(inv: { available: number; allow_backorder: nu
 export class CatalogService {
   constructor(private readonly ctx: StoreContext, private readonly ttlMs: number) {}
 
-  /** The catalogue snapshot: active products with availability, and the category tree. */
+  /** The catalog snapshot: active products with availability, and the category tree. */
   load(): Promise<Catalog> {
     const hit = cache.get(this.ctx.db)
     if (hit && hit.expires > Date.now()) return hit.catalog
@@ -230,7 +230,7 @@ export class CatalogService {
   }
 
   /**
-   * Products in keyset order, for an operations system importing the catalogue.
+   * Products in keyset order, for an operations system importing the catalog.
    * Ordered by `(updated_at, sku)` so a cursor is strictly monotonic and a
    * re-run from a watermark never repeats or skips a row.
    */

@@ -17,7 +17,7 @@ post-deploy checks — with that host's commands.
    ```
    npx wrangler d1 create <name>
    ```
-4. Apply the schema and seed the catalogue:
+4. Apply the schema and seed the catalog:
    ```
    npm run db:migrate
    npm run seed:remote

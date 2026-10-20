@@ -7,7 +7,7 @@ export const prerender = false
 const STATIC = ['/', '/about/', '/contact/', '/shipping/', '/returns/', '/terms/', '/privacy/']
 
 /**
- * Sitemap from the live catalogue. Catalogue pages are server-rendered, so a
+ * Sitemap from the live catalog. Catalog pages are server-rendered, so a
  * build-time sitemap would not know about them; this one is always current.
  */
 export async function GET(context: APIContext): Promise<Response> {

@@ -184,7 +184,7 @@ describe('Store API housekeeping', () => {
   })
 })
 
-describe('Store API catalogue', () => {
+describe('Store API catalog', () => {
   it('upserts inventory and reports unknown SKUs', async () => {
     const { store } = rig()
     await seed(store)
@@ -246,7 +246,7 @@ describe('Store API catalogue', () => {
   })
 })
 
-describe('Store API catalogue reads', () => {
+describe('Store API catalog reads', () => {
   it('lists products in the documented shape, with categories, images and stock', async () => {
     const { store } = rig()
     await seed(store)
@@ -420,7 +420,7 @@ describe('Store API catalogue reads', () => {
     ])
   })
 
-  it('refuses catalogue reads without a key', async () => {
+  it('refuses catalog reads without a key', async () => {
     const { store } = rig()
     await seed(store)
     const api = client(store)

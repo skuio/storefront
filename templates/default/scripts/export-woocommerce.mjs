@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Migrate a WooCommerce catalogue into this store.
+ * Migrate a WooCommerce catalog into this store.
  *
  *   node scripts/export-woocommerce.mjs --origin https://www.example.com [--out src/data]
  *

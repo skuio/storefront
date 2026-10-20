@@ -76,7 +76,7 @@ export interface ListQuery {
 }
 
 /**
- * Query string for the catalogue list endpoints. Out-of-range values are a 422
+ * Query string for the catalog list endpoints. Out-of-range values are a 422
  * rather than a silent clamp, so a caller paging with a bad limit is told.
  */
 export function validateListQuery(
