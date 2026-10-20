@@ -4,6 +4,7 @@
  *
  *   node scripts/seed-store.mjs --local     # the local D1 used by `astro dev`
  *   node scripts/seed-store.mjs --remote    # the production database
+ *   node scripts/seed-store.mjs --sqlite    # the SQLite file of a Node-hosted store (DATABASE_PATH)
  *
  * Generates SQL (upserts, so it is safe to re-run) and applies it with
  * `wrangler d1 execute`. Products marked `available: false` get an inventory
@@ -19,9 +20,10 @@ const target = process.argv.includes('--remote') ? '--remote' : '--local'
 const root = new URL('..', import.meta.url).pathname
 const products = JSON.parse(readFileSync(join(root, 'src/data/products.json'), 'utf8'))
 const categories = JSON.parse(readFileSync(join(root, 'src/data/categories.json'), 'utf8'))
-const wranglerConfig = readFileSync(join(root, 'wrangler.jsonc'), 'utf8')
+const sqlite = process.argv.includes('--sqlite')
+const wranglerConfig = sqlite ? '' : readFileSync(join(root, 'wrangler.jsonc'), 'utf8')
 const dbName = /"database_name"\s*:\s*"([^"]+)"/.exec(wranglerConfig)?.[1]
-if (!dbName) throw new Error('wrangler.jsonc has no d1_databases[].database_name')
+if (!sqlite && !dbName) throw new Error('wrangler.jsonc has no d1_databases[].database_name')
 
 const q = (v) => (v === null || v === undefined ? 'NULL' : typeof v === 'number' ? String(v) : `'${String(v).replace(/'/g, "''")}'`)
 const now = new Date().toISOString()
@@ -49,6 +51,13 @@ products.forEach((p, i) => {
     statements.push(`INSERT INTO inventory (sku, available, allow_backorder, updated_at) VALUES (${q(p.sku)}, 0, 0, ${q(now)}) ON CONFLICT (sku) DO UPDATE SET available = 0, updated_at = excluded.updated_at`)
   }
 })
+
+if (sqlite) {
+  const { runOnSqlite } = await import('./lib/sqlite.mjs')
+  const file = await runOnSqlite(root, statements)
+  console.log(`seed: done — ${categories.length} categories, ${products.length} products → ${file}`)
+  process.exit(0)
+}
 
 // wrangler sends a file as one batch; keep each under D1's request limits.
 const dir = mkdtempSync(join(tmpdir(), 'seed-store-'))

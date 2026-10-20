@@ -11,7 +11,8 @@ through one small contract, for any number of stores, with **B2B and B2C as
 one engine**.
 
 So the kit is a **self-contained e-commerce platform** (think WooCommerce
-without WordPress): an Astro site on Cloudflare Workers with its own D1
+without WordPress): an Astro site with its own SQL database (D1 on Cloudflare
+Workers by default, or SQLite on any Node host)
 database that owns catalogue, customers, orders, payments and the buyer
 portal, plus a **Store API** the operations system talks to. Payments and mail
 are adapters. Nothing in the platform depends on Stripe, on SKU.io, or on any
@@ -45,7 +46,7 @@ sku.io (private)                    the "Storefront" sales-channel integration: 
 
 ## What runs where
 
-Every page is **server-rendered in the Worker from D1** — the header alone
+Every page is **server-rendered per request from the store's database** — the header alone
 needs the category tree, so nothing can be prerendered — and one catalogue
 snapshot is shared by every component in a request (cached briefly per
 isolate). Static assets (images, CSS, JS) are served by the assets binding.
@@ -65,7 +66,7 @@ mode) and `manual` (pay later, marked paid by the operations system) ship;
 ## The buyer portal
 
 Lives in the store. Sign-in is an emailed single-use link (`sessions`), the
-session is a hashed token in D1 behind one httpOnly cookie, and order history
+session is a hashed token in the store's database behind one httpOnly cookie, and order history
 with fulfilments and tracking reads the store's own tables. Guest lookup by
 order number + email works without an account.
 

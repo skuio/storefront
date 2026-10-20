@@ -49,7 +49,7 @@ const statusText: Record<typeof order.status, string> = {
           const img = resolveImage(l.image ? { src: l.image } : null)
           return (
             <li class="flex items-center gap-4 px-4 py-3 text-sm">
-              {img ? <img src={img.src} alt="" width="56" height="42" class="h-[42px] w-14 shrink-0 rounded border border-rule bg-white object-contain" /> : <span class="h-[42px] w-14 shrink-0 rounded border border-rule" />}
+              {img ? <img src={img.src} alt="" width="56" height="42" class="h-[42px] w-14 shrink-0 rounded border border-rule bg-panel-2 object-contain" /> : <span class="h-[42px] w-14 shrink-0 rounded border border-rule" />}
               <span class="min-w-0 flex-1">
                 <span class="font-semibold text-ink">{l.name}</span>
                 <span class="block text-[11px] tracking-wide text-body/60 uppercase">SKU {l.sku} · × {l.quantity} · {l.fulfilledQuantity >= l.quantity ? 'shipped' : l.fulfilledQuantity > 0 ? `${l.fulfilledQuantity} of ${l.quantity} shipped` : 'not shipped yet'}</span>
@@ -59,7 +59,7 @@ const statusText: Record<typeof order.status, string> = {
           )
         })}
       </ul>
-      <dl class="space-y-1 border-t border-rule bg-[#fafafa] px-4 py-3 text-sm">
+      <dl class="space-y-1 border-t border-rule bg-panel px-4 py-3 text-sm">
         <div class="flex justify-between"><dt>Subtotal</dt><dd>{fmt(order.subtotal)}</dd></div>
         <div class="flex justify-between"><dt>Shipping{order.shippingMethod ? ` — ${order.shippingMethod.name}` : ''}</dt><dd>{order.shipping.amount ? fmt(order.shipping) : 'Free'}</dd></div>
         {order.discount.amount > 0 && <div class="flex justify-between"><dt>Discount</dt><dd>−{fmt(order.discount)}</dd></div>}
@@ -111,6 +111,6 @@ const statusText: Record<typeof order.status, string> = {
 
     {order.notes && <section class="mt-8"><h2 class="text-[11px] font-semibold tracking-widest text-body/60 uppercase">Your notes</h2><p class="mt-2 text-sm">{order.notes}</p></section>}
 
-    <a href="/account/orders/" class="mt-10 inline-block rounded-full border-2 border-ink px-7 py-2.5 text-sm font-semibold transition hover:bg-ink hover:text-white">All orders</a>
+    <a href="/account/orders/" class="mt-10 inline-block rounded-full border-2 border-ink px-7 py-2.5 text-sm font-semibold transition hover:bg-ink hover:text-page">All orders</a>
   </div>
 </BaseLayout>

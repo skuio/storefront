@@ -27,7 +27,7 @@ const counts = [
 
   <dl class="mt-8 grid grid-cols-2 gap-3 sm:grid-cols-4">
     {counts.map((c) => (
-      <div class="rounded-lg border border-rule bg-[#fafafa] px-4 py-3">
+      <div class="rounded-lg border border-rule bg-panel px-4 py-3">
         <dt class="text-[11px] font-semibold tracking-wide text-body/60 uppercase">{c.label}</dt>
         <dd class="mt-1 text-2xl font-bold text-ink">{c.value.toLocaleString(config.locale)}</dd>
       </div>
@@ -35,7 +35,7 @@ const counts = [
   </dl>
 
   <section class="mt-8 rounded-lg border border-rule">
-    <div class="flex flex-wrap items-baseline justify-between gap-3 border-b border-rule bg-[#fafafa] px-4 py-3 text-sm">
+    <div class="flex flex-wrap items-baseline justify-between gap-3 border-b border-rule bg-panel px-4 py-3 text-sm">
       <span class="font-semibold text-ink">Connection</span>
       <a href="/admin/connections/" class="text-xs font-semibold tracking-wide text-accent uppercase">Manage connections</a>
     </div>

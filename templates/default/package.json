@@ -1,12 +1,14 @@
 {
   "name": "@skuio/template-default",
-  "description": "Reference storefront: Astro on Cloudflare Workers + D1, the store platform from @skuio/storefront.",
+  "description": "Reference storefront: Astro + the store platform from @skuio/storefront. Deploys to Cloudflare Workers + D1 by default, or any Node server with a SQLite file (STORE_HOST=node).",
   "private": true,
   "type": "module",
   "version": "0.1.0",
   "scripts": {
     "dev": "astro dev",
     "build": "astro build",
+    "build:node": "STORE_HOST=node astro build",
+    "start:node": "node dist/server/entry.mjs",
     "preview": "wrangler dev",
     "deploy": "astro build && wrangler deploy",
     "check": "astro check",
@@ -14,9 +16,11 @@
     "db:migrate:local": "node scripts/db-migrate.mjs --local",
     "db:migrate": "node scripts/db-migrate.mjs --remote",
     "seed": "node scripts/seed-store.mjs --local",
+    "seed:sqlite": "node scripts/seed-store.mjs --sqlite",
     "seed:remote": "node scripts/seed-store.mjs --remote",
     "owner:create": "node scripts/owner-create.mjs --remote",
     "owner:create:local": "node scripts/owner-create.mjs --local",
+    "owner:create:sqlite": "node scripts/owner-create.mjs --sqlite",
     "migrate:woocommerce": "node scripts/export-woocommerce.mjs",
     "migrate:images": "node scripts/fetch-images.mjs"
   },
@@ -25,7 +29,9 @@
     "@skuio/storefront": "*",
     "astro": "^5.14.1",
     "stripe": "^19.3.0",
-    "uqr": "^0.1.3"
+    "uqr": "^0.1.3",
+    "@astrojs/node": "^9.4.4",
+    "better-sqlite3": "^12.11.1"
   },
   "devDependencies": {
     "@astrojs/check": "^0.9.4",
@@ -33,6 +39,8 @@
     "@tailwindcss/vite": "^4.1.14",
     "tailwindcss": "^4.1.14",
     "typescript": "^5.9.3",
-    "wrangler": "^4.42.0"
+    "wrangler": "^4.42.0",
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/node": "^22.15.0"
   }
 }

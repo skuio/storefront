@@ -36,15 +36,26 @@ only in the template (pages, layout, config, styles, data) are edited in place.
 - **D1 semantics.** Bind values are string | number | null (never undefined
   or boolean); `first()`/`all()` only on statements that return rows;
   anything atomic goes through `batch()`. Tests run the same SQL on
-  better-sqlite3 behind the same interface (`packages/sdk/test/sqlite.ts`).
+  better-sqlite3 behind the same interface, through the driver Node hosts use
+  (`packages/sdk/src/db/sqlite.ts`).
 - **The CLI has no runtime dependencies.** Node built-ins only.
 - **Blocks assume two template files:** `src/lib/store.ts` exporting `store`,
   `config`, `routes`, `readEnv`, `payment`, `paymentContext`, `mail`, `siteUrl`;
   `src/lib/images.ts` exporting `resolveImage`. Noted in `registry.json` →
   `conventions`. Do not add more assumptions without documenting them there.
+- **Blocks use colour tokens, never literal colours.** `ink`, `body`, `shell`,
+  `rule`, `accent`, `accent-dark`, `on-accent`, `page`, `panel`, `panel-2` from
+  the template's `global.css`. No `bg-white`, `text-white` on an accent or ink
+  fill, or hex values: a dark-themed store must be able to
+  take a block unchanged. Status colours (green "Shipped" badges) are the one exception.
+- **No host is assumed.** The template reaches the platform only through
+  `src/lib/host.<STORE_HOST>.ts` (`database`, `platformEnv`), picked by
+  `STORE_HOST` in `astro.config.mjs`: `cloudflare` (D1) or `node` (SQLite file).
+  Blocks never read `locals.runtime` for anything they need; `waitUntil` is
+  used only when present. Keep both hosts green: CI runs the guardrail on each.
 - **Every page is server-rendered.** The header needs the category tree from
-  D1, so no page can be prerendered; `<Image>` from `astro:assets` has no
-  runtime transformer on Cloudflare — blocks use `<img>` with `resolveImage`.
+  the database, so no page can be prerendered; `<Image>` from `astro:assets` has
+  no runtime transformer on Cloudflare — blocks use `<img>` with `resolveImage`.
 
 ## Adding a block
 

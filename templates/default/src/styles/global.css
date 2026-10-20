@@ -16,6 +16,10 @@
   --color-rule: #e6e6e6;
   --color-accent: #0f6fff;
   --color-accent-dark: #0b55c4;
+  --color-on-accent: #ffffff; /* text on an accent fill; dark when the accent is light (e.g. #f7931a) */
+  --color-page: #ffffff; /* the page itself; also text on an ink fill */
+  --color-panel: #fafafa; /* summaries, table heads, quiet boxes */
+  --color-panel-2: #ffffff; /* image wells and fields inside a panel */
 }
 
 @layer base {
@@ -25,7 +29,7 @@
     font-size: 15px;
     line-height: 1.7;
     color: var(--color-body);
-    background: #ffffff;
+    background: var(--color-page);
     -webkit-font-smoothing: antialiased;
   }
   h1, h2, h3, h4, h5, h6 { color: var(--color-ink); font-weight: 700; line-height: 1.2; }

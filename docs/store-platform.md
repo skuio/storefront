@@ -4,14 +4,15 @@ The storefront kit is a **self-contained e-commerce platform**: a site built on 
 catalogue, customers, orders, payments and buyer portal in its **own database**, and exposes
 a **Store API** so an operations system (SKU.io first) can pull orders and push inventory,
 fulfilments and products. Think of it as a WooCommerce replacement that is not WordPress: an
-Astro site on Cloudflare Workers with a D1 (SQLite) database behind it.
+Astro site with a SQLite-family database behind it: Cloudflare Workers + D1 by default, or any
+Node server with a SQLite file. Nothing in the platform depends on the host either.
 
 Nothing in the platform depends on a particular payment processor or operations system.
 Payments are **adapters** (`stripe`, `manual`, …); the operations system talks only to the
 Store API and never to the processor.
 
 ```
-buyer ──▶ store (Astro + Workers + D1) ◀── Store API ◀── SKU.io Storefront integration
+buyer ──▶ store (Astro + its DB) ◀────────── Store API ◀── SKU.io Storefront integration
              │  ▲                                        (pulls orders, pushes inventory,
              ▼  │ webhook / return                        tracking and products)
         payment adapter (Stripe, manual, …)
@@ -32,9 +33,16 @@ buyer ──▶ store (Astro + Workers + D1) ◀── Store API ◀── SKU.i
 
 ## Runtime
 
-- **Storage:** Cloudflare D1, binding `DB`. Schema in `packages/sdk/db/migrations/*.sql`,
-  applied with `wrangler d1 migrations apply <db>` (`--local` for dev). Tests run the same
-  SQL on an in-process SQLite (`better-sqlite3`) behind the same tiny driver interface.
+- **Storage:** one small driver interface (`Database`, D1's shape) over SQLite-family SQL.
+  Schema in `packages/sdk/db/migrations/*.sql`.
+  - **Cloudflare** (default): D1, binding `DB`, migrations applied with
+    `wrangler d1 migrations apply <db>` (`--local` for dev).
+  - **Node** (`STORE_HOST=node`): one SQLite file at `DATABASE_PATH` through
+    `@skuio/storefront/db/sqlite` (`sqliteDatabase` over a better-sqlite3 handle),
+    migrated on boot by `migrateSqlite`, which records what it applied in
+    `_storefront_migrations`.
+  The template picks one in `src/lib/host.<STORE_HOST>.ts`. Unit tests run every SQL path on
+  the same SQLite driver.
 - **Core:** `@skuio/storefront/store` — `createStore({ db, config, env, mail?, clock? })`
   returns the services: `catalog`, `inventory`, `checkout`, `orders` (incl. fulfilments),
   `customers`, `sessions`, `events`, `health()`. Framework-agnostic (no Astro, no DOM).
@@ -45,14 +53,16 @@ buyer ──▶ store (Astro + Workers + D1) ◀── Store API ◀── SKU.i
   `@skuio/storefront/payments/stripe`, `@skuio/storefront/payments/manual`.
 - **Mail:** `@skuio/storefront/mail` — `MailAdapter`; `sendgrid`, `console`.
 - **Blocks** (Astro UI) in `registry/blocks/` read from the store through
-  `src/lib/store.ts` (`store(Astro)` per request). Every page is server-rendered in the
-  Worker: the header needs the category tree, so nothing can be prerendered.
+  `src/lib/store.ts` (`store(Astro)` per request). Every page is server-rendered: the
+  header needs the category tree, so nothing can be prerendered.
 
 ## Environment
 
 | Name | Purpose |
 |---|---|
-| `DB` (binding) | D1 database. |
+| `STORE_HOST` (build time) | `cloudflare` (default) or `node`: the Astro adapter and the hosting seam. |
+| `DB` (binding) | Cloudflare: the D1 database. |
+| `DATABASE_PATH` | Node: the SQLite file (default `data/store.db`; keep it on a persistent volume). |
 | `STORE_API_KEY` | Bearer key SKU.io uses to call the Store API. Generate with `openssl rand -hex 32`. |
 | `PAYMENT_PROVIDER` | Comma list, in the order checkout offers them: `stripe`, `paypal`, `btcpay`, `manual`. Default `stripe` when `STRIPE_SECRET_KEY` exists, else `manual`. With more than one, the buyer picks at checkout and each processor's webhook is `/api/payments/webhook?provider=<id>`. |
 | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` | Stripe adapter only. |
@@ -63,8 +73,11 @@ buyer ──▶ store (Astro + Workers + D1) ◀── Store API ◀── SKU.i
 | `PUBLIC_SITE_URL` | Absolute origin for links in emails and processor return URLs. |
 | `ORDER_NOTIFICATION_EMAIL`, `CONTACT_NOTIFICATION_EMAIL` | Optional merchant addresses for paid orders and contact-form messages. |
 
-Local development: `npm run db:migrate:local && npm run seed`, secrets in `.dev.vars`, then
-`npm run dev` (the Cloudflare platform proxy provides the local D1).
+Local development on Cloudflare: `npm run db:migrate:local && npm run seed`, secrets in
+`.dev.vars`, then `npm run dev` (the platform proxy provides the local D1). On Node:
+`STORE_HOST=node DATABASE_PATH=data/store.db`, `npm run seed:sqlite`, secrets in the
+environment (or `.env`), then `npm run dev`; production is `npm run build:node` and
+`npm run start:node`.
 
 ## Order lifecycle
 

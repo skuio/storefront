@@ -57,14 +57,14 @@ if (request && Astro.request.method === 'POST') {
           <span class="font-semibold text-ink">{request!.tenant}</span> on SKU.io wants to connect to <span class="font-semibold text-ink">{config.name}</span>.
         </p>
         <div class="mt-5 rounded-lg border border-rule">
-          <div class="border-b border-rule bg-[#fafafa] px-4 py-2.5 text-[11px] font-semibold tracking-wide text-body/60 uppercase">It will be allowed to</div>
+          <div class="border-b border-rule bg-panel px-4 py-2.5 text-[11px] font-semibold tracking-wide text-body/60 uppercase">It will be allowed to</div>
           <ul class="divide-y divide-rule px-4 text-sm">
             {request!.scopes.map((scope) => <li class="py-2.5">{SCOPE_DESCRIPTIONS[scope]}</li>)}
           </ul>
         </div>
         <p class="mt-5 text-sm">
           After you approve, your browser goes to
-          <span class="mt-1 block rounded bg-ink px-3 py-2 font-mono text-xs text-white">{request!.redirectHost}</span>
+          <span class="mt-1 block rounded bg-ink px-3 py-2 font-mono text-xs text-page">{request!.redirectHost}</span>
         </p>
         <p class="mt-2 text-xs text-body/70">Only approve if that is the SKU.io address you signed in to. The key never appears on screen; you can revoke it any time under Connections.</p>
 
@@ -74,8 +74,8 @@ if (request && Astro.request.method === 'POST') {
           <input type="hidden" name="state" value={request!.state} />
           <input type="hidden" name="tenant" value={request!.tenant} />
           <input type="hidden" name="scope" value={request!.scopes.join(',')} />
-          <button type="submit" name="decision" value="approve" class="flex-1 rounded-md bg-accent px-6 py-3 text-sm font-bold tracking-wide text-white uppercase transition hover:bg-accent-dark">Approve</button>
-          <button type="submit" name="decision" value="deny" class="rounded-md border-2 border-ink px-6 py-3 text-sm font-bold tracking-wide text-ink uppercase transition hover:bg-ink hover:text-white">Deny</button>
+          <button type="submit" name="decision" value="approve" class="flex-1 rounded-md bg-accent px-6 py-3 text-sm font-bold tracking-wide text-on-accent uppercase transition hover:bg-accent-dark">Approve</button>
+          <button type="submit" name="decision" value="deny" class="rounded-md border-2 border-ink px-6 py-3 text-sm font-bold tracking-wide text-ink uppercase transition hover:bg-ink hover:text-page">Deny</button>
         </form>
       </>
     )

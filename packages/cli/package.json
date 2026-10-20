@@ -1,7 +1,7 @@
 {
   "name": "@skuio/cli",
-  "version": "0.1.0",
-  "sdkRange": "^0.4.0",
+  "version": "0.5.0",
+  "sdkRange": "^0.5.0",
   "description": "Scaffold a SKU.io storefront and add blocks from the registry. `npx @skuio/cli create my-store`.",
   "license": "MIT",
   "type": "module",

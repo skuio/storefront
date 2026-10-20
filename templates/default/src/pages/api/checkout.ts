@@ -2,6 +2,7 @@ import type { APIContext } from 'astro'
 import { StoreError, type CheckoutInput } from '@skuio/storefront/store'
 import { paymentContext, paymentMethods, store } from '../../lib/store'
 import { referredSource } from '../../lib/referral'
+import { touchMetadata } from '../../lib/attribution'
 
 export const prerender = false
 
@@ -41,6 +42,8 @@ export async function POST(context: APIContext): Promise<Response> {
   // Credit the channel that brought a referred buyer (set by the partner link); never trusted for pricing.
   const source = referredSource(context)
   if (source && input.discountCode) input.metadata = { ...(input.metadata ?? {}), ref_source: source }
+  // The channel that brought the buyer, first and last touch (src/lib/attribution.ts) — on every order.
+  input.metadata = { ...(input.metadata ?? {}), ...touchMetadata(context) }
 
   const s = store(context)
   // Lazy housekeeping: processor checkouts abandoned for 24h become cancelled (cheap, indexed).

@@ -14,7 +14,7 @@ if (!owner) return Astro.redirect('/admin/sign-in/', 303)
 <AdminShell title="Sign out" owner={owner} width="narrow">
   <p class="mt-3 text-sm">Signed in as <span class="font-semibold text-ink">{owner.email}</span>.</p>
   <form method="POST" action="/api/admin/sign-out" class="mt-6 flex gap-3">
-    <button type="submit" class="rounded-md bg-accent px-8 py-3 text-sm font-bold tracking-wide text-white uppercase transition hover:bg-accent-dark">Sign out</button>
-    <a href="/admin/" class="rounded-md border-2 border-ink px-6 py-3 text-sm font-bold tracking-wide text-ink uppercase transition hover:bg-ink hover:text-white">Stay signed in</a>
+    <button type="submit" class="rounded-md bg-accent px-8 py-3 text-sm font-bold tracking-wide text-on-accent uppercase transition hover:bg-accent-dark">Sign out</button>
+    <a href="/admin/" class="rounded-md border-2 border-ink px-6 py-3 text-sm font-bold tracking-wide text-ink uppercase transition hover:bg-ink hover:text-page">Stay signed in</a>
   </form>
 </AdminShell>

@@ -47,7 +47,7 @@ const badge = (o: Order): { label: string; cls: string } => {
       orders.length === 0 ? (
         <div class="mt-8 text-sm">
           <p>No orders yet.</p>
-          <a href={routes.shop()} class="mt-6 inline-block rounded-full border-2 border-ink px-7 py-2.5 text-sm font-semibold transition hover:bg-ink hover:text-white">Browse the shop</a>
+          <a href={routes.shop()} class="mt-6 inline-block rounded-full border-2 border-ink px-7 py-2.5 text-sm font-semibold transition hover:bg-ink hover:text-page">Browse the shop</a>
         </div>
       ) : (
         <ul class="mt-8 space-y-6">
@@ -55,7 +55,7 @@ const badge = (o: Order): { label: string; cls: string } => {
             const b = badge(o)
             return (
               <li class="rounded-lg border border-rule" data-order={o.number}>
-                <div class="flex flex-wrap items-baseline justify-between gap-3 border-b border-rule bg-[#fafafa] px-4 py-3 text-sm">
+                <div class="flex flex-wrap items-baseline justify-between gap-3 border-b border-rule bg-panel px-4 py-3 text-sm">
                   <span>
                     <a href={`/account/orders/${o.id}/`} class="font-semibold text-ink hover:text-accent">Order {config.orders.numberPrefix}{o.number}</a>
                     <span class="text-body/60"> · {date(o.createdAt)}</span>
@@ -67,7 +67,7 @@ const badge = (o: Order): { label: string; cls: string } => {
                     const img = resolveImage(l.image ? { src: l.image } : null)
                     return (
                       <li class="flex items-center gap-4 px-4 py-3 text-sm">
-                        {img ? <img src={img.src} alt="" width="56" height="42" class="h-[42px] w-14 shrink-0 rounded border border-rule bg-white object-contain" /> : <span class="h-[42px] w-14 shrink-0 rounded border border-rule" />}
+                        {img ? <img src={img.src} alt="" width="56" height="42" class="h-[42px] w-14 shrink-0 rounded border border-rule bg-panel-2 object-contain" /> : <span class="h-[42px] w-14 shrink-0 rounded border border-rule" />}
                         <span class="min-w-0 flex-1">
                           <span class="font-semibold text-ink">{l.name}</span>
                           <span class="block text-[11px] tracking-wide text-body/60 uppercase">SKU {l.sku}{l.quantity > 1 ? ` · × ${l.quantity}` : ''}{l.fulfilledQuantity > 0 && l.fulfilledQuantity < l.quantity ? ` · ${l.fulfilledQuantity} shipped` : ''}</span>
@@ -97,7 +97,7 @@ const badge = (o: Order): { label: string; cls: string } => {
                   <span>Total <strong class="text-ink">{fmt(o.total)}</strong>{o.shipping.amount > 0 ? ` · shipping ${fmt(o.shipping)}` : ' · free shipping'}</span>
                   <span class="flex items-center gap-3">
                     <a href={`/account/orders/${o.id}/`} class="text-xs font-semibold tracking-wide text-accent uppercase hover:underline">Details</a>
-                    <button type="button" class="rounded-md border-2 border-ink px-4 py-1.5 text-xs font-bold tracking-wide text-ink uppercase transition hover:bg-ink hover:text-white"
+                    <button type="button" class="rounded-md border-2 border-ink px-4 py-1.5 text-xs font-bold tracking-wide text-ink uppercase transition hover:bg-ink hover:text-page"
                       data-reorder={JSON.stringify(o.lines.map((l) => ({ sku: l.sku, name: l.name, quantity: l.quantity, unitPrice: l.unitAmount, image: resolveImage(l.image ? { src: l.image } : null)?.src })))}>
                       Reorder
                     </button>

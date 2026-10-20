@@ -1,7 +1,7 @@
 {
   "name": "@skuio/storefront",
-  "version": "0.4.0",
-  "description": "The store platform behind SKU.io storefronts: catalogue, checkout, orders, buyer portal and the Store API on Cloudflare D1. Framework-agnostic; pairs with the Astro reference template.",
+  "version": "0.5.0",
+  "description": "The store platform behind SKU.io storefronts: catalogue, checkout, orders, buyer portal and the Store API over one SQL driver \u2014 Cloudflare D1 or SQLite on any Node host. Framework-agnostic; pairs with the Astro reference template.",
   "license": "MIT",
   "type": "module",
   "repository": {
@@ -61,6 +61,10 @@
     "./mail/cloudflare": {
       "types": "./dist/mail/cloudflare.d.ts",
       "import": "./dist/mail/cloudflare.js"
+    },
+    "./db/sqlite": {
+      "types": "./dist/db/sqlite.d.ts",
+      "import": "./dist/db/sqlite.js"
     },
     "./db/migrations/*": "./db/migrations/*",
     "./package.json": "./package.json"

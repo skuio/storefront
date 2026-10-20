@@ -24,11 +24,12 @@ const flag = (name) => {
   const i = args.indexOf(`--${name}`)
   return i >= 0 ? args[i + 1] : undefined
 }
+const sqlite = args.includes('--sqlite')
 const target = args.includes('--local') ? '--local' : '--remote'
 const email = (flag('email') ?? '').trim().toLowerCase()
 const name = flag('name')?.trim() || null
 if (!email.includes('@')) {
-  console.error('usage: owner-create.mjs --email <address> [--name "<name>"] [--local|--remote]')
+  console.error('usage: owner-create.mjs --email <address> [--name "<name>"] [--local|--remote|--sqlite]')
   process.exit(1)
 }
 
@@ -37,9 +38,9 @@ const require = createRequire(join(root, 'package.json'))
 const sdkDir = dirname(require.resolve('@skuio/storefront/package.json'))
 const { hashPassword, passwordProblem } = await import(join(sdkDir, 'dist', 'store.js'))
 
-const wranglerConfig = readFileSync(join(root, 'wrangler.jsonc'), 'utf8')
+const wranglerConfig = sqlite ? '' : readFileSync(join(root, 'wrangler.jsonc'), 'utf8')
 const dbName = /"database_name"\s*:\s*"([^"]+)"/.exec(wranglerConfig)?.[1]
-if (!dbName) throw new Error('wrangler.jsonc has no d1_databases[].database_name')
+if (!sqlite && !dbName) throw new Error('wrangler.jsonc has no d1_databases[].database_name')
 
 async function askPassword(prompt) {
   if (process.env.OWNER_PASSWORD) return process.env.OWNER_PASSWORD
@@ -70,6 +71,13 @@ const id = 'own_' + Array.from(crypto.getRandomValues(new Uint8Array(20)), (b) =
 const now = new Date().toISOString()
 const hash = await hashPassword(password)
 const sql = `INSERT INTO owners (id, email, name, password_hash, created_at) VALUES (${q(id)}, ${q(email)}, ${q(name)}, ${q(hash)}, ${q(now)}) ON CONFLICT (email) DO UPDATE SET name = COALESCE(excluded.name, owners.name), password_hash = excluded.password_hash;\n`
+
+if (sqlite) {
+  const { runOnSqlite } = await import('./lib/sqlite.mjs')
+  const file = await runOnSqlite(root, [sql])
+  console.log(`owner: ${email} can now sign in at /admin (${file})`)
+  process.exit(0)
+}
 
 const dir = mkdtempSync(join(tmpdir(), 'owner-create-'))
 const file = join(dir, 'owner.sql')

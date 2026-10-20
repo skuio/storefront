@@ -1,0 +1,112 @@
+---
+import type { Product } from '@skuio/storefront'
+import { config } from '../lib/store'
+import { paypalExpressSetup } from '../lib/paypal-express'
+
+interface Props {
+  product: Product
+}
+
+const { product } = Astro.props
+const express = paypalExpressSetup(Astro)
+---
+
+{/*
+  PayPal / Venmo / Pay Later buttons that start the purchase in PayPal, so the buyer's saved
+  address comes back and there is no form. Place it next to BuyButton: it reads the quantity from
+  BuyButton's input (#qty-<sku>). Renders nothing unless the store offers PayPal; stays hidden if
+  PayPal's script fails to load, leaving the ordinary checkout. Server half: /api/paypal-express.
+*/}
+{
+  express && product.available && (
+    <div class="mt-5" data-paypal-express data-client-id={express.clientId} data-currency={config.currency.toUpperCase()} data-sku={product.sku} hidden>
+      <div class="min-h-[45px] [color-scheme:light]" data-paypal-buttons></div>
+      <p class="mt-2 hidden text-center text-xs text-accent" data-paypal-error role="alert"></p>
+    </div>
+  )
+}
+
+<script>
+  type Buttons = { isEligible(): boolean; render(el: HTMLElement): Promise<void> }
+  const w = window as unknown as { paypal?: { Buttons: (opts: Record<string, unknown>) => Buttons } }
+
+  const box = document.querySelector<HTMLElement>('[data-paypal-express]')
+  if (box) start(box)
+
+  function start(box: HTMLElement) {
+    const { clientId, currency, sku } = box.dataset
+    const errorEl = box.querySelector<HTMLElement>('[data-paypal-error]')!
+    const quantity = () => Number(document.querySelector<HTMLInputElement>(`#qty-${CSS.escape(sku!)}`)?.value ?? 1) || 1
+    const showError = (text: string) => {
+      errorEl.textContent = text
+      errorEl.classList.remove('hidden')
+    }
+    const call = async (body: Record<string, unknown>) => {
+      const res = await fetch('/api/paypal-express', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sku, ...body }) })
+      return (await res.json().catch(() => ({}))) as { ok?: boolean; id?: string; redirect?: string; error?: string; retry?: boolean }
+    }
+
+    function render() {
+      if (!w.paypal) return
+      const buttons = w.paypal.Buttons({
+        style: { layout: 'vertical', color: 'gold', shape: 'rect', label: 'paypal', height: 45, tagline: false },
+        onClick: () => errorEl.classList.add('hidden'),
+        createOrder: async () => {
+          const r = await call({ action: 'create', quantity: quantity() })
+          if (!r.ok || !r.id) {
+            showError(r.error ?? 'PayPal is unavailable right now — please use the checkout button.')
+            throw new Error(r.error ?? 'create failed')
+          }
+          return r.id
+        },
+        // The buyer picked or changed the address in PayPal's window: re-price for that country.
+        onShippingAddressChange: async (data: { orderID: string; shippingAddress?: { countryCode?: string } }, actions: { reject: (reason?: string) => Promise<void> }) => {
+          const r = await call({ action: 'shipping', id: data.orderID, quantity: quantity(), country: data.shippingAddress?.countryCode })
+          if (!r.ok) return actions.reject('COUNTRY_ERROR')
+        },
+        onApprove: async (data: { orderID: string }, actions: { restart: () => Promise<void> }) => {
+          const r = await call({ action: 'complete', id: data.orderID, quantity: quantity() })
+          if (r.ok && r.redirect) {
+            location.href = r.redirect
+            return
+          }
+          if (r.retry) return actions.restart()
+          showError(r.error ?? 'Something went wrong — you have not been charged. Please try again.')
+        },
+        onError: () => showError('PayPal ran into a problem — you have not been charged. Please try again or use the checkout button.'),
+      })
+      if (!buttons.isEligible()) return
+      buttons.render(box.querySelector<HTMLElement>('[data-paypal-buttons]')!).then(() => {
+        box.hidden = false
+      })
+    }
+
+    // PayPal's SDK is ~100 KB: load it when the buttons are about to scroll into view, never on page load.
+    function load() {
+      const params = new URLSearchParams({
+        'client-id': clientId!,
+        currency: currency!,
+        intent: 'capture',
+        commit: 'true',
+        components: 'buttons',
+        'enable-funding': 'venmo,paylater',
+        // Cards go through the store's own checkout; one card path, not two.
+        'disable-funding': 'card',
+      })
+      const s = document.createElement('script')
+      s.src = `https://www.paypal.com/sdk/js?${params}`
+      s.async = true
+      s.onload = render
+      document.head.appendChild(s)
+    }
+
+    // Watch the parent, not the box: the box stays hidden until the buttons render, and a hidden
+    // element never intersects.
+    new IntersectionObserver((entries, io) => {
+      if (entries.some((e) => e.isIntersecting)) {
+        io.disconnect()
+        load()
+      }
+    }, { rootMargin: '600px' }).observe(box.parentElement ?? box)
+  }
+</script>

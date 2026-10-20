@@ -1,7 +1,10 @@
 name: Publish
 
-# Publishes @skuio/storefront and @skuio/cli to npm on a version tag.
-# Needs an NPM_TOKEN repository secret with publish rights on the @skuio scope.
+# Publishes @skuio/storefront and @skuio/cli to npm when a version tag (v0.5.0)
+# is pushed. No token is stored anywhere: npm trusted publishing exchanges this
+# workflow's OIDC identity for a one-time publish credential. Each package's
+# npmjs.com settings name this repo and this workflow file as its trusted
+# publisher; renaming the file breaks publishing until those settings follow.
 on:
   push:
     tags: ['v*']
@@ -19,11 +22,16 @@ jobs:
           node-version: 22
           registry-url: https://registry.npmjs.org
           cache: npm
+      # Trusted publishing needs npm 11.5.1 or newer; Node 22 ships npm 10.
+      - run: npm install -g npm@^11.5.1
+      - name: The tag matches both package versions
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          for p in packages/sdk packages/cli; do
+            v=$(node -p "require('./$p/package.json').version")
+            [ "$v" = "$tag" ] || { echo "$p is $v but the tag is v$tag"; exit 1; }
+          done
       - run: npm ci
       - run: npm run build && npm test
-      - run: npm publish -w @skuio/storefront --access public --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-      - run: npm publish -w @skuio/cli --access public --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - run: npm publish -w @skuio/storefront --access public
+      - run: npm publish -w @skuio/cli --access public

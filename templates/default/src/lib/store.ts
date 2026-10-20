@@ -9,6 +9,8 @@ import { paypalPayments } from '@skuio/storefront/payments/paypal'
 import { btcpayPayments } from '@skuio/storefront/payments/btcpay'
 import { bitcoinPayments } from '@skuio/storefront/payments/bitcoin'
 import config from '../../storefront.config'
+// Hosting seam: astro.config.mjs points `~host` at host.cloudflare.ts or host.node.ts (STORE_HOST).
+import { database, platformEnv } from '~host'
 
 /**
  * The one place a page or endpoint gets the store from. Registry blocks
@@ -25,12 +27,12 @@ export const routes = config.routes
 export type StoreContext = Pick<APIContext, 'locals' | 'url' | 'request'>
 
 /**
- * Secrets and settings: the Worker binding in production, `.dev.vars` under
- * `astro dev` (through the platform proxy), then `.env` / the process for
- * scripts and tests. One code path for local work and deploys.
+ * Secrets and settings: the platform's bindings first (the Worker env on
+ * Cloudflare, `.dev.vars` under `astro dev`), then `.env` / the process
+ * environment — which is all a Node host has. One code path for every host.
  */
 export function readEnv(ctx: StoreContext, key: string): string | undefined {
-  const runtimeEnv = ctx.locals.runtime?.env as Record<string, unknown> | undefined
+  const runtimeEnv = platformEnv(ctx)
   const fromRuntime = runtimeEnv?.[key]
   if (typeof fromRuntime === 'string' && fromRuntime) return fromRuntime
   const fromMeta = (import.meta.env as Record<string, unknown>)[key]
@@ -46,8 +48,7 @@ export function siteUrl(ctx: StoreContext): string {
 
 export function store(ctx: StoreContext): Store {
   if (ctx.locals.store) return ctx.locals.store
-  const db = ctx.locals.runtime?.env?.DB
-  if (!db) throw new Error('No D1 binding "DB". Add it to wrangler.jsonc and run `npm run db:migrate:local` (see README).')
+  const db = database(ctx)
   const env = {
     PUBLIC_SITE_URL: siteUrl(ctx),
     SESSION_SECRET: readEnv(ctx, 'SESSION_SECRET'),
@@ -68,7 +69,7 @@ export function store(ctx: StoreContext): Store {
  * Default: cloudflare when the binding exists, else sendgrid when its key exists, else console.
  */
 export function mail(ctx: StoreContext): MailAdapter {
-  const binding = (ctx.locals.runtime?.env as Record<string, unknown> | undefined)?.EMAIL as CloudflareSendEmailBinding | undefined
+  const binding = platformEnv(ctx)?.EMAIL as CloudflareSendEmailBinding | undefined
   const from = readEnv(ctx, 'MAIL_FROM')
   const provider =
     readEnv(ctx, 'MAIL_PROVIDER') ?? (binding && from ? 'cloudflare' : readEnv(ctx, 'SENDGRID_API_KEY') && from ? 'sendgrid' : 'console')

@@ -50,7 +50,7 @@ const fmt = (m: { amount: number; currency: string }) => formatMoney(m, config.l
       order ? (
         <>
           <div class="flex items-center gap-3">
-            <span class:list={['flex h-11 w-11 items-center justify-center rounded-full text-xl text-white', paid ? 'bg-green-600' : 'bg-accent']} aria-hidden="true">{paid ? '✓' : '…'}</span>
+            <span class:list={['flex h-11 w-11 items-center justify-center rounded-full text-xl text-on-accent', paid ? 'bg-green-600' : 'bg-accent']} aria-hidden="true">{paid ? '✓' : '…'}</span>
             <h1 class="display-heading text-5xl">{paid ? 'Thank you' : 'Almost there'}</h1>
           </div>
 
@@ -85,13 +85,13 @@ const fmt = (m: { amount: number; currency: string }) => formatMoney(m, config.l
                 <span class="font-semibold text-ink">−{fmt(order.discount)}</span>
               </div>
             )}
-            <div class="flex items-center justify-between border-t border-rule bg-[#fafafa] p-4">
+            <div class="flex items-center justify-between border-t border-rule bg-panel p-4">
               <span class="text-sm font-semibold text-ink">{paid ? 'Total paid' : 'Total'}</span>
               <span class="text-lg font-bold text-ink">{fmt(order.total)}</span>
             </div>
           </div>
 
-          <div class="mt-8 rounded-lg bg-[#fafafa] p-5 text-sm">
+          <div class="mt-8 rounded-lg bg-panel p-5 text-sm">
             <h2 class="font-semibold text-ink">What happens next</h2>
             <p class="mt-2">
               We will send tracking as soon as your order ships. You can follow it any time in
@@ -116,7 +116,7 @@ const fmt = (m: { amount: number; currency: string }) => formatMoney(m, config.l
       )
     }
 
-    <a href={routes.shop()} class="mt-10 inline-block rounded-full border-2 border-ink px-7 py-2.5 text-sm font-semibold transition hover:bg-ink hover:text-white">
+    <a href={routes.shop()} class="mt-10 inline-block rounded-full border-2 border-ink px-7 py-2.5 text-sm font-semibold transition hover:bg-ink hover:text-page">
       Back to the shop
     </a>
   </div>

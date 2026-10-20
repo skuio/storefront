@@ -3,6 +3,8 @@ import { config } from '../lib/store'
 
 const phone = config.contact?.phone
 const email = config.contact?.email
+/** Prefills the message, e.g. a volume enquiry linked from a product page. */
+const { message = '' } = Astro.props as { message?: string }
 ---
 
 <form method="POST" action="/api/contact" class="space-y-4" data-contact-form>
@@ -27,10 +29,10 @@ const email = config.contact?.email
   <div>
     <label for="message" class="block text-xs font-semibold tracking-wide text-ink uppercase">Message</label>
     <textarea id="message" name="message" rows="6" required
-      class="mt-1.5 w-full rounded-md border border-rule px-3 py-2.5 text-sm focus:border-accent focus:ring-2 focus:ring-accent/25 focus:outline-none"></textarea>
+      class="mt-1.5 w-full rounded-md border border-rule px-3 py-2.5 text-sm focus:border-accent focus:ring-2 focus:ring-accent/25 focus:outline-none">{message}</textarea>
   </div>
 
-  <button type="submit" class="w-full rounded-md bg-accent px-8 py-3 text-sm font-bold tracking-wide text-white uppercase transition hover:bg-accent-dark disabled:opacity-60">
+  <button type="submit" class="w-full rounded-md bg-accent px-8 py-3 text-sm font-bold tracking-wide text-on-accent uppercase transition hover:bg-accent-dark disabled:opacity-60">
     Send message
   </button>
 

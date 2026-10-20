@@ -1,11 +1,13 @@
 # SKU.io storefront kit
 
 A self-contained e-commerce platform for coding agents to build stores on:
-Astro on Cloudflare Workers with its own D1 database, a store core that owns
+an Astro site with its own SQL database, a store core that owns
 catalogue, checkout, orders, payments and the buyer portal, and a **Store
 API** so an operations system (SKU.io first) can pull orders and push
 inventory, fulfilments and products. Payments and mail are adapters. Think
-WooCommerce without WordPress, and without being tied to any processor.
+WooCommerce without WordPress, and without being tied to any processor or
+any host: it deploys to Cloudflare Workers + D1 by default, or to any Node
+server with a SQLite file (`STORE_HOST=node`).
 
 ```
 npx @skuio/cli create my-store
@@ -16,8 +18,100 @@ cp .dev.vars.example .dev.vars            # manual payments + console mail work 
 npm run dev
 ```
 
+Not on Cloudflare? Any Node host works the same way, with the database in one
+SQLite file:
+
+```
+export STORE_HOST=node DATABASE_PATH=data/store.db
+npm run seed:sqlite                       # schema + demo catalogue into the SQLite file
+npm run dev                               # or: npm run build:node && npm run start:node
+```
+
 Then open `CLAUDE.md` in the new store. It explains the shape of the project
 to whatever agent you point at it, and names the one test that has to stay green.
+
+## How it fits together
+
+![How the kit, a store, payment processors and SKU.io (or another ERP) fit together](docs/assets/architecture.png)
+
+<details>
+<summary>The same diagram as text (Mermaid)</summary>
+
+```mermaid
+flowchart TB
+  subgraph KIT["skuio/storefront — this repo, the framework"]
+    direction LR
+    SDK["<b>@skuio/storefront</b> SDK<br/>store core · Store API<br/>payment + mail adapters"]
+    REG["<b>registry/</b> blocks<br/>+ reference template"]
+    CLI["<b>@skuio/cli</b><br/>create · add"]
+  end
+
+  subgraph SITE["A store — its own private repo, e.g. basicsolominer.com · any host: Cloudflare Workers + D1, or Node + SQLite"]
+    direction LR
+    subgraph FACES["Pages the store owns (copied blocks, redesigned freely)"]
+      direction TB
+      SHOP["Shop + checkout"]
+      BUY["/account<br/>buyer portal"]
+      PART["/partners<br/>affiliate dashboard"]
+      OWN["/admin<br/>owner admin (light)"]
+    end
+    CORE[("Store core from the SDK<br/>catalogue · orders · customers<br/>in the store's database")]
+    API["Store API<br/>/api/skuio/v1"]
+    FACES --> CORE
+    API --> CORE
+  end
+
+  REG -- "copy-and-own (skuio add)" --> FACES
+  SDK -- "npm dependency (npm update)" --> CORE
+  CLI -. "scaffolds a new store" .-> SITE
+
+  BUYER(["Buyer"]) --> SHOP
+  BUYER --> BUY
+  AFF(["Affiliate"]) --> PART
+  OWNER(["Store owner"]) --> OWN
+
+  PAY["Payment processors<br/>Stripe · PayPal · BTCPay · on-chain"]
+  CORE <-- "hosted payment · webhooks" --> PAY
+
+  ERP["<b>SKU.io</b> (or another ERP)<br/>inventory · purchasing · fulfilment<br/>returns · accounting · B2B"]
+  ERP -- "pulls orders<br/>pushes stock, shipments, products" --> API
+  TEAM(["Seller's operations team"]) --> ERP
+```
+
+</details>
+
+**The kit** is this repo. **A store** is a separate private repo that depends on
+the SDK from npm and owns copies of the blocks, so a store has no git
+relationship to the kit. **SKU.io** never runs inside the store. It connects
+from outside as a client of the Store API: the owner approves the connection at
+`/admin/connect`, SKU.io polls new orders, stamps its own order number back, and
+pushes stock, shipments (the store emails tracking) and, if it owns the
+catalogue, products and categories.
+
+## Who uses what
+
+| Person | Where | What they do |
+|---|---|---|
+| Buyer | `/account` (emailed sign-in link), `/account/order-lookup` (guest) | Order history, tracking, reorder |
+| Partner / affiliate | `/partners` (emailed sign-in link) | Traffic, funnel, sources, link builder, commission owed |
+| Store owner | `/admin` (password) | Orders and payments at a glance, partners and commissions, approve or revoke the connections that may use the Store API. Read-only on purpose |
+| Seller's operations team | **SKU.io**, not the store | Inventory, purchasing, fulfilment and shipping, returns, accounting, B2B. Everything that changes stock or ships a box |
+
+The seller side is deliberately split. The store's `/admin` is just enough to
+run a shop that has no operations system yet and to see that orders are flowing.
+Real operations live in the ERP, and the ERP pushes the results back into the
+store.
+
+## Other operations systems
+
+Nothing in the store is specific to SKU.io except names. The Store API is a
+versioned, documented contract (`docs/store-api.md`, OpenAPI in `docs/api/`),
+and the store treats every client the same: a connection with its own key that
+the owner can revoke. Any ERP or OMS that can poll orders over HTTP and push
+stock and shipments back can connect today, using the connect flow or a key
+issued by the owner. Two things are SKU.io-flavoured and would be renamed or
+aliased for a neutral release: the route prefix `/api/skuio/v1`, and the
+"Start from SKU.io" wording on the empty connections page.
 
 ## What's in here
 
@@ -45,7 +139,12 @@ stay underneath.
 
 ## How a store works
 
-- **Catalogue** lives in the store's D1 database. Seed it from `src/data/*.json`
+- **Hosting** is one seam, `src/lib/host.<STORE_HOST>.ts`, which supplies the
+  database and the platform's bindings: `cloudflare` (a Worker with D1, the
+  default) or `node` (any Node server; one SQLite file at `DATABASE_PATH`,
+  migrated on boot). Same SQL, same code, same guardrail test on both; CI runs
+  it on each. Another host is another `host.*.ts` file.
+- **Catalogue** lives in the store's database. Seed it from `src/data/*.json`
   with `npm run seed`, or let SKU.io push it through `PUT /products` and
   `PUT /categories`. Availability comes from `PUT /inventory`.
 - **Checkout** is the store's own page: contact, address, shipping method.
@@ -63,6 +162,13 @@ stay underneath.
   shipments; the store emails tracking.
 - **Portal**: sign-in by emailed link, order history with tracking, reorder.
   Guest lookup by order number + email.
+- **Attribution**: first and last touch (utm tags, ad click ids, referrers)
+  ride on every order's metadata as `src_first` / `src_last`, so the operations
+  system knows which channel sold it.
+- **Express checkout**: PayPal / Venmo / Pay Later buttons beside the buy
+  button (`paypal-express` block). The address comes from the buyer's PayPal
+  account, and the store refuses to capture if the approved amount differs
+  from its own price.
 
 ## Security model
 
@@ -72,7 +178,8 @@ stay underneath.
 - The Store API is a bearer secret (`STORE_API_KEY`) compared in constant time;
   the order's buyer-facing access key never leaves the store.
 - Sessions and magic links are stored as HMAC hashes (`SESSION_SECRET`).
-- Secrets are Worker secrets, read through `readEnv`; nothing is committed.
+- Secrets are platform secrets (Worker secrets, or the process environment on
+  Node), read through `readEnv`; nothing is committed.
 
 ## Developing the kit
 
@@ -84,6 +191,8 @@ npm run check              # types, every workspace
 npm run sync:template      # registry -> templates/default (--check in CI)
 npm run template:build
 npm run template:e2e       # local D1: cd templates/default && npm run db:migrate:local && npm run seed
+# the same guardrail on Node + SQLite:
+#   cd templates/default && export STORE_HOST=node DATABASE_PATH=data/e2e.db && npm run seed:sqlite && npx playwright test
 ```
 
 Edit blocks under `registry/blocks/`, never directly in the template — CI runs
@@ -93,6 +202,7 @@ Edit blocks under `registry/blocks/`, never directly in the template — CI runs
 
 v2. The store core, Store API, both adapters, the template and the e2e loop
 (order → paid → shipped through the Store API) work end to end; the first
-real store runs on it on Cloudflare Workers. Not yet on npm.
+real stores run on it on Cloudflare Workers, and the same template runs on a
+plain Node server with SQLite.
 
 MIT.
