@@ -25,7 +25,11 @@ src/assets/products/       product images, matched to products by filename
 src/styles/global.css      design tokens; change these and everything follows
 scripts/db-migrate.mjs     applies the SDK's schema to D1 (local or remote)
 scripts/seed-store.mjs     seeds D1 from src/data
+scripts/predeploy.mjs      refuses a deploy with a stale linked SDK or pending database migrations
+src/middleware.ts          canonical host, no-cache HTML, preview noindex, referral/touch capture
+src/pages/robots.txt.ts    robots.txt with an absolute Sitemap: line
 e2e/checkout.spec.ts       the guardrail
+e2e/seo.spec.ts            robots -> sitemap, no-cache HTML, category copy
 ```
 
 Everything under `src/pages` is server-rendered per request in the Cloudflare
@@ -116,11 +120,29 @@ and the key. See `.claude/skills/connect-skuio`.
 **Payments.** `PAYMENT_PROVIDER=stripe` needs `STRIPE_SECRET_KEY` and a webhook
 endpoint at `/api/payments/webhook` (`STRIPE_WEBHOOK_SECRET`). `manual` needs
 nothing: the order waits on `/checkout/pending/` until SKU.io marks it paid.
-Another processor is a `PaymentAdapter` in `src/lib/store.ts`.
+Another processor is a `PaymentAdapter` in `src/lib/store.ts`. **Check the
+processor's policy for what this store sells before building on it** — see
+"Choosing a payment processor" below.
 
-**Email.** `MAIL_PROVIDER=sendgrid` with `SENDGRID_API_KEY` and a verified
-`MAIL_FROM`; otherwise `console`, which logs every message (magic links
+**Email.** `MAIL_PROVIDER` picks the sender; with none set, the store uses
+`cloudflare` when the `EMAIL` binding and `MAIL_FROM` exist, else `sendgrid`
+when its key does, else `console`, which logs every message (magic links
 included — read them with `wrangler tail`). Templates live in the SDK.
+
+- On Cloudflare Workers (the default host), **Cloudflare Email Service**
+  needs no API key: add a `send_email` binding named `EMAIL` to
+  `wrangler.jsonc` (`"send_email": [{ "name": "EMAIL" }]`), enable sending
+  for the domain once with `npx wrangler email sending enable <domain>`, add
+  the DKIM (and SPF/return-path) records it prints, and set `MAIL_FROM` to an
+  address on that domain. It sends from its own return-path subdomain, so it
+  coexists with Google Workspace (or any mailbox host): leave the domain's MX
+  records alone and, if the root SPF record is edited at all, *add* to it —
+  never replace the mailbox host's `include:`. One SPF record per name.
+- **SendGrid** needs `SENDGRID_API_KEY` and a `MAIL_FROM` that is a verified
+  sender (single sender or an authenticated domain). A `403` from SendGrid
+  almost always means the `from` address is not verified — not a bad key.
+- After setting either, prove it: request an account sign-in link to a real
+  inbox and check it arrives and passes DKIM (Gmail → "Show original").
 
 **The cart.** `AddToCartButton` snapshots name/price into localStorage;
 `/cart/` renders from that and links to `/checkout/`, which posts SKUs and
@@ -141,15 +163,96 @@ and `ORDER_NOTIFICATION_EMAIL`. For anything else, SKU.io sees the order on
 its next poll of `GET /api/skuio/v1/orders`; for store-side effects, extend
 `src/pages/api/payments/webhook.ts` after `applyPaymentEvents`.
 
-**Deploy.** `npm run db:migrate` once per schema change, `npm run deploy`.
-See `.claude/skills/deploy`.
+**Deploy.** `node scripts/predeploy.mjs` (rebuilds a linked SDK, refuses
+pending migrations), `npm run db:migrate` when it says so, `npm run deploy`,
+then the post-deploy checks. See `.claude/skills/deploy`. A new store's
+go-live is `.claude/skills/launch`; replacing a live WooCommerce store is
+`.claude/skills/cutover`.
+
+**Canonical host and previews.** `CANONICAL_HOST=www.example.com` makes
+`src/middleware.ts` 301 every GET on another host (apex ↔ www) to it, path and
+query kept; webhooks (POST) are never redirected. `STORE_PREVIEW=1` marks a
+shareable preview deploy: a banner on every page, `x-robots-tag: noindex`,
+and a robots.txt that disallows everything. Never set it on production.
+
+## Lessons from live stores
+
+These cost real money or real orders on stores built from this kit. Read the
+one that matches what you are about to do.
+
+**Caching.** HTML is `cache-control: no-cache` (the middleware sets it on any
+`text/html` response that has none); hashed assets under `/_astro/` cache
+forever. A page cached across a deploy points at stylesheets that no longer
+exist and renders unstyled. Never add a long `max-age` to a page. On
+Cloudflare Workers (the default host), if the zone has a Cache Rule that
+caches HTML, or a deploy still serves an unstyled page, purge the zone's cache
+(dashboard → Caching → Purge, or the API) after the deploy.
+
+**Secrets take a moment.** A secret set with `wrangler secret put` (or any
+host's equivalent) can take about a minute to reach every location. Wait ~1
+minute before concluding a new key "does not work", then verify on the live
+site — a successful `secret put` is not proof.
+
+**Mobile, iOS and in-app browsers.**
+- Safari on iOS reports a tap's `click` with `pointerType: "mouse"`, so code
+  that branches "mouse = hold, touch = tap" does nothing on an iPhone. Use one
+  interaction for every pointer (`pointerdown` + `setPointerCapture`, stop on
+  `pointerup`/`pointercancel`/`lostpointercapture`), and add
+  `-webkit-touch-callout: none` / `user-select: none` plus a `contextmenu`
+  `preventDefault` to anything held down.
+- Static assets do not honour `Range` requests, and iOS will not play a video
+  served without them. Serve video from object storage (on Cloudflare, an R2
+  bucket) through a small route that answers `Range` with `206` and
+  `Content-Range`, not from `public/`.
+- `mailto:` links do nothing inside the Facebook and Instagram in-app
+  browsers. Anywhere a buyer must reach you, offer the contact form (or a
+  `tel:` link) next to the address, and show the address as text.
+- Test on a real iPhone (or at least WebKit) before launch, not only Chromium.
+
+**Product facts come from sources.** Product copy, specs, dimensions,
+compatibility, what is in the box and photos come from the manufacturer's
+data, drawings and real photos — never invented. If a fact cannot be traced
+to a source, mark it `CONFIRM` in the copy and list it for the owner; do not
+ship a guess. No generated images presented as the product, and no earnings,
+savings or performance claims the source does not make.
+
+**Choosing a payment processor.** Check the processor's policy against what
+the store sells *before* building on it; an account closed after launch
+freezes the money already taken.
+- Stripe's restricted-business list excludes some categories outright (for
+  example cryptocurrency mining hardware) and others need pre-approval.
+  Read it for the actual product, not the category name.
+- PayPal's Acceptable Use Policy is worded differently from Stripe's; read
+  it too rather than assuming the two agree.
+- New PayPal business accounts can have funds held for up to 21 days until
+  the account has history. Plan cash flow for it.
+- Apple Pay and Google Pay through PayPal need PayPal's full underwriting
+  (advanced card processing), not just a business account.
+- Stripe offers PayPal as a payment method only to EU/UK businesses; a US
+  store that wants PayPal integrates PayPal directly (`PAYMENT_PROVIDER`
+  includes `paypal`).
+
+**Express checkout.** Wallet buttons (PayPal, Apple Pay, Google Pay, Link) go
+**above** the checkout form, not below it. Reserve their height with a
+`min-height` so the page does not jump when they load (layout shift costs
+both conversion and Core Web Vitals). Wallet availability checks sometimes
+report "unavailable" on the first try; retry detection once before hiding
+the row. Cap the row at about four buttons — more reads as clutter.
+
+**SEO migrations.** Before replacing a live store, find what actually earns:
+Merchant Center / shopping feeds, ad-platform purchase tags and conversion
+events, affiliate links, the top landing pages in Search Console and
+analytics. Keep every one working through the cutover (same URLs or 301s, the
+feed regenerated from the new catalogue, purchase events firing from the new
+success page) before polishing anything else. Category pages need their copy:
+a heading plus a product grid is the page search engines decline to index.
 
 ## Verifying your work
 
 ```
 npm run check      # types
 npm run build      # the Worker bundle
-npm run e2e        # the guardrail (local D1 + dev server)
+npm run e2e        # the guardrail (local D1 + dev server): checkout.spec.ts and seo.spec.ts
 ```
 
 A change is done when all three pass.

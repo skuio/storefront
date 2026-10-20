@@ -21,6 +21,15 @@ while (cur) {
   cur = cur.parentId ? catalog.category(cur.parentId)! : undefined!
 }
 
+// The description is catalogue HTML (seeded, migrated from WooCommerce or pushed by SKU.io), the same
+// trusted source as a product description: render it as HTML, and give the meta description its text.
+const plainDescription = (node.description ?? '')
+  .replace(/<[^>]+>/g, ' ')
+  .replace(/&nbsp;/g, ' ')
+  .replace(/&(amp|lt|gt|quot|#39|apos);/g, (_, e: string) => ({ amp: '&', lt: '<', gt: '>', quot: '"', '#39': "'", apos: "'" })[e]!)
+  .replace(/\s+/g, ' ')
+  .trim()
+
 const crumbs = [
   { label: 'Home', href: '/' },
   { label: 'Shop', href: routes.shop() },
@@ -34,12 +43,12 @@ const schema = [{
 }]
 ---
 
-<BaseLayout title={node.name} description={node.description ?? `${items.length} products in ${node.name} from ${config.name}.`} schema={schema}>
+<BaseLayout title={node.name} description={plainDescription || `${items.length} products in ${node.name} from ${config.name}.`} schema={schema}>
   <div class="mx-auto max-w-6xl px-5 py-10">
     <Breadcrumbs items={crumbs} />
     <header class="mt-6 border-b border-rule pb-8">
       <h1 class="display-heading text-5xl">{node.name}</h1>
-      {node.description && <p class="mt-3 max-w-2xl text-sm">{node.description}</p>}
+      {node.description && <div class="prose-store mt-3 max-w-2xl text-sm" data-category-description set:html={node.description} />}
       <p class="mt-3 text-sm text-body/70">{items.length} {items.length === 1 ? 'product' : 'products'}</p>
     </header>
 

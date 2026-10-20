@@ -33,5 +33,13 @@ jobs:
           done
       - run: npm ci
       - run: npm run build && npm test
-      - run: npm publish -w @skuio/storefront --access public
-      - run: npm publish -w @skuio/cli --access public
+      # A version already on npm (e.g. published by hand) is skipped, not an error.
+      - name: Publish
+        run: |
+          for w in @skuio/storefront @skuio/cli; do
+            if npm view "$w@${GITHUB_REF_NAME#v}" version >/dev/null 2>&1; then
+              echo "$w@${GITHUB_REF_NAME#v} is already on npm; skipping"
+            else
+              npm publish -w "$w" --access public
+            fi
+          done

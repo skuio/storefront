@@ -36,6 +36,13 @@ MAIL_FROM_NAME=
 # Absolute public origin for links in emails and processor return URLs.
 PUBLIC_SITE_URL=http://localhost:4321
 
+# Optional: the one host every page lives on (e.g. www.example.com). GET/HEAD requests on any
+# other host are 301'd to it by src/middleware.ts; localhost and *.workers.dev are left alone.
+CANONICAL_HOST=
+# Optional: 1 for a shareable preview — banner on every page, noindex header and meta, robots.txt
+# disallows everything. Never set it on the production store.
+STORE_PREVIEW=
+
 # Who hears about paid orders and contact-form messages (optional).
 ORDER_NOTIFICATION_EMAIL=
 CONTACT_NOTIFICATION_EMAIL=
