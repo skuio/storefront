@@ -1,11 +1,13 @@
 # SKU.io storefront kit
 
 A self-contained e-commerce platform for coding agents to build stores on:
-Astro on Cloudflare Workers with its own D1 database, a store core that owns
+an Astro site with its own SQL database, a store core that owns
 catalogue, checkout, orders, payments and the buyer portal, and a **Store
 API** so an operations system (SKU.io first) can pull orders and push
 inventory, fulfilments and products. Payments and mail are adapters. Think
-WooCommerce without WordPress, and without being tied to any processor.
+WooCommerce without WordPress, and without being tied to any processor or
+any host: it deploys to Cloudflare Workers + D1 by default, or to any Node
+server with a SQLite file (`STORE_HOST=node`).
 
 ```
 npx @skuio/cli create my-store
@@ -14,6 +16,15 @@ npx wrangler d1 create my-store           # paste the id into wrangler.jsonc
 npm run db:migrate:local && npm run seed  # schema + demo catalogue into the local D1
 cp .dev.vars.example .dev.vars            # manual payments + console mail work with no keys
 npm run dev
+```
+
+Not on Cloudflare? Any Node host works the same way, with the database in one
+SQLite file:
+
+```
+export STORE_HOST=node DATABASE_PATH=data/store.db
+npm run seed:sqlite                       # schema + demo catalogue into the SQLite file
+npm run dev                               # or: npm run build:node && npm run start:node
 ```
 
 Then open `CLAUDE.md` in the new store. It explains the shape of the project
@@ -35,7 +46,7 @@ flowchart TB
     CLI["<b>@skuio/cli</b><br/>create · add"]
   end
 
-  subgraph SITE["A store — its own private repo, e.g. basicsolominer.com · one Cloudflare Worker + D1"]
+  subgraph SITE["A store — its own private repo, e.g. basicsolominer.com · any host: Cloudflare Workers + D1, or Node + SQLite"]
     direction LR
     subgraph FACES["Pages the store owns (copied blocks, redesigned freely)"]
       direction TB
@@ -44,7 +55,7 @@ flowchart TB
       PART["/partners<br/>affiliate dashboard"]
       OWN["/admin<br/>owner admin (light)"]
     end
-    CORE[("Store core from the SDK<br/>catalogue · orders · customers<br/>in the store's D1")]
+    CORE[("Store core from the SDK<br/>catalogue · orders · customers<br/>in the store's database")]
     API["Store API<br/>/api/skuio/v1"]
     FACES --> CORE
     API --> CORE
@@ -128,7 +139,12 @@ stay underneath.
 
 ## How a store works
 
-- **Catalogue** lives in the store's D1 database. Seed it from `src/data/*.json`
+- **Hosting** is one seam, `src/lib/host.<STORE_HOST>.ts`, which supplies the
+  database and the platform's bindings: `cloudflare` (a Worker with D1, the
+  default) or `node` (any Node server; one SQLite file at `DATABASE_PATH`,
+  migrated on boot). Same SQL, same code, same guardrail test on both; CI runs
+  it on each. Another host is another `host.*.ts` file.
+- **Catalogue** lives in the store's database. Seed it from `src/data/*.json`
   with `npm run seed`, or let SKU.io push it through `PUT /products` and
   `PUT /categories`. Availability comes from `PUT /inventory`.
 - **Checkout** is the store's own page: contact, address, shipping method.
@@ -162,7 +178,8 @@ stay underneath.
 - The Store API is a bearer secret (`STORE_API_KEY`) compared in constant time;
   the order's buyer-facing access key never leaves the store.
 - Sessions and magic links are stored as HMAC hashes (`SESSION_SECRET`).
-- Secrets are Worker secrets, read through `readEnv`; nothing is committed.
+- Secrets are platform secrets (Worker secrets, or the process environment on
+  Node), read through `readEnv`; nothing is committed.
 
 ## Developing the kit
 
@@ -174,6 +191,8 @@ npm run check              # types, every workspace
 npm run sync:template      # registry -> templates/default (--check in CI)
 npm run template:build
 npm run template:e2e       # local D1: cd templates/default && npm run db:migrate:local && npm run seed
+# the same guardrail on Node + SQLite:
+#   cd templates/default && export STORE_HOST=node DATABASE_PATH=data/e2e.db && npm run seed:sqlite && npx playwright test
 ```
 
 Edit blocks under `registry/blocks/`, never directly in the template — CI runs
@@ -183,6 +202,7 @@ Edit blocks under `registry/blocks/`, never directly in the template — CI runs
 
 v2. The store core, Store API, both adapters, the template and the e2e loop
 (order → paid → shipped through the Store API) work end to end; the first
-real store runs on it on Cloudflare Workers. Not yet on npm.
+real stores run on it on Cloudflare Workers, and the same template runs on a
+plain Node server with SQLite.
 
 MIT.

@@ -31,3 +31,28 @@ jobs:
           npm run template:e2e
         env:
           CI: true
+
+  # The same guardrail on a plain Node server with a SQLite file (STORE_HOST=node):
+  # the proof that the store is not tied to Cloudflare.
+  template-node:
+    runs-on: ubuntu-latest
+    env:
+      STORE_HOST: node
+      DATABASE_PATH: ${{ github.workspace }}/templates/default/data/e2e.db
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Reference template builds for Node
+        run: npm run build:node --workspace templates/default
+      - name: Template guardrail on Node + SQLite
+        run: |
+          npx playwright install --with-deps chromium
+          npm run seed:sqlite --workspace templates/default
+          npm run template:e2e
+        env:
+          CI: true

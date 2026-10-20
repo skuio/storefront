@@ -1,11 +1,25 @@
 {
   "extends": "astro/tsconfigs/strict",
-  "include": [".astro/types.d.ts", "**/*"],
-  "exclude": ["dist", "node_modules"],
+  "include": [
+    ".astro/types.d.ts",
+    "**/*"
+  ],
+  "exclude": [
+    "dist",
+    "node_modules"
+  ],
   "compilerOptions": {
     "strictNullChecks": true,
     "allowJs": true,
     "resolveJsonModule": true,
-    "types": ["@cloudflare/workers-types"]
+    "types": [
+      "@cloudflare/workers-types",
+      "node"
+    ],
+    "paths": {
+      "~host": [
+        "./src/lib/host.cloudflare.ts"
+      ]
+    }
   }
 }
