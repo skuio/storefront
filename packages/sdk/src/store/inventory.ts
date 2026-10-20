@@ -24,23 +24,38 @@ export class InventoryService {
     const now = this.ctx.now()
     const unknown: string[] = []
     const statements: DbStatement[] = []
+    let updated = 0
     for (const item of items) {
       if (!known.has(item.sku)) {
         unknown.push(item.sku)
         continue
       }
+      // Stock is part of the product resource GET /products returns, so a change to it is a change
+      // to the product: bump products.updated_at (before the upsert, and only when the values
+      // differ) so a consumer polling `updated_since` sees the new quantity without a full sweep.
+      updated++
+      const available = Math.trunc(item.available)
+      const backorder = item.allow_backorder ? 1 : 0
+      statements.push(
+        this.ctx.db
+          .prepare(
+            `UPDATE products SET updated_at = ? WHERE sku = ?
+             AND NOT EXISTS (SELECT 1 FROM inventory WHERE sku = ? AND available = ? AND allow_backorder = ?)`
+          )
+          .bind(now, item.sku, item.sku, available, backorder)
+      )
       statements.push(
         this.ctx.db
           .prepare(
             `INSERT INTO inventory (sku, available, allow_backorder, updated_at) VALUES (?, ?, ?, ?)
              ON CONFLICT (sku) DO UPDATE SET available = excluded.available, allow_backorder = excluded.allow_backorder, updated_at = excluded.updated_at`
           )
-          .bind(item.sku, Math.trunc(item.available), item.allow_backorder ? 1 : 0, now)
+          .bind(item.sku, available, backorder, now)
       )
     }
     for (const part of chunk(statements, 250)) await this.ctx.db.batch(part)
     if (statements.length) this.invalidate()
-    return { updated: statements.length, unknown_skus: [...new Set(unknown)] }
+    return { updated, unknown_skus: [...new Set(unknown)] }
   }
 
   /** Availability for a set of SKUs; SKUs without a row are untracked (undefined). */
@@ -60,10 +75,14 @@ export class InventoryService {
   /** Statements that move tracked stock by `delta` per SKU (negative to consume). Untracked SKUs are untouched. */
   adjustStatements(lines: { sku: string; quantity: number }[], direction: 1 | -1): DbStatement[] {
     const now = this.ctx.now()
-    return lines.map((l) =>
+    // A tracked SKU's product is bumped too, for the same reason as in set().
+    return lines.flatMap((l) => [
+      this.ctx.db
+        .prepare(`UPDATE products SET updated_at = ? WHERE sku = ? AND EXISTS (SELECT 1 FROM inventory WHERE sku = ?)`)
+        .bind(now, l.sku, l.sku),
       this.ctx.db
         .prepare(`UPDATE inventory SET available = available + ?, updated_at = ? WHERE sku = ?`)
-        .bind(direction * l.quantity, now, l.sku)
-    )
+        .bind(direction * l.quantity, now, l.sku),
+    ])
   }
 }

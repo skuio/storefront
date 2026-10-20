@@ -165,7 +165,9 @@ sales channel uses.
 `{ "data": [Product…], "next_cursor": "…"|null }`. Ordering is `updated_at, sku` ascending, so
 the same watermark discipline as orders applies: overlap the previous watermark and
 de-duplicate by `sku`. `limit` is 1–200 (default 50). `active` is optional — **omit it and
-inactive products come back too**, which is how a withdrawal becomes visible. A `limit`,
+inactive products come back too**, which is how a withdrawal becomes visible. A product's
+`updated_at` also moves when its stock changes (a `PUT /inventory` with a new quantity, or a
+paid or cancelled order), so polling `updated_since` picks up stock drift without a full sweep. A `limit`,
 `updated_since`, `active` or `cursor` the store did not issue is a `422`, never a silent clamp.
 
 ```json
