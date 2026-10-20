@@ -8,7 +8,7 @@
  *      against a dist/ that predated an adapter in src/, and the build failed with
  *      `Rollup failed to resolve import "@skuio/storefront/payments/paypal"`.
  *   2. Every entry point the SDK exports exists on disk (linked or installed from npm).
- *   3. On Cloudflare Workers (the default host): the remote D1 database has every migration this SDK
+ *   3. On Cloudflare Workers (the default host; skipped for STORE_HOST=node, which migrates on boot): the remote D1 database has every migration this SDK
  *      ships. New code against an old schema is a 5xx on every page that reads a new column — a
  *      staging store went 502 after an SDK bump for exactly that reason. Run `npm run db:migrate`
  *      first. Migrations are additive, so the old Worker keeps working on the new schema in between.
@@ -69,6 +69,11 @@ ok(`all ${Object.keys(sdkPkg.exports ?? {}).length} SDK entry points exist`)
 // --- 3. the database has every migration ---------------------------------------------------------
 if (args.has('--skip-schema')) {
   console.log('predeploy: schema check skipped')
+  process.exit(0)
+}
+if ((process.env.STORE_HOST ?? 'cloudflare') !== 'cloudflare') {
+  // A Node host migrates its SQLite file on boot (src/lib/host.node.ts): nothing can be pending.
+  ok(`STORE_HOST=${process.env.STORE_HOST}: the database is migrated on boot`)
   process.exit(0)
 }
 const wranglerConfig = ['wrangler.jsonc', 'wrangler.json', 'wrangler.toml'].map((f) => join(root, f)).find(existsSync)

@@ -65,8 +65,8 @@ SDK bump because the deploy shipped before `db:migrate`. `predeploy.mjs`
 compares the migrations the installed SDK ships with the remote database's
 `d1_migrations` table and exits non-zero if any are missing. Migrate first;
 the SDK's migrations are additive, so the old Worker keeps serving on the new
-schema until the new one replaces it. (To run it automatically, name it
-`predeploy` in `package.json`; npm runs `predeploy` before `deploy`.)
+schema until the new one replaces it. `npm run deploy` runs it first on its own
+(`predeploy` in `package.json`).
 
 **A linked SDK must be rebuilt.** When `@skuio/storefront` is a `file:`
 dependency or a workspace link, the store bundles the SDK's compiled `dist/`,

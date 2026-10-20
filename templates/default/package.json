@@ -10,6 +10,7 @@
     "build:node": "STORE_HOST=node astro build",
     "start:node": "node dist/server/entry.mjs",
     "preview": "wrangler dev",
+    "predeploy": "node scripts/predeploy.mjs",
     "deploy": "astro build && wrangler deploy",
     "check": "astro check",
     "e2e": "playwright test",
