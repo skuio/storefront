@@ -4,7 +4,7 @@ import { defineStorefront, flatRate, freeShipping } from '../src'
 import { applyPaymentEvents, PaymentWebhookError } from '../src/payments'
 import { btcpayPayments, validSignature } from '../src/payments/btcpay'
 import { decimal, paypalExpress, paypalPayments } from '../src/payments/paypal'
-import { stripePayments } from '../src/payments/stripe'
+import { eventsFromStripe, stripeExpress, stripePayments } from '../src/payments/stripe'
 import { placeOrder, rig, seed } from './helpers'
 
 const config = defineStorefront({
@@ -231,5 +231,57 @@ describe('stripe adapter with a store discount', () => {
     const params = create.mock.calls[0]![0]
     expect(params.discounts).toEqual([{ coupon: 'co_1' }])
     expect(params).not.toHaveProperty('allow_promotion_codes')
+  })
+})
+
+describe('stripe express', () => {
+  const ev = (type: string, object: unknown) => ({ type, data: { object } }) as unknown as Stripe.Event
+
+  it('makes an intent for exactly the order total, tagged express', async () => {
+    const { order, ctx } = await discountedOrder()
+    const create = vi.fn(async (params: Stripe.PaymentIntentCreateParams) => ({ id: 'pi_x', client_secret: 'pi_x_secret', ...params }))
+    const stripe = { paymentIntents: { create } } as unknown as Stripe
+    const out = await stripeExpress({ stripe }).intent(order, ctx)
+    expect(out).toEqual({ clientSecret: 'pi_x_secret', paymentIntentId: 'pi_x' })
+    const [params, opts] = create.mock.calls[0]! as unknown as [Stripe.PaymentIntentCreateParams, Stripe.RequestOptions]
+    expect(params).toMatchObject({
+      amount: order.total.amount,
+      currency: 'usd',
+      automatic_payment_methods: { enabled: true },
+      receipt_email: order.customer.email,
+      metadata: { order_id: order.id, order_number: order.number, checkout: 'express' },
+      shipping: { address: { line1: order.shippingAddress.line1, country: order.shippingAddress.country } },
+    })
+    expect(opts.idempotencyKey).toBe(`express-${order.id}-${order.updatedAt}`)
+  })
+
+  it('pays an order from an express intent, and only an express intent', () => {
+    const pi = (metadata: Record<string, string>, extra: Record<string, unknown> = {}) => ({ id: 'pi_1', currency: 'usd', amount: 98910, amount_received: 98910, payment_method_types: ['card'], status: 'succeeded', metadata, ...extra })
+    expect(eventsFromStripe(ev('payment_intent.succeeded', pi({ order_id: 'ord_1', checkout: 'express' })))).toEqual([
+      expect.objectContaining({ type: 'paid', orderId: 'ord_1', provider: 'stripe', reference: 'pi_1', methodLabel: 'Card', amount: { amount: 98910, currency: 'usd' } }),
+    ])
+    // A hosted Checkout intent also carries order_id; its session event pays it, so this one must not.
+    expect(eventsFromStripe(ev('payment_intent.succeeded', pi({ order_id: 'ord_1' })))).toEqual([{ type: 'ignored', reason: expect.stringContaining('Checkout session') }])
+    expect(eventsFromStripe(ev('payment_intent.payment_failed', pi({ order_id: 'ord_1', checkout: 'express' }, { last_payment_error: { code: 'card_declined' } })))).toEqual([
+      { type: 'failed', orderId: 'ord_1', provider: 'stripe', reference: 'pi_1', reason: 'card_declined' },
+    ])
+    expect(eventsFromStripe(ev('payment_intent.payment_failed', pi({ order_id: 'ord_1' })))).toEqual([{ type: 'ignored', reason: expect.stringContaining('Checkout session') }])
+    expect(eventsFromStripe(ev('payment_intent.succeeded', pi({ checkout: 'express' })))).toEqual([{ type: 'ignored', reason: expect.stringContaining('no order id') }])
+  })
+
+  it('confirms an express return from the payment_intent parameter', async () => {
+    const { order, ctx } = await discountedOrder()
+    let status = 'processing'
+    let orderId = order.id
+    const retrieve = vi.fn(async () => ({ id: 'pi_9', currency: 'usd', amount: order.total.amount, amount_received: order.total.amount, payment_method_types: ['card'], status, metadata: { order_id: orderId, checkout: 'express' } }))
+    const stripe = { paymentIntents: { retrieve } } as unknown as Stripe
+    const adapter = stripePayments({ stripe, webhookSecret: 'x' })
+    const params = new URLSearchParams({ payment_intent: 'pi_9', redirect_status: 'succeeded' })
+    expect(await adapter.verifyReturn!(params, order, ctx)).toEqual([])
+    status = 'succeeded'
+    expect(await adapter.verifyReturn!(params, order, ctx)).toMatchObject([{ type: 'paid', orderId: order.id, reference: 'pi_9' }])
+    orderId = 'ord_other'
+    expect(await adapter.verifyReturn!(params, order, ctx)).toEqual([])
+    expect(retrieve).toHaveBeenCalledWith('pi_9')
   })
 })

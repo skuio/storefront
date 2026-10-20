@@ -14,6 +14,8 @@ export interface StripePaymentOptions {
 }
 
 const PROVIDER = 'stripe'
+/** Marks a PaymentIntent made by `stripeExpress`; hosted Checkout's intents are settled by their session. */
+const EXPRESS = 'express'
 
 /**
  * Stripe hosted Checkout in payment-only mode. The store has already taken
@@ -23,12 +25,6 @@ const PROVIDER = 'stripe'
  */
 export function stripePayments(options: StripePaymentOptions): PaymentAdapter {
   const { stripe } = options
-
-  const metadataFor = (order: Order): Record<string, string> => ({
-    order_id: order.id,
-    order_number: order.number,
-    ...Object.fromEntries(Object.entries(order.metadata).slice(0, 10)),
-  })
 
   return {
     id: PROVIDER,
@@ -70,7 +66,6 @@ export function stripePayments(options: StripePaymentOptions): PaymentAdapter {
         })
         discounts.push({ coupon: coupon.id })
       }
-      const a = order.shippingAddress
       const params: Stripe.Checkout.SessionCreateParams = {
         mode: 'payment',
         line_items,
@@ -79,23 +74,8 @@ export function stripePayments(options: StripePaymentOptions): PaymentAdapter {
         metadata: metadataFor(order),
         payment_intent_data: {
           metadata: metadataFor(order),
-          description: `${ctx.store.config.name} order ${ctx.store.config.orders.numberPrefix}${order.number}`,
-          ...(a.line1 && a.country
-            ? {
-                shipping: {
-                  name: (a.name ?? order.customer.name ?? order.customer.email).slice(0, 100),
-                  ...(order.customer.phone ? { phone: order.customer.phone } : {}),
-                  address: {
-                    line1: a.line1,
-                    ...(a.line2 ? { line2: a.line2 } : {}),
-                    ...(a.city ? { city: a.city } : {}),
-                    ...(a.state ? { state: a.state } : {}),
-                    ...(a.postalCode ? { postal_code: a.postalCode } : {}),
-                    country: a.country,
-                  },
-                },
-              }
-            : {}),
+          description: describeOrder(order, ctx),
+          ...shippingFor(order),
         },
         ...(shippingOption.length ? { shipping_options: shippingOption } : {}),
         ...(discounts.length ? { discounts } : { allow_promotion_codes: ctx.store.config.checkout.allowPromotionCodes }),
@@ -124,11 +104,94 @@ export function stripePayments(options: StripePaymentOptions): PaymentAdapter {
     },
 
     async verifyReturn(params, order): Promise<PaymentEvent[]> {
+      // Express (stripeExpress): Stripe appends the intent to the return URL.
+      const intentId = params.get('payment_intent')
+      if (intentId && !params.get('session_id')) {
+        const pi = await stripe.paymentIntents.retrieve(intentId)
+        if (pi.metadata?.order_id !== order.id) return []
+        return pi.status === 'succeeded' ? [paidFromIntent(pi)] : []
+      }
       const sessionId = params.get('session_id')
       if (!sessionId) return []
       const session = await stripe.checkout.sessions.retrieve(sessionId)
       if (orderIdOf(session) !== order.id) return []
       return session.payment_status === 'paid' ? [paidEvent(session)] : []
+    },
+  }
+}
+
+function metadataFor(order: Order): Record<string, string> {
+  return {
+    order_id: order.id,
+    order_number: order.number,
+    ...Object.fromEntries(Object.entries(order.metadata).slice(0, 10)),
+  }
+}
+
+/** The order's ship-to as Stripe's `shipping`, when it has one. */
+function shippingFor(order: Order): { shipping?: Stripe.Checkout.SessionCreateParams.PaymentIntentData.Shipping } {
+  const a = order.shippingAddress
+  if (!a.line1 || !a.country) return {}
+  return {
+    shipping: {
+      name: (a.name ?? order.customer.name ?? order.customer.email).slice(0, 100),
+      ...(order.customer.phone ? { phone: order.customer.phone } : {}),
+      address: {
+        line1: a.line1,
+        ...(a.line2 ? { line2: a.line2 } : {}),
+        ...(a.city ? { city: a.city } : {}),
+        ...(a.state ? { state: a.state } : {}),
+        ...(a.postalCode ? { postal_code: a.postalCode } : {}),
+        country: a.country,
+      },
+    },
+  }
+}
+
+function describeOrder(order: Order, ctx: PaymentContext): string {
+  return `${ctx.store.config.name} order ${ctx.store.config.orders.numberPrefix}${order.number}`
+}
+
+export interface StripeExpressOptions {
+  /** A configured Stripe client (use `Stripe.createFetchHttpClient()` on Workers). */
+  stripe: Stripe
+}
+
+export interface StripeExpress {
+  /**
+   * A PaymentIntent for exactly the store order's total, for the browser to confirm with the
+   * Express Checkout Element (Apple Pay, Google Pay, Link). Create the store order from the
+   * wallet's address first; the intent is tagged `checkout: express` so its
+   * `payment_intent.succeeded` marks the order paid.
+   */
+  intent(order: Order, ctx: PaymentContext): Promise<{ clientSecret: string; paymentIntentId: string }>
+}
+
+/**
+ * Stripe express checkout: the buyer pays from a wallet button before seeing any form, and the
+ * wallet supplies name, email and address. The page builds the store order from those (priced by
+ * the store, never the browser), then confirms the intent made here. Hosted Checkout
+ * (`stripePayments`) stays the card path; both settle through the same webhook.
+ */
+export function stripeExpress(options: StripeExpressOptions): StripeExpress {
+  const { stripe } = options
+  return {
+    async intent(order, ctx) {
+      const pi = await stripe.paymentIntents.create(
+        {
+          amount: order.total.amount,
+          currency: order.currency.toLowerCase(),
+          automatic_payment_methods: { enabled: true },
+          metadata: { ...metadataFor(order), checkout: EXPRESS },
+          description: describeOrder(order, ctx),
+          receipt_email: order.customer.email,
+          ...shippingFor(order),
+        },
+        { idempotencyKey: `express-${order.id}-${order.updatedAt}` }
+      )
+      if (!pi.client_secret) throw new Error(`Stripe PaymentIntent ${pi.id} has no client secret`)
+      await ctx.store.events.record(order.id, 'checkout_session_created', { provider: PROVIDER, session: pi.id })
+      return { clientSecret: pi.client_secret, paymentIntentId: pi.id }
     },
   }
 }
@@ -157,6 +220,23 @@ function paidEvent(session: Stripe.Checkout.Session): PaymentEvent {
       tax: { amount: tax, currency },
       ...(typeof session.amount_total === 'number' ? { total: { amount: session.amount_total, currency } } : {}),
     },
+  }
+}
+
+function paidFromIntent(pi: Stripe.PaymentIntent): PaymentEvent {
+  const orderId = pi.metadata?.order_id
+  if (!orderId) return { type: 'ignored', reason: `payment intent ${pi.id} has no order id` }
+  const currency = pi.currency.toLowerCase()
+  const received = pi.amount_received || pi.amount
+  return {
+    type: 'paid',
+    orderId,
+    provider: PROVIDER,
+    reference: pi.id,
+    methodLabel: labelFor(pi.payment_method_types?.[0]),
+    paidAt: new Date().toISOString(),
+    amount: { amount: received, currency },
+    adjustments: { total: { amount: received, currency } },
   }
 }
 
@@ -189,6 +269,18 @@ export function eventsFromStripe(event: Stripe.Event): PaymentEvent[] {
       if (!orderId) return [{ type: 'ignored', reason: `session ${session.id} has no order id` }]
       const reference = typeof session.payment_intent === 'string' ? session.payment_intent : session.payment_intent?.id ?? null
       return [{ type: 'failed', orderId, provider: PROVIDER, reference, reason: 'async payment failed' }]
+    }
+    case 'payment_intent.succeeded': {
+      // Only express intents: hosted Checkout's intents carry order_id too, and their session event already paid them.
+      const pi = event.data.object
+      if (pi.metadata?.checkout !== EXPRESS) return [{ type: 'ignored', reason: `payment intent ${pi.id} belongs to a Checkout session` }]
+      return [paidFromIntent(pi)]
+    }
+    case 'payment_intent.payment_failed': {
+      const pi = event.data.object
+      if (pi.metadata?.checkout !== EXPRESS) return [{ type: 'ignored', reason: `payment intent ${pi.id} belongs to a Checkout session` }]
+      if (!pi.metadata.order_id) return [{ type: 'ignored', reason: `payment intent ${pi.id} has no order id` }]
+      return [{ type: 'failed', orderId: pi.metadata.order_id, provider: PROVIDER, reference: pi.id, reason: pi.last_payment_error?.code ?? 'payment failed' }]
     }
     case 'charge.refunded': {
       const charge = event.data.object
