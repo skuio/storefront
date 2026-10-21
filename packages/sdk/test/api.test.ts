@@ -335,6 +335,20 @@ describe('Store API catalog reads', () => {
     expect(changed.body.data.map((p: { sku: string }) => p.sku)).toEqual(['VDCTOYSUP9302'])
     expect(changed.body.data[0].name).toBe('Toyota Supra (renamed)')
 
+    // A stock change is a product change: the quantity rides on the product resource.
+    const afterRename = new Date(Date.parse(changed.body.data[0].updated_at) + 1).toISOString()
+    await new Promise((r) => setTimeout(r, 2))
+    expect((await api('PUT', '/inventory', { items: [{ sku: 'VDCTOYTAC9504', available: 7 }] })).status).toBe(200)
+    const restocked = await api('GET', `/products?updated_since=${encodeURIComponent(afterRename)}`)
+    expect(restocked.body.data.map((p: { sku: string }) => p.sku)).toEqual(['VDCTOYTAC9504'])
+    expect(restocked.body.data[0].inventory.available).toBe(7)
+
+    // Re-sending the same quantity is not a change.
+    const afterRestock = new Date(Date.parse(restocked.body.data[0].updated_at) + 1).toISOString()
+    await new Promise((r) => setTimeout(r, 2))
+    await api('PUT', '/inventory', { items: [{ sku: 'VDCTOYTAC9504', available: 7 }] })
+    expect((await api('GET', `/products?updated_since=${encodeURIComponent(afterRestock)}`)).body.data).toEqual([])
+
     expect((await api('DELETE', '/products/VDCHCIV0611')).status).toBe(204)
     expect((await api('GET', '/products?active=true')).body.data.map((p: { sku: string }) => p.sku)).not.toContain('VDCHCIV0611')
     expect((await api('GET', '/products?active=false')).body.data.map((p: { sku: string }) => p.sku)).toEqual(['VDCHCIV0611'])
