@@ -32,13 +32,7 @@ to whatever agent you point at it, and names the one test that has to stay green
 
 ## Built with the kit
 
-| | |
-|---|---|
-| [![basicsolominer.com](docs/assets/showcase-basicsolominer.jpg)](https://basicsolominer.com) | [![verticallambodoors.com](docs/assets/showcase-verticallambodoors.jpg)](https://www.verticallambodoors.com) |
-| **[basicsolominer.com](https://basicsolominer.com)** — one product sold direct: a dark, interactive single-page store with PayPal express, on-chain bitcoin, discount codes and a partner (affiliate) program. | **[verticallambodoors.com](https://www.verticallambodoors.com)** — a 181-product catalog moved off WooCommerce with its legacy URLs kept, vehicle search, and SKU.io driving stock and shipments. |
-
-Each is its own private repo on Cloudflare Workers + D1: the same SDK and
-blocks underneath, a completely different store on top.
+The stores built with the kit, with screenshots, are in the portfolio on [sku.io/storefront](https://www.sku.io/storefront/#portfolio).
 
 ## How it fits together
 
