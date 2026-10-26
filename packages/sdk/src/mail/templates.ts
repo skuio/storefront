@@ -1,6 +1,6 @@
 import type { StorefrontConfig } from '../config'
 import { formatMoney } from '../money'
-import type { Address, Fulfillment, Order } from '../types'
+import type { Address, Fulfillment, Order, StoreQuote } from '../types'
 
 export interface RenderedMail {
   subject: string
@@ -224,4 +224,110 @@ export function merchantNewOrderMail(order: Order, ctx: MailContext): RenderedMa
     escapeHtml(config.name)
   )
   return { subject: `New order ${number} — ${formatMoney(order.total, config.locale)}`, html, text }
+}
+
+/** Where a buyer opens a quote without signing in: the access key is the credential. */
+export function quoteUrl(quote: StoreQuote, siteUrl: string): string {
+  return `${siteUrl}/quotes/${encodeURIComponent(quote.id)}/?key=${encodeURIComponent(quote.accessKey)}`
+}
+
+function quoteNumber(quote: StoreQuote, config: StorefrontConfig): string {
+  return `${config.quotes.numberPrefix}${quote.number}`
+}
+
+function quoteLinesTable(quote: StoreQuote, locale: string, priced: boolean): string {
+  const rows = quote.lines
+    .map(
+      (l) =>
+        `<tr><td style="padding:8px 0;border-bottom:1px solid #eee">${escapeHtml(l.name)}<br><span style="color:#666;font-size:12px">SKU ${escapeHtml(l.sku)} × ${l.quantity}${priced && l.unitAmount ? ` at ${formatMoney(l.unitAmount, locale)}` : ''}</span></td><td align="right" style="padding:8px 0;border-bottom:1px solid #eee;white-space:nowrap">${priced && l.totalAmount ? formatMoney(l.totalAmount, locale) : ''}</td></tr>`
+    )
+    .join('')
+  const totals =
+    priced && quote.total
+      ? [
+          ['Subtotal', quote.subtotal ? formatMoney(quote.subtotal, locale) : ''],
+          ['Shipping', quote.shipping?.amount ? formatMoney(quote.shipping, locale) : 'Included'],
+          ...(quote.tax?.amount ? [['Tax', formatMoney(quote.tax, locale)]] : []),
+          ['Total', formatMoney(quote.total, locale)],
+        ]
+          .map(([k, v], i, arr) => `<tr><td style="padding:6px 0;${i === arr.length - 1 ? 'font-weight:700' : 'color:#666'}">${k}</td><td align="right" style="padding:6px 0;${i === arr.length - 1 ? 'font-weight:700' : ''}">${v}</td></tr>`)
+          .join('')
+      : ''
+  return `<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="font-size:14px">${rows}${totals}</table>`
+}
+
+function quoteLinesText(quote: StoreQuote, locale: string, priced: boolean): string[] {
+  return [
+    ...quote.lines.map((l) => `${l.quantity} × ${l.name} (${l.sku})${priced && l.totalAmount ? ` — ${formatMoney(l.totalAmount, locale)}` : ''}`),
+    ...(priced && quote.total
+      ? [
+          '',
+          ...(quote.subtotal ? [`Subtotal: ${formatMoney(quote.subtotal, locale)}`] : []),
+          `Shipping: ${quote.shipping?.amount ? formatMoney(quote.shipping, locale) : 'Included'}`,
+          ...(quote.tax?.amount ? [`Tax: ${formatMoney(quote.tax, locale)}`] : []),
+          `Total:    ${formatMoney(quote.total, locale)}`,
+        ]
+      : []),
+  ]
+}
+
+const button = (url: string, label: string) =>
+  `<p style="margin:24px 0 0"><a href="${escapeHtml(url)}" style="display:inline-block;background:#0f6fff;color:#fff;text-decoration:none;padding:12px 22px;border-radius:6px;font-weight:700;font-size:14px">${escapeHtml(label)}</a></p>`
+
+/** To the buyer: we have your request. Carries the link that is their way back in — no account needed. */
+export function quoteReceivedMail(quote: StoreQuote, ctx: MailContext): RenderedMail {
+  const { config, siteUrl } = ctx
+  const number = quoteNumber(quote, config)
+  const url = quoteUrl(quote, siteUrl)
+  const intro = `Thanks — we have your request for a quote and will email you when it is priced. Keep this email: the link below shows the quote's status at any time.`
+  const html = layout(config, `Quote request ${number} received`, `<p style="margin:0 0 16px;font-size:14px">${intro}</p>${quoteLinesTable(quote, config.locale, false)}${button(url, 'View your quote request')}`, contactFooter(config))
+  const text = [`${config.name} — quote request ${number} received`, '', intro, '', ...quoteLinesText(quote, config.locale, false), '', `View your quote request: ${url}`].join('\n')
+  return { subject: `Quote request ${number} received — ${config.name}`, html, text }
+}
+
+/** To the buyer: the quote is priced and waiting for their answer. */
+export function quoteReadyMail(quote: StoreQuote, ctx: MailContext): RenderedMail {
+  const { config, siteUrl } = ctx
+  const number = quoteNumber(quote, config)
+  const url = quoteUrl(quote, siteUrl)
+  const expiry = quote.expiresAt ? ` It is valid until ${new Date(quote.expiresAt).toLocaleDateString(config.locale, { year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC' })}.` : ''
+  const intro = `Your quote is ready.${expiry} Accept it to place the order at these prices, or decline it — either takes one click.`
+  const html = layout(
+    config,
+    `Quote ${number} is ready`,
+    `<p style="margin:0 0 16px;font-size:14px">${escapeHtml(intro)}</p>${quoteLinesTable(quote, config.locale, true)}${quote.offerNote ? `<p style="margin:16px 0 0;font-size:14px;color:#444;white-space:pre-wrap">${escapeHtml(quote.offerNote)}</p>` : ''}${button(url, 'Review and accept')}`,
+    contactFooter(config)
+  )
+  const text = [`${config.name} — quote ${number} is ready`, '', intro, '', ...quoteLinesText(quote, config.locale, true), ...(quote.offerNote ? ['', quote.offerNote] : []), '', `Review and accept: ${url}`].join('\n')
+  return { subject: `Quote ${number} is ready — ${config.name}`, html, text }
+}
+
+/** To the merchant: a new request, or the buyer's answer to an offer. */
+export function merchantQuoteMail(quote: StoreQuote, ctx: MailContext, event: 'requested' | 'accepted' | 'declined', orderNumber?: string | null): RenderedMail {
+  const { config } = ctx
+  const number = quoteNumber(quote, config)
+  const headline =
+    event === 'requested'
+      ? `New quote request ${number}`
+      : event === 'accepted'
+        ? `Quote ${number} accepted${orderNumber ? ` — order ${config.orders.numberPrefix}${orderNumber}` : ''}`
+        : `Quote ${number} declined`
+  const ship = addressLines(quote.shippingAddress)
+  const text = [
+    headline,
+    '',
+    ...quoteLinesText(quote, config.locale, event !== 'requested'),
+    '',
+    `Customer: ${quote.customer.name ?? '(not given)'}`,
+    ...(quote.company ? [`Company:  ${quote.company}`] : []),
+    `Email:    ${quote.customer.email}`,
+    `Phone:    ${quote.customer.phone ?? '(not given)'}`,
+    ...(ship.length ? ['', 'Ship to:', ...ship] : []),
+    ...(quote.message ? ['', `Message: ${quote.message}`] : []),
+    ...(event === 'declined' && quote.declineReason ? ['', `Reason: ${quote.declineReason}`] : []),
+    '',
+    `Quote id: ${quote.id}`,
+  ].join('\n')
+  const html = layout(config, headline, `<pre style="font-family:ui-monospace,Menlo,monospace;font-size:13px;white-space:pre-wrap;margin:0">${escapeHtml(text)}</pre>`, escapeHtml(config.name))
+  return { subject: `${headline} — ${config.name}`, html, text }
 }

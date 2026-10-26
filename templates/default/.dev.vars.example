@@ -45,4 +45,6 @@ STORE_PREVIEW=
 
 # Who hears about paid orders and contact-form messages (optional).
 ORDER_NOTIFICATION_EMAIL=
+# Who hears about quote requests and answers; falls back to ORDER_NOTIFICATION_EMAIL (optional).
+QUOTE_NOTIFICATION_EMAIL=
 CONTACT_NOTIFICATION_EMAIL=

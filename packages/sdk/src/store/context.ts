@@ -10,6 +10,8 @@ export interface StoreEnv {
   SESSION_SECRET?: string
   /** Merchant address that hears about every paid order. */
   ORDER_NOTIFICATION_EMAIL?: string
+  /** Merchant address that hears about quote requests and answers; falls back to ORDER_NOTIFICATION_EMAIL. */
+  QUOTE_NOTIFICATION_EMAIL?: string
   [key: string]: string | undefined
 }
 

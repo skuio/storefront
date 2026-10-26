@@ -28,6 +28,7 @@ buyer ──▶ store (Astro + its DB) ◀────────── Store A
 | Payment | Payment adapter | Stripe hosted Checkout today; `manual` (pay later) ships as the second adapter and the proof that the pipeline is processor-neutral. |
 | Orders, payments, fulfilments | Store DB (system of record for the buyer) | SKU.io mirrors them and stamps its own order number back (`external_reference`). |
 | Buyer portal (sign-in by email, order history, tracking) | Store | Magic links and sessions live in the store DB. |
+| Quotes (request for quote) | Store DB; priced by SKU.io | A guest or signed-in buyer requests; SKU.io prices it (`PATCH /quotes/{id}` `offer`); the buyer's acceptance places the order. See `store-api.md` → Quotes. |
 | Emails (order confirmation, shipping) | Store, via a mail adapter | `sendgrid` or `console`. |
 | Operations (stock, picking, shipping, accounting) | SKU.io | Through the Store API only. |
 
@@ -44,7 +45,7 @@ buyer ──▶ store (Astro + its DB) ◀────────── Store A
   The template picks one in `src/lib/host.<STORE_HOST>.ts`. Unit tests run every SQL path on
   the same SQLite driver.
 - **Core:** `@skuio/storefront/store` — `createStore({ db, config, env, mail?, clock? })`
-  returns the services: `catalog`, `inventory`, `checkout`, `orders` (incl. fulfilments),
+  returns the services: `catalog`, `inventory`, `checkout`, `orders` (incl. fulfilments), `quotes`,
   `customers`, `sessions`, `events`, `health()`. Framework-agnostic (no Astro, no DOM).
 - **Store API:** `@skuio/storefront/api` — `handleStoreApi(request, { store, apiKey })`
   implements `/api/skuio/v1/*` as one handler the Astro route delegates to. Auth is the
@@ -72,6 +73,7 @@ buyer ──▶ store (Astro + its DB) ◀────────── Store A
 | `SESSION_SECRET` | HMAC key for magic-link and session hashes (only hashes are stored). |
 | `PUBLIC_SITE_URL` | Absolute origin for links in emails and processor return URLs. |
 | `ORDER_NOTIFICATION_EMAIL`, `CONTACT_NOTIFICATION_EMAIL` | Optional merchant addresses for paid orders and contact-form messages. |
+| `QUOTE_NOTIFICATION_EMAIL` | Optional merchant address for quote requests and answers; falls back to `ORDER_NOTIFICATION_EMAIL`. |
 
 Local development on Cloudflare: `npm run db:migrate:local && npm run seed`, secrets in
 `.dev.vars`, then `npm run dev` (the platform proxy provides the local D1). On Node:

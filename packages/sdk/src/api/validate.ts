@@ -1,6 +1,7 @@
 import type { CategoryInput, ProductInput } from '../store/catalog'
 import type { InventoryItemInput } from '../store/inventory'
 import type { FulfillmentInput } from '../store/orders'
+import type { QuoteOfferInput } from '../store/quotes'
 import type { Money } from '../types'
 
 export class ValidationError extends Error {
@@ -310,5 +311,62 @@ export function validateOrderPatch(body: Record<string, unknown>): OrderPatch {
   }
   if (!('external_reference' in body) && body.status === undefined && body.payment === undefined) details.body = 'must include external_reference, status or payment'
   finish(details, 'Invalid order patch')
+  return out
+}
+
+export interface QuotePatch {
+  external_reference?: string | null
+  status?: 'cancelled'
+  offer?: QuoteOfferInput
+}
+
+/** `PATCH /quotes/{id}`: stamp a reference, withdraw the quote, or price it (`offer`). */
+export function validateQuotePatch(body: Record<string, unknown>): QuotePatch {
+  const details: Details = {}
+  const out: QuotePatch = {}
+  if ('external_reference' in body) {
+    const ref = str(details, body, 'external_reference', 'external_reference', { nullable: true, max: 64 })
+    if (ref !== undefined) out.external_reference = ref
+  }
+  if (body.status !== undefined) {
+    if (body.status !== 'cancelled') details.status = 'can only be set to "cancelled"'
+    else out.status = 'cancelled'
+  }
+  if (body.offer !== undefined) {
+    if (!isObject(body.offer)) details.offer = 'must be an object'
+    else {
+      const o = body.offer
+      const lines: QuoteOfferInput['lines'] = []
+      if (!Array.isArray(o.lines) || o.lines.length === 0) details['offer.lines'] = 'must be a non-empty array'
+      else
+        o.lines.forEach((raw, i) => {
+          if (!isObject(raw)) {
+            details[`offer.lines.${i}`] = 'must be an object'
+            return
+          }
+          const sku = str(details, raw, 'sku', `offer.lines.${i}.sku`, { required: true, max: 100 })
+          const name = str(details, raw, 'name', `offer.lines.${i}.name`, { nullable: true, max: 300 })
+          if (!isInt(raw.quantity) || raw.quantity < 1) details[`offer.lines.${i}.quantity`] = 'must be an integer of at least 1'
+          const unit = moneyField(details, raw.unit_amount, `offer.lines.${i}.unit_amount`, { required: true })
+          if (sku && isInt(raw.quantity) && raw.quantity >= 1 && unit) lines.push({ sku: sku.trim(), name: name ?? null, quantity: raw.quantity, unit_amount: unit })
+        })
+      const shipping = moneyField(details, o.shipping, 'offer.shipping', { nullable: true })
+      const tax = moneyField(details, o.tax, 'offer.tax', { nullable: true })
+      const expiresAt = isoDate(details, o.expires_at, 'offer.expires_at')
+      const note = str(details, o, 'note', 'offer.note', { nullable: true, max: 4000 })
+      if (o.notify_customer !== undefined && typeof o.notify_customer !== 'boolean') details['offer.notify_customer'] = 'must be a boolean'
+      out.offer = {
+        lines,
+        shipping: shipping ?? null,
+        tax: tax ?? null,
+        expires_at: expiresAt ?? null,
+        note: note ?? null,
+        notify_customer: o.notify_customer === undefined ? true : (o.notify_customer as boolean),
+      }
+    }
+  }
+  if (out.status && out.offer) details.status = 'cannot be combined with an offer'
+  if (!('external_reference' in body) && body.status === undefined && body.offer === undefined) details.body = 'must include external_reference, status or offer'
+  finish(details, 'Invalid quote patch')
   return out
 }

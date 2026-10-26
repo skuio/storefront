@@ -1,0 +1,222 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro'
+import Breadcrumbs from '../../components/Breadcrumbs.astro'
+import { config, routes, store } from '../../lib/store'
+import { readSession } from '../../lib/account'
+
+/**
+ * The quote list and the request form. No account is needed — a guest gives a name and an email — and nothing is
+ * priced here: the merchant prices the request and the buyer gets an email with a link to accept it. The lines
+ * live in the browser (lib/quote-list.client.ts); `?sku=` adds one, which is also how the no-JavaScript fallback
+ * from a product page works.
+ */
+export const prerender = false
+
+const s = store(Astro)
+const customer = await s.sessions.resolve(readSession(Astro.cookies))
+const catalog = await s.catalog.load()
+const directSku = Astro.url.searchParams.get('sku')
+const direct = directSku ? catalog.product(directSku) : undefined
+const error = Astro.url.searchParams.get('error')
+const fields = (Astro.url.searchParams.get('fields') ?? '').split(',').filter(Boolean)
+const countries = config.shipToCountries
+const input = 'mt-1.5 w-full rounded-md border border-rule px-3 py-2.5 text-sm focus:border-accent focus:ring-2 focus:ring-accent/25 focus:outline-none'
+const label = 'block text-xs font-semibold tracking-wide text-ink uppercase'
+const errorText: Record<string, string> = {
+  validation_failed: 'Some details are missing — check the highlighted fields.',
+  rate_limited: 'You have sent several requests in the last hour. Please try again later, or contact us directly.',
+  quote_failed: 'We could not send your request just now. Please try again in a moment.',
+}
+---
+
+<BaseLayout title="Request a quote" noindex>
+  <div class="mx-auto max-w-3xl px-5 py-10">
+    <Breadcrumbs items={[{ label: 'Home', href: '/' }, { label: 'Request a quote' }]} />
+    <h1 class="display-heading mt-6 text-5xl">Request a quote</h1>
+    <p class="mt-3 text-sm">
+      Tell us what you need and how many. We will price it — volume, lead time and delivery — and email you a quote you can accept in one click.
+      {customer ? '' : ' No account needed.'}
+    </p>
+
+    <noscript>
+      <p class="mt-6 rounded-md border border-rule bg-panel p-4 text-sm">The quote list needs JavaScript. Every product page's <strong>Request a quote</strong> link works without it, one product at a time.</p>
+    </noscript>
+
+    <p class:list={['mt-6 rounded-md border border-accent/30 bg-accent/5 px-4 py-3 text-sm text-accent', !error && 'hidden']} role="alert" data-quote-error>
+      {error ? (errorText[error] ?? errorText.quote_failed) : ''}
+    </p>
+
+    <div hidden data-quote-empty class="mt-8 text-sm">
+      <p>Your quote list is empty. Use <strong>Request a quote</strong> on any product to add it.</p>
+      <a href={routes.shop()} class="mt-6 inline-block rounded-full border-2 border-ink px-7 py-2.5 text-sm font-semibold transition hover:bg-ink hover:text-page">Browse the shop</a>
+    </div>
+
+    <form method="POST" action="/api/quotes" class="mt-8" data-quote-form hidden={!direct}>
+      <ul class="divide-y divide-rule rounded-lg border border-rule" data-quote-lines>
+        {direct && (
+          <li class="flex items-center gap-4 p-4 text-sm">
+            <span class="min-w-0 flex-1 font-semibold text-ink">{direct.name}</span>
+            <input type="hidden" name="sku" value={direct.sku} />
+            <input type="number" name="quantity" min="1" max={config.quotes.maxQuantity} value="1" aria-label={`Quantity for ${direct.name}`} class="w-24 rounded-md border border-rule px-2 py-2 text-center font-semibold text-ink" />
+          </li>
+        )}
+      </ul>
+      <p class="mt-2 text-xs text-body/70">Quantities are what you would like priced; we will confirm availability and lead time in the quote.</p>
+
+      <div class="mt-8 grid gap-4 sm:grid-cols-2">
+        <div>
+          <label for="q-name" class={label}>Your name</label>
+          <input id="q-name" name="name" required autocomplete="name" value={customer?.name ?? ''} class:list={[input, fields.includes('name') && 'border-accent']} />
+        </div>
+        <div>
+          <label for="q-email" class={label}>Email</label>
+          {customer ? (
+            <p class="mt-1.5 py-2.5 text-sm">{customer.email}</p>
+          ) : (
+            <input id="q-email" name="email" type="email" required autocomplete="email" class:list={[input, fields.includes('email') && 'border-accent']} />
+          )}
+        </div>
+        <div>
+          <label for="q-company" class={label}>Organisation <span class="font-normal normal-case text-body/60">(optional)</span></label>
+          <input id="q-company" name="company" autocomplete="organization" class={input} />
+        </div>
+        <div>
+          <label for="q-phone" class={label}>Phone <span class="font-normal normal-case text-body/60">(optional)</span></label>
+          <input id="q-phone" name="phone" type="tel" autocomplete="tel" value={customer?.phone ?? ''} class={input} />
+        </div>
+      </div>
+      <div class="mt-4">
+        <label for="q-message" class={label}>Anything we should know <span class="font-normal normal-case text-body/60">(optional)</span></label>
+        <textarea id="q-message" name="message" rows="4" maxlength="4000" placeholder="Deadline, intended use, delivery constraints, purchase-order requirements…" class={input}></textarea>
+      </div>
+
+      <details class="mt-4 rounded-lg border border-rule p-4 text-sm">
+        <summary class="cursor-pointer font-semibold text-ink">Shipping address <span class="font-normal text-body/60">(optional now — helps us quote shipping)</span></summary>
+        <div class="mt-4 grid gap-4 sm:grid-cols-2">
+          <div class="sm:col-span-2"><label for="q-ship-name" class={label}>Recipient</label><input id="q-ship-name" name="ship_name" autocomplete="shipping name" class={input} /></div>
+          <div class="sm:col-span-2"><label for="q-ship-line1" class={label}>Address</label><input id="q-ship-line1" name="ship_line1" autocomplete="shipping address-line1" class={input} /></div>
+          <div class="sm:col-span-2"><label for="q-ship-line2" class={label}>Address line 2</label><input id="q-ship-line2" name="ship_line2" autocomplete="shipping address-line2" class={input} /></div>
+          <div><label for="q-ship-city" class={label}>City</label><input id="q-ship-city" name="ship_city" autocomplete="shipping address-level2" class={input} /></div>
+          <div><label for="q-ship-state" class={label}>State / region</label><input id="q-ship-state" name="ship_state" autocomplete="shipping address-level1" class={input} /></div>
+          <div><label for="q-ship-postal" class={label}>Postal code</label><input id="q-ship-postal" name="ship_postal_code" autocomplete="shipping postal-code" class={input} /></div>
+          <div>
+            <label for="q-ship-country" class={label}>Country</label>
+            <select id="q-ship-country" name="ship_country" autocomplete="shipping country" class={input}>
+              <option value="">—</option>
+              {countries.map((c) => <option value={c}>{c}</option>)}
+            </select>
+          </div>
+        </div>
+      </details>
+
+      {/* Honeypot: hidden from people, irresistible to bots. */}
+      <div aria-hidden="true" class="absolute -left-[9999px]"><label>Website <input name="website" tabindex="-1" autocomplete="off" /></label></div>
+
+      <button type="submit" class="mt-8 w-full rounded-md bg-accent px-8 py-3.5 text-sm font-bold tracking-wide text-on-accent uppercase transition hover:bg-accent-dark disabled:opacity-60" data-quote-submit>
+        Send quote request
+      </button>
+      <p class="mt-3 text-center text-xs text-body/70">Nothing is charged. You will get an email with a link to your quote.</p>
+    </form>
+  </div>
+</BaseLayout>
+
+<script define:vars={{ maxQuantity: config.quotes.maxQuantity, direct: direct ? { sku: direct.sku, name: direct.name, amount: direct.price.amount, currency: direct.price.currency } : null }}>
+  window.__quoteConfig = { maxQuantity, direct }
+</script>
+<script>
+  import { quoteList } from '../../lib/quote-list.client'
+
+  type Direct = { sku: string; name: string; amount: number; currency: string } | null
+  const cfg = (window as unknown as { __quoteConfig: { maxQuantity: number; direct: Direct } }).__quoteConfig
+  const form = document.querySelector<HTMLFormElement>('[data-quote-form]')!
+  const empty = document.querySelector<HTMLElement>('[data-quote-empty]')!
+  const list = document.querySelector<HTMLUListElement>('[data-quote-lines]')!
+  const errorBox = document.querySelector<HTMLElement>('[data-quote-error]')!
+  const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!)
+
+  // A product page's no-JavaScript link (/quote/?sku=…) lands here; with JavaScript, move it into the list.
+  if (cfg.direct) {
+    quoteList.add({ sku: cfg.direct.sku, name: cfg.direct.name, unitPrice: { amount: cfg.direct.amount, currency: cfg.direct.currency } }, 1, cfg.maxQuantity)
+    history.replaceState(null, '', location.pathname)
+  }
+
+  function render() {
+    const lines = quoteList.get().lines
+    empty.hidden = lines.length > 0
+    form.hidden = lines.length === 0
+    list.innerHTML = lines
+      .map(
+        (l) => `
+      <li class="flex items-center gap-4 p-4 text-sm" data-sku="${esc(l.sku)}">
+        ${l.image ? `<img src="${esc(l.image)}" alt="" width="72" height="54" class="h-14 w-[72px] shrink-0 rounded border border-rule object-contain bg-panel-2">` : '<span class="h-14 w-[72px] shrink-0 rounded border border-rule"></span>'}
+        <div class="min-w-0 flex-1">
+          ${l.url ? `<a href="${esc(l.url)}" class="font-semibold text-ink hover:text-accent">${esc(l.name)}</a>` : `<span class="font-semibold text-ink">${esc(l.name)}</span>`}
+          <p class="mt-0.5 text-[11px] tracking-wide text-body/60 uppercase">SKU ${esc(l.sku)}</p>
+        </div>
+        <input type="number" inputmode="numeric" min="1" max="${cfg.maxQuantity}" value="${l.quantity}" aria-label="Quantity for ${esc(l.name)}" data-qty
+          class="w-24 rounded-md border border-rule px-2 py-2 text-center font-semibold text-ink">
+        <button type="button" aria-label="Remove ${esc(l.name)}" data-remove class="text-body/50 hover:text-accent">✕</button>
+      </li>`
+      )
+      .join('')
+  }
+
+  list.addEventListener('change', (e) => {
+    const input = (e.target as HTMLElement).closest<HTMLInputElement>('[data-qty]')
+    const sku = (e.target as HTMLElement).closest<HTMLElement>('[data-sku]')?.dataset.sku
+    if (input && sku) quoteList.setQuantity(sku, Number(input.value), cfg.maxQuantity)
+  })
+  list.addEventListener('click', (e) => {
+    const sku = (e.target as HTMLElement).closest<HTMLElement>('[data-remove]') && (e.target as HTMLElement).closest<HTMLElement>('[data-sku]')?.dataset.sku
+    if (sku) quoteList.remove(sku)
+  })
+
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault()
+    const button = form.querySelector<HTMLButtonElement>('[data-quote-submit]')!
+    button.disabled = true
+    errorBox.classList.add('hidden')
+    form.querySelectorAll('.border-accent').forEach((el) => el.classList.remove('border-accent'))
+    const data = new FormData(form)
+    const get = (k: string) => String(data.get(k) ?? '')
+    try {
+      const res = await fetch(form.action, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          items: quoteList.items(),
+          name: get('name'),
+          email: get('email'),
+          company: get('company'),
+          phone: get('phone'),
+          message: get('message'),
+          website: get('website'),
+          shipping_address: {
+            name: get('ship_name'), line1: get('ship_line1'), line2: get('ship_line2'), city: get('ship_city'),
+            state: get('ship_state'), postal_code: get('ship_postal_code'), country: get('ship_country'),
+          },
+        }),
+      })
+      const body = (await res.json()) as { ok: boolean; redirect?: string; error?: { code: string; message: string; details: Record<string, string> | null } }
+      if (body.ok && body.redirect) {
+        quoteList.clear()
+        location.assign(body.redirect)
+        return
+      }
+      const details = body.error?.details ?? {}
+      for (const key of Object.keys(details)) form.querySelector(`[name="${key}"]`)?.classList.add('border-accent')
+      errorBox.textContent = Object.keys(details).length
+        ? `Please check: ${Object.entries(details).map(([k, v]) => `${k.replace(/^items\.\d+\./, '').replace(/_/g, ' ')} ${v}`).join('; ')}.`
+        : (body.error?.message ?? 'We could not send your request just now. Please try again in a moment.')
+      errorBox.classList.remove('hidden')
+    } catch {
+      errorBox.textContent = 'We could not send your request just now. Please try again in a moment.'
+      errorBox.classList.remove('hidden')
+    } finally {
+      button.disabled = false
+    }
+  })
+
+  render()
+  quoteList.subscribe(render)
+</script>

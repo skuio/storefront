@@ -98,6 +98,51 @@ paths:
         '201': { description: Recorded, content: { application/json: { schema: { $ref: '#/components/schemas/FulfillmentEnvelope' } } } }
         '200': { description: Already recorded (same external_id), content: { application/json: { schema: { $ref: '#/components/schemas/FulfillmentEnvelope' } } } }
         '422': { $ref: '#/components/responses/Unprocessable' }
+  /quotes:
+    get:
+      operationId: listQuotes
+      description: |
+        Quote requests and their offers, oldest-updated first (scope `quotes`). Offers past `expires_at`
+        are moved to `expired` before the page is read. Poll it like `/orders`: overlap the watermark
+        and de-duplicate by `id`.
+      parameters:
+        - { name: updated_since, in: query, schema: { type: string, format: date-time }, description: Inclusive watermark }
+        - { name: cursor, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+      responses:
+        '200':
+          description: Quotes oldest-updated first
+          content: { application/json: { schema: { type: object, properties: { data: { type: array, items: { $ref: '#/components/schemas/Quote' } }, next_cursor: { type: [string, 'null'] } } } } }
+        '403': { description: The connection lacks the `quotes` scope, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+  /quotes/{id}:
+    get:
+      operationId: getQuote
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/QuoteEnvelope' } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      operationId: updateQuote
+      description: |
+        Stamp `external_reference`, withdraw the quote (`status: cancelled`), or price it with an `offer`.
+        An offer replaces the lines (it may change quantities, drop lines or add a SKU the store does not
+        list, which then needs a `name`), moves the quote to `quoted` and emails the buyer a link to accept
+        it. Re-offering a `quoted` or `expired` quote revises it. Accepting is the buyer's alone: it places a
+        pay-later order at the offered prices, which arrives through `GET /orders` with `metadata.quote_id`.
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                external_reference: { type: [string, 'null'], maxLength: 64 }
+                status: { type: string, enum: [cancelled] }
+                offer: { $ref: '#/components/schemas/QuoteOffer' }
+      responses:
+        '200': { description: Updated, content: { application/json: { schema: { $ref: '#/components/schemas/QuoteEnvelope' } } } }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
   /inventory:
     put:
       operationId: putInventory
@@ -226,7 +271,7 @@ components:
             currency: { type: string }
             locale: { type: string }
             version: { type: string, description: Store platform version }
-            counts: { type: object, properties: { products: { type: integer }, categories: { type: integer }, orders: { type: integer }, customers: { type: integer } } }
+            counts: { type: object, properties: { products: { type: integer }, categories: { type: integer }, orders: { type: integer }, customers: { type: integer }, quotes: { type: integer } } }
             owner_configured: { type: boolean, description: True once an owner exists; false means `npm run owner:create` has not been run and nobody can approve a connection yet }
             connection:
               description: The connection this request authenticated as; null for the STORE_API_KEY secret
@@ -240,7 +285,7 @@ components:
         id: { type: string, description: con_… }
         name: { type: string }
         tenant: { type: [string, 'null'], description: The consumer's display name for itself (the SKU.io tenant) }
-        scopes: { type: array, items: { type: string, enum: [orders, fulfillments, inventory, catalog] } }
+        scopes: { type: array, items: { type: string, enum: [orders, payments, fulfillments, inventory, catalog, quotes] } }
         key_prefix: { type: [string, 'null'], description: First characters of the key, for display only }
         created_at: { type: string, format: date-time }
         issued_at: { type: [string, 'null'], format: date-time }
@@ -334,6 +379,67 @@ components:
     OrderEnvelope:
       type: object
       properties: { data: { $ref: '#/components/schemas/Order' } }
+    QuoteLine:
+      type: object
+      properties:
+        id: { type: string }
+        sku: { type: string }
+        name: { type: string }
+        quantity: { type: integer }
+        list_amount: { oneOf: [{ $ref: '#/components/schemas/Money' }, { type: 'null' }], description: The catalog price when the buyer asked; reference only }
+        unit_amount: { oneOf: [{ $ref: '#/components/schemas/Money' }, { type: 'null' }], description: The offered price; null until quoted }
+        total_amount: { oneOf: [{ $ref: '#/components/schemas/Money' }, { type: 'null' }] }
+    Quote:
+      type: object
+      properties:
+        id: { type: string, description: quo_… }
+        number: { type: string, description: With the store's quote prefix, e.g. Q1001 }
+        status: { type: string, enum: [requested, quoted, accepted, declined, expired, cancelled] }
+        currency: { type: string }
+        customer: { type: object, properties: { id: { type: string }, email: { type: string }, name: { type: [string, 'null'] }, phone: { type: [string, 'null'] } }, description: A guest's request still has a customer — keyed by email, with no password or account }
+        company: { type: [string, 'null'] }
+        message: { type: [string, 'null'], description: What the buyer wrote with the request }
+        shipping_address: { oneOf: [{ $ref: '#/components/schemas/Address' }, { type: 'null' }] }
+        lines: { type: array, items: { $ref: '#/components/schemas/QuoteLine' } }
+        subtotal: { oneOf: [{ $ref: '#/components/schemas/Money' }, { type: 'null' }] }
+        shipping: { oneOf: [{ $ref: '#/components/schemas/Money' }, { type: 'null' }] }
+        tax: { oneOf: [{ $ref: '#/components/schemas/Money' }, { type: 'null' }] }
+        total: { oneOf: [{ $ref: '#/components/schemas/Money' }, { type: 'null' }] }
+        note: { type: [string, 'null'], description: The offer's note to the buyer }
+        expires_at: { type: [string, 'null'], format: date-time }
+        external_reference: { type: [string, 'null'] }
+        order_id: { type: [string, 'null'], description: The order placed when the buyer accepted }
+        decline_reason: { type: [string, 'null'] }
+        metadata: { type: object, additionalProperties: { type: string } }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        quoted_at: { type: [string, 'null'], format: date-time }
+        accepted_at: { type: [string, 'null'], format: date-time }
+        declined_at: { type: [string, 'null'], format: date-time }
+        cancelled_at: { type: [string, 'null'], format: date-time }
+    QuoteOffer:
+      type: object
+      required: [lines]
+      properties:
+        lines:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            required: [sku, quantity, unit_amount]
+            properties:
+              sku: { type: string }
+              name: { type: [string, 'null'], description: Required for a SKU the store does not list }
+              quantity: { type: integer, minimum: 1 }
+              unit_amount: { $ref: '#/components/schemas/Money' }
+        shipping: { oneOf: [{ $ref: '#/components/schemas/Money' }, { type: 'null' }] }
+        tax: { oneOf: [{ $ref: '#/components/schemas/Money' }, { type: 'null' }] }
+        expires_at: { type: [string, 'null'], format: date-time, description: Must be in the future; null is open-ended }
+        note: { type: [string, 'null'], maxLength: 4000 }
+        notify_customer: { type: boolean, default: true }
+    QuoteEnvelope:
+      type: object
+      properties: { data: { $ref: '#/components/schemas/Quote' } }
     Product:
       type: object
       description: A catalog product as the store holds it.

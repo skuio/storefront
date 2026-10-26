@@ -37,9 +37,12 @@ const badge = (o: Order): { label: string; cls: string } => {
     <Breadcrumbs items={[{ label: 'Home', href: '/' }, { label: 'Account', href: '/account/' }, { label: 'Orders' }]} />
     <div class="mt-6 flex flex-wrap items-baseline justify-between gap-4">
       <h1 class="display-heading text-5xl">{customer.name ? `${customer.name.split(' ')[0]}'s orders` : 'Your orders'}</h1>
+      <span class="flex items-baseline gap-5">
+      <a href="/account/quotes/" class="text-xs font-semibold tracking-wide text-body/70 uppercase hover:text-accent">Quotes</a>
       <form method="POST" action="/api/account/sign-out">
         <button type="submit" class="text-xs font-semibold tracking-wide text-body/70 uppercase hover:text-accent">Sign out</button>
       </form>
+      </span>
     </div>
     <p class="mt-2 text-sm text-body/70">Signed in as {customer.email}</p>
 
