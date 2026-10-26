@@ -193,3 +193,63 @@ export interface OrderEvent {
   data: Record<string, unknown> | null
   createdAt: string
 }
+
+/**
+ * requested → quoted → accepted (an order exists) | declined | expired → (re-quoted).
+ * `cancelled` is the merchant or the operations system withdrawing it.
+ */
+export type QuoteStatus = 'requested' | 'quoted' | 'accepted' | 'declined' | 'expired' | 'cancelled'
+
+export interface QuoteLine {
+  id: string
+  sku: string
+  name: string
+  quantity: number
+  /** The catalog price when the buyer asked, for reference; null for a line the offer added off-catalog. */
+  listAmount: Money | null
+  /** The offered price; null until the quote is priced. */
+  unitAmount: Money | null
+  totalAmount: Money | null
+  image?: string
+}
+
+/**
+ * A request for quote and, once priced, the offer. The buyer needs no account: a guest's quote is reached
+ * through the access-key link emailed to them, a signed-in buyer's also through /account.
+ */
+export interface StoreQuote {
+  id: string
+  /** Human quote number without the prefix, e.g. "1001" (shown as Q1001). */
+  number: string
+  status: QuoteStatus
+  currency: string
+  customer: OrderCustomer
+  company: string | null
+  /** What the buyer wrote with the request: lead time, use, delivery constraints. */
+  message: string | null
+  shippingAddress: Address | null
+  lines: QuoteLine[]
+  /** Null until priced. */
+  subtotal: Money | null
+  shipping: Money | null
+  tax: Money | null
+  total: Money | null
+  /** The merchant's note with the offer (terms, lead time). */
+  offerNote: string | null
+  /** When the offer lapses; null for an open-ended offer or an unpriced request. */
+  expiresAt: string | null
+  /** The operations system's own quote number, stamped back through the Store API. */
+  externalReference: string | null
+  /** The order placed when the buyer accepted. */
+  orderId: string | null
+  declineReason: string | null
+  metadata: Record<string, string>
+  /** Secret in the buyer's emailed link; never exposed through the Store API. */
+  accessKey: string
+  createdAt: string
+  updatedAt: string
+  quotedAt: string | null
+  acceptedAt: string | null
+  declinedAt: string | null
+  cancelledAt: string | null
+}

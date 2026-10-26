@@ -2,9 +2,9 @@ import type { Connection, Store } from '../store'
 import { API_KEY_PREFIX, type ConnectScope } from '../store/connections'
 import { secretsEqual } from '../store/crypto'
 import { StoreError } from '../store/errors'
-import { serializeCategory, serializeFulfillment, serializeOrder, serializeProduct } from './serialize'
+import { serializeCategory, serializeFulfillment, serializeOrder, serializeProduct, serializeQuote } from './serialize'
 import {
-  validateCategories, validateFulfillment, validateInventory, validateListQuery, validateOrderPatch, validateProducts, ValidationError,
+  validateCategories, validateFulfillment, validateInventory, validateListQuery, validateOrderPatch, validateProducts, validateQuotePatch, ValidationError,
 } from './validate'
 
 export interface StoreApiOptions {
@@ -124,13 +124,16 @@ async function readJson(request: Request): Promise<Record<string, unknown>> {
 /**
  * The scope an endpoint needs. There is deliberately no endpoint that creates
  * an order: orders come only from the store's own checkout, priced from its
- * database, so a leaked key cannot invent sales.
+ * database, or from a buyer accepting a quote, so a leaked key cannot invent
+ * sales. A key with `quotes` can price a quote; only the buyer turns it into
+ * an order.
  */
 function scopeFor(path: string): ConnectScope | null {
   const first = path.split('/').filter(Boolean)[0]
   if (first === 'orders') return /^\/orders\/[^/]+\/fulfillments$/.test(path) ? 'fulfillments' : 'orders'
   if (first === 'inventory') return 'inventory'
   if (first === 'products' || first === 'categories') return 'catalog'
+  if (first === 'quotes') return 'quotes'
   return null // /health, /connect
 }
 
@@ -189,6 +192,29 @@ async function route(method: string, path: string, url: URL, request: Request, s
     }
   }
 
+  if (segments[0] === 'quotes') {
+    const prefix = store.config.quotes.numberPrefix
+    if (segments.length === 1 && method === 'GET') {
+      const query = validateListQuery(url.searchParams, { defaultLimit: 50, maxLimit: 200, allowUpdatedSince: true })
+      // Lazy housekeeping: offers past their expiry become `expired` before the consumer sees the list.
+      await store.quotes.expireStale()
+      const page = await store.quotes.changedSince(query.updatedSince, query.cursor, query.limit)
+      return json({ data: page.quotes.map((q) => serializeQuote(q, prefix)), next_cursor: page.nextCursor })
+    }
+    const id = segments[1] ? decodeURIComponent(segments[1]) : ''
+    if (segments.length === 2 && id) {
+      if (method === 'GET') return json({ data: serializeQuote(await store.quotes.require(id), prefix) })
+      if (method === 'PATCH') {
+        const patch = validateQuotePatch(await readJson(request))
+        let quote = await store.quotes.require(id)
+        if (patch.external_reference !== undefined) quote = await store.quotes.setExternalReference(id, patch.external_reference)
+        if (patch.offer) quote = await store.quotes.offer(id, patch.offer)
+        if (patch.status === 'cancelled') quote = await store.quotes.cancel(id, 'Cancelled by the operations system')
+        return json({ data: serializeQuote(quote, prefix) })
+      }
+    }
+  }
+
   if (path === '/inventory' && method === 'PUT') {
     const items = validateInventory(await readJson(request))
     return json({ data: await store.inventory.set(items) })
@@ -230,7 +256,7 @@ async function route(method: string, path: string, url: URL, request: Request, s
 }
 
 export {
-  serializeOrder, serializeFulfillment, serializeProduct, serializeCategory,
-  type ApiOrder, type ApiFulfillment, type ApiProduct, type ApiCategory,
+  serializeOrder, serializeFulfillment, serializeProduct, serializeCategory, serializeQuote,
+  type ApiOrder, type ApiFulfillment, type ApiProduct, type ApiCategory, type ApiQuote,
 } from './serialize'
 export { ValidationError } from './validate'

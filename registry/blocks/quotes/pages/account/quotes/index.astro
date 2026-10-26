@@ -1,0 +1,65 @@
+---
+import { formatMoney, type QuoteStatus } from '@skuio/storefront'
+import BaseLayout from '../../../layouts/BaseLayout.astro'
+import Breadcrumbs from '../../../components/Breadcrumbs.astro'
+import { config, store } from '../../../lib/store'
+import { clearSession, readSession } from '../../../lib/account'
+
+/** A signed-in buyer's quotes, newest first. Guests reach theirs through the emailed link instead. */
+export const prerender = false
+
+const s = store(Astro)
+const token = readSession(Astro.cookies)
+const customer = await s.sessions.resolve(token)
+if (!customer) {
+  if (token) clearSession(Astro.cookies)
+  return Astro.redirect('/account/', 303)
+}
+await s.quotes.expireStale().catch((e) => console.warn('account quotes: expireStale failed', e))
+const quotes = await s.quotes.forCustomer(customer.id)
+
+const date = (iso: string) => new Date(iso).toLocaleDateString(config.locale, { year: 'numeric', month: 'short', day: 'numeric' })
+const badge: Record<QuoteStatus, { label: string; cls: string }> = {
+  requested: { label: 'Being priced', cls: 'bg-accent/10 text-accent' },
+  quoted: { label: 'Ready for you', cls: 'bg-green-600 text-white' },
+  accepted: { label: 'Accepted', cls: 'bg-rule text-body' },
+  declined: { label: 'Declined', cls: 'bg-rule text-body' },
+  expired: { label: 'Expired', cls: 'bg-rule text-body' },
+  cancelled: { label: 'Withdrawn', cls: 'bg-rule text-body' },
+}
+---
+
+<BaseLayout title="Your quotes" noindex>
+  <div class="mx-auto max-w-3xl px-5 py-10">
+    <Breadcrumbs items={[{ label: 'Home', href: '/' }, { label: 'Account', href: '/account/' }, { label: 'Quotes' }]} />
+    <div class="mt-6 flex flex-wrap items-baseline justify-between gap-4">
+      <h1 class="display-heading text-5xl">Your quotes</h1>
+      <a href="/account/orders/" class="text-xs font-semibold tracking-wide text-body/70 uppercase hover:text-accent">Orders</a>
+    </div>
+    <p class="mt-2 text-sm text-body/70">Signed in as {customer.email}</p>
+
+    {
+      quotes.length === 0 ? (
+        <div class="mt-8 text-sm">
+          <p>No quotes yet. Use <strong>Request a quote</strong> on any product to ask for a price.</p>
+          <a href="/quote/" class="mt-6 inline-block rounded-full border-2 border-ink px-7 py-2.5 text-sm font-semibold transition hover:bg-ink hover:text-page">Your quote list</a>
+        </div>
+      ) : (
+        <ul class="mt-8 divide-y divide-rule rounded-lg border border-rule">
+          {quotes.map((q) => (
+            <li class="flex flex-wrap items-center justify-between gap-3 px-4 py-3 text-sm" data-quote={q.number}>
+              <span>
+                <a href={`/quotes/${q.id}/`} class="font-semibold text-ink hover:text-accent">Quote {config.quotes.numberPrefix}{q.number}</a>
+                <span class="text-body/60"> · {date(q.createdAt)} · {q.lines.length} {q.lines.length === 1 ? 'item' : 'items'}</span>
+              </span>
+              <span class="flex items-center gap-3">
+                {q.total && <span class="font-semibold text-ink">{formatMoney(q.total, config.locale)}</span>}
+                <span class={`rounded-full px-2.5 py-0.5 text-[11px] font-bold tracking-wide uppercase ${badge[q.status].cls}`}>{badge[q.status].label}</span>
+              </span>
+            </li>
+          ))}
+        </ul>
+      )
+    }
+  </div>
+</BaseLayout>

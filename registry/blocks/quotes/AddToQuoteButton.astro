@@ -1,0 +1,59 @@
+---
+import type { Product } from '@skuio/storefront'
+import { config, routes, store } from '../lib/store'
+import { resolveImage } from '../lib/images'
+
+interface Props {
+  product: Product
+}
+
+const { product } = Astro.props
+const catalog = await store(Astro).catalog.load()
+const img = resolveImage(product.images[0])
+---
+
+{/*
+  Adds this product to the quote list — a basket separate from the cart, for buyers who want a price before they
+  buy (volume, lead time, purchase orders). Sold-out products can be quoted. Without JavaScript the link still
+  opens the quote page with this product on it.
+*/}
+<div class="mt-3" data-add-to-quote-wrap>
+  <a
+    href={`/quote/?sku=${encodeURIComponent(product.sku)}`}
+    class="block w-full rounded-md border-2 border-rule px-8 py-3 text-center text-sm font-bold tracking-wide text-ink uppercase transition hover:border-ink"
+    data-add-to-quote
+    data-sku={product.sku}
+    data-name={product.name}
+    data-amount={product.price.amount}
+    data-currency={product.price.currency}
+    data-url={routes.product(product, catalog)}
+    data-image={img?.src ?? ''}
+    data-max={config.quotes.maxQuantity}
+  >
+    <span data-label>Request a quote</span>
+  </a>
+  <p class="mt-1.5 hidden text-center text-xs" data-quote-added>
+    Added to your quote list — <a href="/quote/" class="font-semibold text-accent hover:underline">review and send it</a>
+  </p>
+</div>
+
+<script>
+  import { quoteList } from '../lib/quote-list.client'
+
+  document.querySelectorAll<HTMLAnchorElement>('[data-add-to-quote]').forEach((link) => {
+    link.addEventListener('click', (event) => {
+      event.preventDefault()
+      const d = link.dataset
+      // Respect the quantity input of the sibling Buy Now form when present.
+      const qtyInput = document.querySelector<HTMLInputElement>(`#qty-${CSS.escape(d.sku!)}`) ?? link.closest('form')?.querySelector<HTMLInputElement>('input[name=quantity]')
+      const quantity = Number(qtyInput?.value ?? 1) || 1
+      quoteList.add(
+        { sku: d.sku!, name: d.name!, unitPrice: { amount: Number(d.amount), currency: d.currency! }, url: d.url, image: d.image || undefined },
+        quantity,
+        Number(d.max) || 100000
+      )
+      link.querySelector<HTMLElement>('[data-label]')!.textContent = 'Added to quote ✓'
+      link.closest('[data-add-to-quote-wrap]')?.querySelector<HTMLElement>('[data-quote-added]')?.classList.remove('hidden')
+    })
+  })
+</script>

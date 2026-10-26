@@ -12,9 +12,10 @@ import { EventsService } from './events'
 import { InventoryService } from './inventory'
 import { OrdersService } from './orders'
 import { OwnersService } from './owners'
+import { QuotesService } from './quotes'
 import { SessionsService } from './sessions'
 
-export const STORE_PLATFORM_VERSION = '2.1.0'
+export const STORE_PLATFORM_VERSION = '2.2.0'
 
 export interface StoreOptions {
   db: Database
@@ -34,7 +35,7 @@ export interface StoreHealth {
   currency: string
   locale: string
   version: string
-  counts: { products: number; categories: number; orders: number; customers: number }
+  counts: { products: number; categories: number; orders: number; customers: number; quotes: number }
   /** True once an owner exists, so a consumer can tell the merchant to run `owner:create` first. */
   owner_configured: boolean
   time: string
@@ -52,6 +53,7 @@ export interface Store {
   readonly customers: CustomersService
   readonly orders: OrdersService
   readonly checkout: CheckoutService
+  readonly quotes: QuotesService
   readonly sessions: SessionsService
   readonly events: EventsService
   readonly owners: OwnersService
@@ -82,6 +84,7 @@ export function createStore(options: StoreOptions): Store {
   const customers = new CustomersService(ctx)
   const orders = new OrdersService(ctx, events, inventory)
   const checkout = new CheckoutService(ctx, catalog, orders, events)
+  const quotes = new QuotesService(ctx, catalog, checkout, orders)
   const sessions = new SessionsService(ctx, customers)
   const owners = new OwnersService(ctx)
   const connections = new ConnectionsService(ctx)
@@ -99,20 +102,21 @@ export function createStore(options: StoreOptions): Store {
     customers,
     orders,
     checkout,
+    quotes,
     sessions,
     events,
     owners,
     connections,
     partners,
     async health() {
-      const [counts, orderCount, customerCount, ownerCount] = await Promise.all([catalog.counts(), orders.count(), customers.count(), owners.count()])
+      const [counts, orderCount, customerCount, ownerCount, quoteCount] = await Promise.all([catalog.counts(), orders.count(), customers.count(), owners.count(), quotes.count()])
       return {
         name: ctx.config.name,
         url: ctx.config.url,
         currency: ctx.config.currency.toUpperCase(),
         locale: ctx.config.locale,
         version: STORE_PLATFORM_VERSION,
-        counts: { ...counts, orders: orderCount, customers: customerCount },
+        counts: { ...counts, orders: orderCount, customers: customerCount, quotes: quoteCount },
         owner_configured: ownerCount > 0,
         time: ctx.now(),
       }
@@ -131,7 +135,8 @@ export {
 export { InventoryService, type InventoryItemInput, type InventoryResult } from './inventory'
 export { CustomersService, normalizeEmail } from './customers'
 export { OrdersService, ABANDONED_AFTER_MINUTES, type PaymentRecord, type FulfillmentInput, type ChangedPage } from './orders'
-export { CheckoutService, type CheckoutInput, type CheckoutItem, type Quote, type PricedLine } from './checkout'
+export { CheckoutService, checkShippingAddress, type CheckoutInput, type CheckoutItem, type Quote, type PricedLine, type PricedOrderSpec } from './checkout'
+export { QuotesService, type QuoteRequestInput, type QuoteRequestItem, type QuoteOfferInput, type QuoteAcceptInput, type QuoteChangedPage } from './quotes'
 export { SessionsService, type MagicLink, type Session, MAGIC_LINK_MINUTES, SESSION_DAYS } from './sessions'
 export { EventsService } from './events'
 export { newId, randomToken, randomBase64Url, hashToken, sha256Hex, secretsEqual } from './crypto'

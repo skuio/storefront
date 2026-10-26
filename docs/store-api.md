@@ -26,6 +26,9 @@ is the first consumer; anything that can speak this contract can run the store.
 | DELETE | `/products/{sku}` | Deactivate a product (it stays for order history). |
 | GET | `/categories` | The category tree as a flat list, parents before children. |
 | PUT | `/categories` | Batch upsert of the category tree. |
+| GET | `/quotes` | Quote requests and offers changed since a watermark, oldest first, keyset-paged. |
+| GET | `/quotes/{id}` | One quote with its lines. |
+| PATCH | `/quotes/{id}` | Price it (`offer`), stamp `external_reference`, or withdraw it. |
 
 ## Connecting from SKU.io
 
@@ -36,7 +39,7 @@ consumer in the browser, and the consumer trades a one-time code for a key it al
    against the deployed store. `GET /health` reports `owner_configured: true` from then on;
    until it does, there is nobody to approve anything and the consumer should say so.
 2. **Browser step.** The consumer sends the owner's browser to
-   `https://<store>/admin/connect?client_id=<your system>&redirect_uri=<https url>&state=<opaque>&tenant=<account name>&scope=orders,payments,fulfillments,inventory,catalog`
+   `https://<store>/admin/connect?client_id=<your system>&redirect_uri=<https url>&state=<opaque>&tenant=<account name>&scope=orders,payments,fulfillments,inventory,catalog,quotes`
    (SKU.io sends `client_id=skuio`).
    The store asks the owner to sign in (password, or an emailed reset if forgotten), then shows who
    is asking, what it may do, and the host the browser will be sent to. Approve → `302 <redirect_uri>?code=…&state=…`.
@@ -52,16 +55,18 @@ consumer in the browser, and the consumer trades a one-time code for a key it al
 Redirect rules: `redirect_uri` must be absolute `https` (plain `http` is allowed only for
 `localhost`, `*.localhost` and `*.test`, so a developer's SKU.io works), must not carry a fragment
 or credentials, and `client_id` is any 2–63 lowercase letters, digits, dots, dashes or underscores
-naming your system (`skuio` is shown as "SKU.io"; others are shown as sent). Scopes are the five listed;
+naming your system (`skuio` is shown as "SKU.io"; others are shown as sent). Scopes are the six listed;
 they are shown to the owner, travel with the connection and are **enforced per endpoint**:
 `orders` for `GET`/`PATCH /orders…`, `payments` additionally for a `PATCH` that carries `payment`
 (marking an order paid, refunded or failed), `fulfillments` for `POST /orders/{id}/fulfillments`,
-`inventory` for `PUT /inventory`, `catalog` for `/products…` and `/categories…`. A connection that
+`inventory` for `PUT /inventory`, `catalog` for `/products…` and `/categories…`, `quotes` for `/quotes…`. A connection that
 lacks one gets `403 forbidden`. The `STORE_API_KEY` secret is not scoped.
 
 **There is no endpoint that creates an order.** Orders come only from the store's own checkout,
-which prices every line from the store's database; the API can read orders, stamp a reference,
-record a payment, cancel and add shipments — never invent a sale or change what was bought.
+which prices every line from the store's database, or from a buyer accepting a quote; the API can
+read orders, stamp a reference, record a payment, cancel and add shipments — never invent a sale or
+change what was bought. A key with `quotes` can put a price in front of a buyer; only the buyer can
+turn it into an order.
 
 The owner can see every connection at `/admin/connections` (name, tenant, key prefix, last used) and
 revoke any of them. Revoking in the store and `DELETE /connect` from the consumer are the same
@@ -153,6 +158,70 @@ a paid order is never lost — so a consumer that mirrors `cancelled` must accep
 Returns `201` with the fulfilment the first time and `200` with the same one on redelivery.
 The store raises `fulfilled_quantity` on the lines, moves the order to `partially_fulfilled`
 or `fulfilled`, and emails the buyer once per fulfilment.
+
+## Quotes (request for quote)
+
+A buyer asks for a price instead of checking out — a volume order, a lead-time question, a
+purchase-order buyer. **No account is needed:** a guest gives a name and an email, the store files
+the request under a customer keyed by that email (exactly as a guest checkout does) and emails them
+a link back to the quote. A signed-in buyer also finds it at `/account/quotes/`.
+
+```
+buyer (guest or signed in) ─▶ POST /api/quotes ─▶ quote(requested) ─▶ emails buyer + merchant
+SKU.io GET /quotes (updated_since) ─▶ prices it ─▶ PATCH /quotes/{id} { offer } ─▶ quote(quoted) ─▶ "your quote is ready"
+buyer accepts on /quotes/{id}/ ─▶ quote(accepted) + order(pending_payment, manual) ─▶ GET /orders (metadata.quote_id)
+                       declines ─▶ quote(declined)        offer passes expires_at ─▶ quote(expired) ─▶ re-offer to renew
+```
+
+`GET /quotes?updated_since=…&cursor=…&limit=50` returns `{ "data": [Quote…], "next_cursor" }` with
+the same watermark discipline as orders (`updated_at, id` ascending, inclusive, de-duplicate by `id`).
+Offers past their `expires_at` become `expired` before the page is read, so no cron is involved.
+
+```json
+{
+  "id": "quo_01J9…", "number": "Q1001", "status": "requested", "currency": "USD",
+  "customer": { "id": "cus_…", "email": "buyer@agency.gov", "name": "Sam Procurement", "phone": null },
+  "company": "Field Office 7", "message": "Need delivery before the end of the fiscal year.",
+  "shipping_address": null,
+  "lines": [{ "id": "qln_…", "sku": "BAG-40L", "name": "40L patrol pack", "quantity": 40,
+              "list_amount": { "amount": 24900, "currency": "USD" }, "unit_amount": null, "total_amount": null }],
+  "subtotal": null, "shipping": null, "tax": null, "total": null, "note": null, "expires_at": null,
+  "external_reference": null, "order_id": null, "decline_reason": null, "metadata": {},
+  "created_at": "…", "updated_at": "…", "quoted_at": null, "accepted_at": null, "declined_at": null, "cancelled_at": null
+}
+```
+
+Quote status: `requested | quoted | accepted | declined | expired | cancelled`. `list_amount` is the
+catalog price when the buyer asked, for reference; the priced fields stay `null` until an offer.
+Sold-out products can be requested — lead time is part of the answer.
+
+`PATCH /quotes/{id}` accepts any of `external_reference`, `status: "cancelled"` (withdraw; an
+accepted quote is a `409` — cancel its order), and `offer`:
+
+```json
+{ "offer": {
+    "lines": [{ "sku": "BAG-40L", "quantity": 40, "unit_amount": { "amount": 19900, "currency": "USD" } },
+              { "sku": "CUSTOM-PATCH", "name": "Embroidered unit patch", "quantity": 40, "unit_amount": { "amount": 450, "currency": "USD" } }],
+    "shipping": { "amount": 6500, "currency": "USD" }, "tax": null,
+    "expires_at": "2026-11-30T00:00:00Z", "note": "Ships in 3 weeks. Net 30 on PO.",
+    "notify_customer": true } }
+```
+
+The offer **replaces** the lines: change a quantity, drop a line, or add an alternative (a SKU the
+store does not list needs a `name`). Currency must be the store's; `expires_at` must be in the
+future (or `null`, open-ended). It moves the quote to `quoted` and, unless `notify_customer` is
+`false`, emails the buyer a link to accept. Re-offering a `quoted` or `expired` quote revises it;
+`accepted`, `declined` and `cancelled` are final (`409`).
+
+**Acceptance is the buyer's.** It places an order at exactly the offered lines, shipping and tax —
+pay-later (`payment.provider: "manual"`, never expired as an abandoned checkout), shipping method
+`{ "code": "quote" }`, `metadata.quote_id`, `metadata.quote_number`, `metadata.po_number` when the
+buyer gave one, and `metadata.quote_external_reference` when you stamped one. It arrives through
+`GET /orders` like any other order; mark it paid with `PATCH /orders/{id}` when the invoice is paid.
+
+The store's merchant address hears about every request and answer (`QUOTE_NOTIFICATION_EMAIL`, else
+`ORDER_NOTIFICATION_EMAIL`). One email address may send `quotes.maxRequestsPerHour` requests an hour
+(default 5); quote numbers take `quotes.numberPrefix` (default `Q`) from `quotes.numberStart` (1001).
 
 ## Reading the catalog
 

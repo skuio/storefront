@@ -1,0 +1,152 @@
+---
+import { formatMoney, type QuoteStatus } from '@skuio/storefront'
+import BaseLayout from '../../layouts/BaseLayout.astro'
+import Breadcrumbs from '../../components/Breadcrumbs.astro'
+import { config, store } from '../../lib/store'
+import { resolveImage } from '../../lib/images'
+import { readSession } from '../../lib/account'
+import { quoteForViewer } from '../../lib/quotes'
+
+/**
+ * One quote, for the buyer. A guest reaches it through the access-key link in their email; a signed-in buyer also
+ * through /account/quotes/. Once priced it carries Accept (places the order at these prices) and Decline.
+ */
+export const prerender = false
+
+const s = store(Astro)
+// Offers past their expiry show as expired, not as something that can still be accepted.
+await s.quotes.expireStale().catch((e) => console.warn('quote page: expireStale failed', e))
+const key = Astro.url.searchParams.get('key')
+const quote = await quoteForViewer(s, Astro.cookies, Astro.params.id ?? '', key)
+if (!quote) return new Response(null, { status: 404 })
+const signedIn = !!(await s.sessions.resolve(readSession(Astro.cookies)))
+const order = quote.orderId ? await s.orders.get(quote.orderId) : null
+
+const number = `${config.quotes.numberPrefix}${quote.number}`
+const fmt = (m: { amount: number; currency: string }) => formatMoney(m, config.locale)
+const date = (iso: string) => new Date(iso).toLocaleDateString(config.locale, { year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC' })
+const statusText: Record<QuoteStatus, string> = {
+  requested: 'Being priced',
+  quoted: 'Ready for you',
+  accepted: 'Accepted',
+  declined: 'Declined',
+  expired: 'Expired',
+  cancelled: 'Withdrawn',
+}
+const done = Astro.url.searchParams.get('done')
+const sent = Astro.url.searchParams.get('sent') === '1'
+const error = Astro.url.searchParams.get('error')
+const fields = (Astro.url.searchParams.get('fields') ?? '').split(',').filter(Boolean)
+const a = quote.shippingAddress ?? {}
+const input = 'mt-1.5 w-full rounded-md border border-rule px-3 py-2.5 text-sm focus:border-accent focus:ring-2 focus:ring-accent/25 focus:outline-none'
+const label = 'block text-xs font-semibold tracking-wide text-ink uppercase'
+const bad = (field: string) => fields.includes(`shipping_address.${field}`) && 'border-accent'
+---
+
+<BaseLayout title={`Quote ${number}`} noindex>
+  <div class="mx-auto max-w-3xl px-5 py-10">
+    <Breadcrumbs items={signedIn ? [{ label: 'Home', href: '/' }, { label: 'Account', href: '/account/' }, { label: 'Quotes', href: '/account/quotes/' }, { label: `Quote ${number}` }] : [{ label: 'Home', href: '/' }, { label: `Quote ${number}` }]} />
+    <div class="mt-6 flex flex-wrap items-baseline justify-between gap-4">
+      <h1 class="display-heading text-5xl">Quote {number}</h1>
+      <span class="rounded-full bg-accent/10 px-3 py-1 text-[11px] font-bold tracking-wide text-accent uppercase" data-quote-status={quote.status}>{statusText[quote.status]}</span>
+    </div>
+    <p class="mt-2 text-sm text-body/70">
+      Requested {date(quote.createdAt)} by {quote.customer.name ?? quote.customer.email}{quote.company ? `, ${quote.company}` : ''}
+      {quote.expiresAt && quote.status === 'quoted' ? ` · valid until ${date(quote.expiresAt)}` : ''}
+    </p>
+
+    {sent && (
+      <div class="mt-6 rounded-md border border-green-600/30 bg-green-50 p-4 text-sm text-green-800" role="status">
+        <p class="font-semibold">Request sent.</p>
+        <p class="mt-1">We have emailed you a copy with a link back to this page. You will hear from us as soon as it is priced.</p>
+      </div>
+    )}
+    {done === 'accepted' && order && (
+      <div class="mt-6 rounded-md border border-green-600/30 bg-green-50 p-4 text-sm text-green-800" role="status" data-quote-accepted>
+        <p class="font-semibold">Quote accepted — order {config.orders.numberPrefix}{order.number} is placed.</p>
+        <p class="mt-1">We will send payment instructions or an invoice, then ship. A confirmation is on its way to {order.customer.email}.</p>
+      </div>
+    )}
+    {done === 'declined' && <p class="mt-6 rounded-md border border-rule bg-panel p-4 text-sm" role="status">Thanks for letting us know. If anything changes, request a new quote any time.</p>}
+    {error && (
+      <p class="mt-6 rounded-md border border-accent/30 bg-accent/5 px-4 py-3 text-sm text-accent" role="alert">
+        {error === 'validation_failed' ? 'A complete shipping address is needed to place the order — check the highlighted fields.' : error === 'conflict' ? 'This quote can no longer be accepted as it stands. Reload the page or contact us.' : 'Something went wrong. Please try again.'}
+      </p>
+    )}
+
+    <div class="mt-8 rounded-lg border border-rule">
+      <ul class="divide-y divide-rule">
+        {quote.lines.map((l) => {
+          const img = resolveImage(l.image ? { src: l.image } : null)
+          return (
+            <li class="flex items-center gap-4 px-4 py-3 text-sm" data-quote-line={l.sku}>
+              {img ? <img src={img.src} alt="" width="56" height="42" class="h-[42px] w-14 shrink-0 rounded border border-rule bg-panel-2 object-contain" /> : <span class="h-[42px] w-14 shrink-0 rounded border border-rule" />}
+              <span class="min-w-0 flex-1">
+                <span class="font-semibold text-ink">{l.name}</span>
+                <span class="block text-[11px] tracking-wide text-body/60 uppercase">SKU {l.sku} · × {l.quantity}{l.unitAmount ? ` · ${fmt(l.unitAmount)} each` : ''}</span>
+              </span>
+              <span class="font-semibold text-ink">{l.totalAmount ? fmt(l.totalAmount) : ''}</span>
+            </li>
+          )
+        })}
+      </ul>
+      {quote.total ? (
+        <dl class="space-y-1 border-t border-rule bg-panel px-4 py-3 text-sm">
+          {quote.subtotal && <div class="flex justify-between"><dt>Subtotal</dt><dd>{fmt(quote.subtotal)}</dd></div>}
+          <div class="flex justify-between"><dt>Shipping</dt><dd>{quote.shipping?.amount ? fmt(quote.shipping) : 'Included'}</dd></div>
+          {quote.tax && quote.tax.amount > 0 && <div class="flex justify-between"><dt>Tax</dt><dd>{fmt(quote.tax)}</dd></div>}
+          <div class="flex justify-between border-t border-rule pt-2 font-semibold text-ink"><dt>Total</dt><dd data-quote-total>{fmt(quote.total)}</dd></div>
+        </dl>
+      ) : (
+        <p class="border-t border-rule bg-panel px-4 py-3 text-sm text-body/70">Prices will appear here once we have quoted.</p>
+      )}
+    </div>
+
+    {quote.offerNote && <section class="mt-6"><h2 class="text-[11px] font-semibold tracking-widest text-body/60 uppercase">From us</h2><p class="mt-2 text-sm whitespace-pre-line">{quote.offerNote}</p></section>}
+    {quote.message && <section class="mt-6"><h2 class="text-[11px] font-semibold tracking-widest text-body/60 uppercase">Your note</h2><p class="mt-2 text-sm whitespace-pre-line">{quote.message}</p></section>}
+
+    {quote.status === 'quoted' && (
+      <form method="POST" action={`/api/quotes/${encodeURIComponent(quote.id)}`} class="mt-10 rounded-lg border border-rule p-5" data-quote-accept-form>
+        <input type="hidden" name="key" value={key ?? ''} />
+        <h2 class="text-lg font-bold text-ink">Accept this quote</h2>
+        <p class="mt-1 text-sm text-body/70">Places the order at the prices above. Confirm where it ships; add your purchase-order number if you use one.</p>
+        <div class="mt-5 grid gap-4 sm:grid-cols-2">
+          <div class="sm:col-span-2"><label for="a-ship-name" class={label}>Recipient</label><input id="a-ship-name" name="ship_name" value={a.name ?? quote.customer.name ?? ''} autocomplete="shipping name" class:list={[input, bad('name')]} /></div>
+          <div class="sm:col-span-2"><label for="a-ship-line1" class={label}>Address</label><input id="a-ship-line1" name="ship_line1" value={a.line1 ?? ''} autocomplete="shipping address-line1" class:list={[input, bad('line1')]} /></div>
+          <div class="sm:col-span-2"><label for="a-ship-line2" class={label}>Address line 2</label><input id="a-ship-line2" name="ship_line2" value={a.line2 ?? ''} autocomplete="shipping address-line2" class={input} /></div>
+          <div><label for="a-ship-city" class={label}>City</label><input id="a-ship-city" name="ship_city" value={a.city ?? ''} autocomplete="shipping address-level2" class:list={[input, bad('city')]} /></div>
+          <div><label for="a-ship-state" class={label}>State / region</label><input id="a-ship-state" name="ship_state" value={a.state ?? ''} autocomplete="shipping address-level1" class:list={[input, bad('state')]} /></div>
+          <div><label for="a-ship-postal" class={label}>Postal code</label><input id="a-ship-postal" name="ship_postal_code" value={a.postalCode ?? ''} autocomplete="shipping postal-code" class:list={[input, bad('postalCode'), bad('postal_code')]} /></div>
+          <div>
+            <label for="a-ship-country" class={label}>Country</label>
+            <select id="a-ship-country" name="ship_country" autocomplete="shipping country" class:list={[input, bad('country')]}>
+              {config.shipToCountries.map((c) => <option value={c} selected={c === (a.country ?? config.shipToCountries[0])}>{c}</option>)}
+            </select>
+          </div>
+          <div><label for="a-po" class={label}>PO number <span class="font-normal normal-case text-body/60">(optional)</span></label><input id="a-po" name="po_number" maxlength="100" class={input} /></div>
+          <div><label for="a-phone" class={label}>Phone <span class="font-normal normal-case text-body/60">(optional)</span></label><input id="a-phone" name="phone" type="tel" value={quote.customer.phone ?? ''} autocomplete="tel" class={input} /></div>
+        </div>
+        <button type="submit" name="action" value="accept" class="mt-6 w-full rounded-md bg-accent px-8 py-3.5 text-sm font-bold tracking-wide text-on-accent uppercase transition hover:bg-accent-dark" data-quote-accept>
+          Accept and place order{quote.total ? ` — ${fmt(quote.total)}` : ''}
+        </button>
+      </form>
+    )}
+
+    {(quote.status === 'quoted' || quote.status === 'requested') && (
+      <form method="POST" action={`/api/quotes/${encodeURIComponent(quote.id)}`} class="mt-4 text-sm">
+        <input type="hidden" name="key" value={key ?? ''} />
+        <details>
+          <summary class="cursor-pointer text-body/70 hover:text-accent">{quote.status === 'quoted' ? 'Decline this quote' : 'Withdraw this request'}</summary>
+          <label for="d-reason" class="mt-3 block text-xs text-body/70">Tell us why (optional) — it helps us quote better next time.</label>
+          <textarea id="d-reason" name="reason" rows="2" maxlength="1000" class={input}></textarea>
+          <button type="submit" name="action" value="decline" class="mt-3 rounded-full border-2 border-ink px-6 py-2 text-xs font-semibold uppercase transition hover:bg-ink hover:text-page" data-quote-decline>
+            {quote.status === 'quoted' ? 'Decline' : 'Withdraw'}
+          </button>
+        </details>
+      </form>
+    )}
+
+    {quote.status === 'expired' && <p class="mt-8 text-sm">This quote's validity has passed. Reply to the quote email or <a href="/contact/" class="font-semibold text-accent">contact us</a> and we can renew it.</p>}
+    {order && done !== 'accepted' && <p class="mt-8 text-sm">Accepted as order <strong class="text-ink">{config.orders.numberPrefix}{order.number}</strong>{signedIn ? <> — <a href={`/account/orders/${order.id}/`} class="font-semibold text-accent">view the order</a></> : '.'}</p>}
+  </div>
+</BaseLayout>

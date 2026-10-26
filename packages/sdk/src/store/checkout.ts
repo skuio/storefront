@@ -63,7 +63,31 @@ export interface Quote {
   option: ShippingOption
 }
 
-const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+/** An order with every amount already decided, ready to insert. Amounts are minor units in `currency`. */
+export interface PricedOrderSpec {
+  email: string
+  name: string | null
+  phone: string | null
+  currency: string
+  lines: PricedLine[]
+  subtotal: number
+  shipping: number
+  tax: number
+  discount: number
+  total: number
+  shippingAddress: Address
+  billingAddress: Address | null
+  shippingMethod: { code: string; name: string } | null
+  notes: string | null
+  metadata: Record<string, string>
+  discountCode: string | null
+  discountPartner: string | null
+  commission: number
+  /** Extra fields for the order's `created` event. */
+  createdEvent: Record<string, unknown>
+}
+
+export const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
 export class CheckoutService {
   constructor(
@@ -150,13 +174,7 @@ export class CheckoutService {
     const details: Record<string, string> = {}
     const email = normalizeEmail(input.email ?? '')
     if (!EMAIL.test(email)) details.email = 'must be a valid email address'
-    const shipTo = cleanAddress(input.shippingAddress) ?? {}
-    if (!shipTo.name) details['shipping_address.name'] = 'is required'
-    if (!shipTo.line1) details['shipping_address.line1'] = 'is required'
-    if (!shipTo.city) details['shipping_address.city'] = 'is required'
-    if (!shipTo.country || shipTo.country.length !== 2) details['shipping_address.country'] = 'is required'
-    else shipTo.country = shipTo.country.toUpperCase()
-    if (shipTo.country) Object.assign(details, checkAddressFormat(shipTo))
+    const shipTo = checkShippingAddress(input.shippingAddress, details)
     if (this.ctx.config.checkout.collectPhone && !input.walletContact && !input.phone?.trim()) details.phone = 'is required'
     let quote: Quote | null = null
     try {
@@ -167,66 +185,107 @@ export class CheckoutService {
     }
     if (Object.keys(details).length || !quote) throw invalid('Checkout is incomplete', details)
 
+    const metadata = Object.fromEntries(Object.entries(input.metadata ?? {}).filter(([, v]) => typeof v === 'string').slice(0, 20))
+    return this.placePricedOrder({
+      email,
+      name: input.name?.trim() || shipTo.name || null,
+      phone: input.phone?.trim() || null,
+      currency: quote.currency,
+      lines: quote.lines,
+      subtotal: quote.subtotal,
+      shipping: quote.shipping,
+      tax: 0,
+      discount: quote.discount,
+      total: quote.total,
+      shippingAddress: shipTo,
+      billingAddress: input.billingAddress ? cleanAddress(input.billingAddress) : null,
+      shippingMethod: { code: quote.option.id, name: quote.option.label },
+      notes: input.notes ?? null,
+      metadata,
+      discountCode: quote.discountCode ? normalizeDiscountCode(quote.discountCode.code) : null,
+      discountPartner: quote.discountCode?.partner ?? null,
+      commission: quote.commission,
+      createdEvent: {
+        ...(quote.discountCode ? { discount_code: normalizeDiscountCode(quote.discountCode.code) } : {}),
+        ...(quote.quantityTier ? { quantity_tier: quote.quantityTier.minQuantity } : {}),
+        ...(quote.discount ? { discount: quote.discount } : {}),
+      },
+    })
+  }
+
+  /**
+   * Insert an order whose every amount is already decided. The checkout prices from the catalog first; an accepted
+   * store quote (QuotesService.accept) passes the offered prices. Nothing on the Store API reaches this: an order is
+   * only ever placed by a buyer.
+   */
+  async placePricedOrder(spec: PricedOrderSpec): Promise<Order> {
     const db = this.ctx.db
     const now = this.ctx.now()
     const orderId = newId('ord')
-    const name = input.name?.trim() || shipTo.name || null
-    const phone = input.phone?.trim() || null
-    const metadata = Object.fromEntries(Object.entries(input.metadata ?? {}).filter(([, v]) => typeof v === 'string').slice(0, 20))
     const statements: DbStatement[] = [
       db
         .prepare(
           `INSERT INTO customers (id, email, name, phone, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)
            ON CONFLICT (email) DO UPDATE SET name = COALESCE(excluded.name, customers.name), phone = COALESCE(excluded.phone, customers.phone), updated_at = excluded.updated_at`
         )
-        .bind(newId('cus'), email, name, phone, now, now),
+        .bind(newId('cus'), spec.email, spec.name, spec.phone, now, now),
       db
         .prepare(
           `INSERT INTO orders (id, number, status, payment_status, currency, subtotal, shipping, tax, discount, total, customer_id, email,
              shipping_address_json, billing_address_json, shipping_method_code, shipping_method_name, notes, metadata_json, access_key, created_at, updated_at,
              discount_code, discount_partner, partner_commission)
-           VALUES (?, (SELECT MAX(COALESCE(MAX(number), 0) + 1, ?) FROM orders), 'pending_payment', 'unpaid', ?, ?, ?, 0, ?, ?, (SELECT id FROM customers WHERE email = ?), ?,
+           VALUES (?, (SELECT MAX(COALESCE(MAX(number), 0) + 1, ?) FROM orders), 'pending_payment', 'unpaid', ?, ?, ?, ?, ?, ?, (SELECT id FROM customers WHERE email = ?), ?,
              ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
         .bind(
           orderId,
           this.ctx.config.orders.numberStart,
-          quote.currency,
-          quote.subtotal,
-          quote.shipping,
-          quote.discount,
-          quote.total,
-          email,
-          email,
-          JSON.stringify(shipTo),
-          input.billingAddress ? JSON.stringify(cleanAddress(input.billingAddress)) : null,
-          quote.option.id,
-          quote.option.label,
-          input.notes?.trim().slice(0, 2000) || null,
-          JSON.stringify(metadata),
+          spec.currency,
+          spec.subtotal,
+          spec.shipping,
+          spec.tax,
+          spec.discount,
+          spec.total,
+          spec.email,
+          spec.email,
+          JSON.stringify(spec.shippingAddress),
+          spec.billingAddress ? JSON.stringify(spec.billingAddress) : null,
+          spec.shippingMethod?.code ?? null,
+          spec.shippingMethod?.name ?? null,
+          spec.notes?.trim().slice(0, 2000) || null,
+          JSON.stringify(spec.metadata),
           randomToken(16),
           now,
           now,
-          quote.discountCode ? normalizeDiscountCode(quote.discountCode.code) : null,
-          quote.discountCode?.partner ?? null,
-          quote.commission
+          spec.discountCode,
+          spec.discountPartner,
+          spec.commission
         ),
-      ...quote.lines.map((l, i) =>
+      ...spec.lines.map((l, i) =>
         db
           .prepare(`INSERT INTO order_lines (id, order_id, sku, name, quantity, unit_amount, total_amount, fulfilled_quantity, image_url, position) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`)
           .bind(newId('lin'), orderId, l.sku, l.name, l.quantity, l.unitAmount, l.totalAmount, l.image, i)
       ),
-      this.events.statement(orderId, 'created', {
-        lines: quote.lines.length,
-        total: quote.total,
-        ...(quote.discountCode ? { discount_code: normalizeDiscountCode(quote.discountCode.code) } : {}),
-        ...(quote.quantityTier ? { quantity_tier: quote.quantityTier.minQuantity } : {}),
-        ...(quote.discount ? { discount: quote.discount } : {}),
-      }),
+      this.events.statement(orderId, 'created', { lines: spec.lines.length, total: spec.total, ...spec.createdEvent }),
     ]
     await db.batch(statements)
     return this.orders.require(orderId)
   }
+}
+
+/**
+ * Clean a shipping address and report what it is missing into `details` (keys `shipping_address.*`). The country is
+ * upper-cased and the country's own format (state, postal code) is checked.
+ */
+export function checkShippingAddress(address: Address | null | undefined, details: Record<string, string>): Address {
+  const shipTo = cleanAddress(address) ?? {}
+  if (!shipTo.name) details['shipping_address.name'] = 'is required'
+  if (!shipTo.line1) details['shipping_address.line1'] = 'is required'
+  if (!shipTo.city) details['shipping_address.city'] = 'is required'
+  if (!shipTo.country || shipTo.country.length !== 2) details['shipping_address.country'] = 'is required'
+  else shipTo.country = shipTo.country.toUpperCase()
+  if (shipTo.country) Object.assign(details, checkAddressFormat(shipTo))
+  return shipTo
 }
 
 function clampQuantity(n: number, max: number): number {

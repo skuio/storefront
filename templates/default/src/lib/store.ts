@@ -53,6 +53,7 @@ export function store(ctx: StoreContext): Store {
     PUBLIC_SITE_URL: siteUrl(ctx),
     SESSION_SECRET: readEnv(ctx, 'SESSION_SECRET'),
     ORDER_NOTIFICATION_EMAIL: readEnv(ctx, 'ORDER_NOTIFICATION_EMAIL'),
+    QUOTE_NOTIFICATION_EMAIL: readEnv(ctx, 'QUOTE_NOTIFICATION_EMAIL'),
   }
   const created = createStore({ db, config, env, mail: mail(ctx) })
   ctx.locals.store = created

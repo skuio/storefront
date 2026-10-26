@@ -13,6 +13,7 @@ src/lib/store.ts           store(Astro) per request; config, routes, readEnv, pa
 src/lib/images.ts          resolves a product image to a local asset in src/assets/products or a URL
 src/lib/account.ts         the portal's session cookie
 src/lib/cart.client.ts     browser cart (localStorage); client-only, import from <script> only
+src/lib/quote-list.client.ts  the quote list — a basket apart from the cart; client-only
 src/components/            UI blocks — copied from the registry, now owned by this project
 src/pages/                 routes; Astro routes by filename; every page renders in the Worker
 src/pages/checkout/        the store's own checkout, success and pending pages
@@ -20,7 +21,10 @@ src/pages/api/checkout.ts  creates the order, hands it to the payment adapter
 src/pages/api/payments/    the processor webhook (adapter-neutral)
 src/pages/api/store/v1/    the Store API — what an operations system talks to
 src/pages/api/skuio/v1/    the same Store API at the path SKU.io calls (keep both)
-src/pages/account/         portal: sign-in by emailed link, orders, order detail
+src/pages/account/         portal: sign-in by emailed link, orders, order detail, quotes
+src/pages/quote/           the quote list + request form (no account needed)
+src/pages/quotes/[id].astro  one quote for the buyer: Accept (places the order) / Decline
+src/pages/api/quotes.ts    records a quote request; src/pages/api/quotes/[id].ts takes the answer
 src/data/*.json            a catalog to seed the database from (npm run seed)
 src/assets/products/       product images, matched to products by filename
 src/styles/global.css      design tokens; change these and everything follows
@@ -158,6 +162,20 @@ address that has ordered; the session is a hashed token in D1 behind one
 httpOnly cookie (`src/lib/account.ts`). `/account/orders/` lists history with
 tracking and can reorder into the cart; `/account/orders/<id>/` is the detail.
 `/account/order-lookup/` works without signing in (order number + email).
+
+**Quotes (request for quote).** `AddToQuoteButton` on a product page adds it to
+a quote list kept apart from the cart (`src/lib/quote-list.client.ts`). `/quote/`
+sends the list with a name and an email — **no account, no password**: the
+request is filed under a customer keyed by that email and the buyer gets an
+email with a link (`/quotes/<id>/?key=…`) that is their way back in. A signed-in
+buyer also sees them at `/account/quotes/`. Nothing is priced in the store: the
+operations system reads `GET /api/store/v1/quotes` and answers with
+`PATCH /quotes/{id}` `{ offer }` (connection scope `quotes`), which emails the
+buyer. Accepting places a pay-later order at exactly the offered prices
+(`metadata.quote_id`), which the operations system then pulls like any order.
+Merchant emails go to `QUOTE_NOTIFICATION_EMAIL` (else `ORDER_NOTIFICATION_EMAIL`).
+A wholesale-only store can hide `BuyButton`/`AddToCartButton` and keep only
+`AddToQuoteButton`. Contract: `docs/store-api.md` → Quotes in the kit repo.
 
 **Do something when an order is paid.** The store already emails the buyer
 and `ORDER_NOTIFICATION_EMAIL`. For anything else, SKU.io sees the order on

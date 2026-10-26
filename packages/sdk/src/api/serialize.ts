@@ -1,5 +1,5 @@
 import type { CategoryRecord, ProductRecord } from '../store/catalog'
-import type { Address, Fulfillment, Money, Order } from '../types'
+import type { Address, Fulfillment, Money, Order, QuoteStatus, StoreQuote } from '../types'
 
 export interface ApiMoney {
   amount: number
@@ -53,6 +53,36 @@ export interface ApiOrder {
   created_at: string
   updated_at: string
   paid_at: string | null
+  cancelled_at: string | null
+}
+
+export interface ApiQuote {
+  id: string
+  /** With the store's quote prefix: "Q1001". */
+  number: string
+  status: QuoteStatus
+  currency: string
+  customer: { id: string; email: string; name: string | null; phone: string | null }
+  company: string | null
+  message: string | null
+  shipping_address: ApiAddress | null
+  lines: { id: string; sku: string; name: string; quantity: number; list_amount: ApiMoney | null; unit_amount: ApiMoney | null; total_amount: ApiMoney | null }[]
+  subtotal: ApiMoney | null
+  shipping: ApiMoney | null
+  tax: ApiMoney | null
+  total: ApiMoney | null
+  note: string | null
+  expires_at: string | null
+  external_reference: string | null
+  /** The order the buyer's acceptance placed; it also arrives through GET /orders with `metadata.quote_id`. */
+  order_id: string | null
+  decline_reason: string | null
+  metadata: Record<string, string>
+  created_at: string
+  updated_at: string
+  quoted_at: string | null
+  accepted_at: string | null
+  declined_at: string | null
   cancelled_at: string | null
 }
 
@@ -154,6 +184,47 @@ export function serializeOrder(o: Order, numberPrefix = ''): ApiOrder {
     updated_at: o.updatedAt,
     paid_at: o.paidAt,
     cancelled_at: o.cancelledAt,
+  }
+}
+
+const maybeMoney = (m: Money | null): ApiMoney | null => (m ? money(m) : null)
+
+/** The Store API's view of a quote. `access_key` never leaves the store. */
+export function serializeQuote(q: StoreQuote, numberPrefix = ''): ApiQuote {
+  return {
+    id: q.id,
+    number: `${numberPrefix}${q.number}`,
+    status: q.status,
+    currency: q.currency.toUpperCase(),
+    customer: { id: q.customer.id, email: q.customer.email, name: q.customer.name, phone: q.customer.phone },
+    company: q.company,
+    message: q.message,
+    shipping_address: address(q.shippingAddress),
+    lines: q.lines.map((l) => ({
+      id: l.id,
+      sku: l.sku,
+      name: l.name,
+      quantity: l.quantity,
+      list_amount: maybeMoney(l.listAmount),
+      unit_amount: maybeMoney(l.unitAmount),
+      total_amount: maybeMoney(l.totalAmount),
+    })),
+    subtotal: maybeMoney(q.subtotal),
+    shipping: maybeMoney(q.shipping),
+    tax: maybeMoney(q.tax),
+    total: maybeMoney(q.total),
+    note: q.offerNote,
+    expires_at: q.expiresAt,
+    external_reference: q.externalReference,
+    order_id: q.orderId,
+    decline_reason: q.declineReason,
+    metadata: q.metadata,
+    created_at: q.createdAt,
+    updated_at: q.updatedAt,
+    quoted_at: q.quotedAt,
+    accepted_at: q.acceptedAt,
+    declined_at: q.declinedAt,
+    cancelled_at: q.cancelledAt,
   }
 }
 

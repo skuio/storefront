@@ -41,6 +41,17 @@ export interface StorefrontInput {
      */
     numberStart?: number
   }
+  /** Request-for-quote (see store/quotes.ts). */
+  quotes?: {
+    /** Prefix for quote numbers: 'Q' → Q1001 (default 'Q'). */
+    numberPrefix?: string
+    /** The lowest number a new quote may take (default 1001). */
+    numberStart?: number
+    /** Per line. Quotes are for volume, so this is far above checkout's limit (default 100000). */
+    maxQuantity?: number
+    /** How many quote requests one email address may send per hour before it is told to wait (default 5). */
+    maxRequestsPerHour?: number
+  }
   /**
    * Discount codes the store prices itself (see discounts.ts). A code with a
    * `partner` attributes the order to that partner and snapshots the
@@ -56,7 +67,7 @@ export interface StorefrontInput {
   referral?: Partial<ReferralSettings>
 }
 
-export interface StorefrontConfig extends Omit<StorefrontInput, 'routes' | 'locale' | 'checkout' | 'inventory' | 'orders' | 'discounts' | 'quantityDiscounts' | 'partners' | 'referral'> {
+export interface StorefrontConfig extends Omit<StorefrontInput, 'routes' | 'locale' | 'checkout' | 'inventory' | 'orders' | 'quotes' | 'discounts' | 'quantityDiscounts' | 'partners' | 'referral'> {
   locale: string
   routes: Routes
   checkout: {
@@ -70,6 +81,12 @@ export interface StorefrontConfig extends Omit<StorefrontInput, 'routes' | 'loca
   orders: {
     numberPrefix: string
     numberStart: number
+  }
+  quotes: {
+    numberPrefix: string
+    numberStart: number
+    maxQuantity: number
+    maxRequestsPerHour: number
   }
   discounts: DiscountCode[]
   quantityDiscounts: QuantityDiscount[]
@@ -113,6 +130,12 @@ export function defineStorefront(input: StorefrontInput): StorefrontConfig {
     orders: {
       numberPrefix: input.orders?.numberPrefix ?? '',
       numberStart: Math.max(1, Math.trunc(input.orders?.numberStart ?? 1001)),
+    },
+    quotes: {
+      numberPrefix: input.quotes?.numberPrefix ?? 'Q',
+      numberStart: Math.max(1, Math.trunc(input.quotes?.numberStart ?? 1001)),
+      maxQuantity: Math.max(1, Math.trunc(input.quotes?.maxQuantity ?? 100_000)),
+      maxRequestsPerHour: Math.max(1, Math.trunc(input.quotes?.maxRequestsPerHour ?? 5)),
     },
     discounts: input.discounts ?? [],
     quantityDiscounts: input.quantityDiscounts ?? [],

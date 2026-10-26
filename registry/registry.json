@@ -242,6 +242,48 @@
       ]
     },
     {
+      "name": "quotes",
+      "description": "Request for quote: an Add to quote button and a quote list kept apart from the cart, a request form that needs no account (a guest gives a name and an email), the buyer's quote page with Accept (places a pay-later order at the quoted prices) and Decline, and the signed-in buyer's quote list. The operations system prices quotes through the Store API (GET /quotes, PATCH /quotes/{id} with an offer).",
+      "files": [
+        {
+          "from": "AddToQuoteButton.astro",
+          "to": "src/components/AddToQuoteButton.astro"
+        },
+        {
+          "from": "lib/quote-list.client.ts",
+          "to": "src/lib/quote-list.client.ts"
+        },
+        {
+          "from": "lib/quotes.ts",
+          "to": "src/lib/quotes.ts"
+        },
+        {
+          "from": "pages/quote/index.astro",
+          "to": "src/pages/quote/index.astro"
+        },
+        {
+          "from": "pages/quotes/[id].astro",
+          "to": "src/pages/quotes/[id].astro"
+        },
+        {
+          "from": "pages/account/quotes/index.astro",
+          "to": "src/pages/account/quotes/index.astro"
+        },
+        {
+          "from": "api/quotes.ts",
+          "to": "src/pages/api/quotes.ts"
+        },
+        {
+          "from": "api/quotes/[id].ts",
+          "to": "src/pages/api/quotes/[id].ts"
+        }
+      ],
+      "registryDependencies": [
+        "breadcrumbs",
+        "account"
+      ]
+    },
+    {
       "name": "account",
       "description": "Buyer portal: sign-in by emailed magic link, order history with fulfilments and tracking, order detail, reorder, sign out. Sessions live in the store.",
       "files": [
@@ -277,7 +319,8 @@
       "registryDependencies": [
         "breadcrumbs",
         "order-lookup",
-        "cart"
+        "cart",
+        "quotes"
       ]
     },
     {

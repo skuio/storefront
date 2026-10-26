@@ -222,6 +222,12 @@ stay underneath.
   shipments; the store emails tracking.
 - **Portal**: sign-in by emailed link, order history with tracking, reorder.
   Guest lookup by order number + email.
+- **Quotes** (request for quote): an "Add to quote" list apart from the cart,
+  sent with just a name and an email — no account. The operations system
+  prices it through the Store API (`GET /quotes`, `PATCH /quotes/{id}` with an
+  offer) and the buyer accepts it in one click, which places the order at the
+  quoted prices. Built for B2B and public-sector buyers who will not register
+  to ask a price.
 - **Attribution**: first and last touch (utm tags, ad click ids, referrers)
   ride on every order's metadata as `src_first` / `src_last`, so the operations
   system knows which channel sold it.
