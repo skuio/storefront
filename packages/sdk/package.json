@@ -1,6 +1,6 @@
 {
   "name": "@skuio/storefront",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "The store platform behind SKU.io storefronts: catalog, checkout, orders, buyer portal and the Store API over one SQL driver — Cloudflare D1 or SQLite on any Node host. Framework-agnostic; pairs with the Astro reference template.",
   "license": "MIT",
   "type": "module",
