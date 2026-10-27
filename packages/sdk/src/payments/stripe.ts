@@ -1,5 +1,5 @@
 import type Stripe from 'stripe'
-import type { Order } from '../types'
+import type { Order, PaymentSettlement } from '../types'
 import { PaymentWebhookError, type PaymentAdapter, type PaymentContext, type PaymentEvent, type PaymentStart } from './index'
 
 export interface StripePaymentOptions {
@@ -100,24 +100,75 @@ export function stripePayments(options: StripePaymentOptions): PaymentAdapter {
       } catch (e) {
         throw new PaymentWebhookError(400, `invalid signature: ${e instanceof Error ? e.message : String(e)}`)
       }
-      return eventsFromStripe(event)
+      return withSettlement(stripe, eventsFromStripe(event))
     },
 
     async verifyReturn(params, order): Promise<PaymentEvent[]> {
       // Express (stripeExpress): Stripe appends the intent to the return URL.
       const intentId = params.get('payment_intent')
       if (intentId && !params.get('session_id')) {
-        const pi = await stripe.paymentIntents.retrieve(intentId)
+        const pi = await stripe.paymentIntents.retrieve(intentId, { expand: [...SETTLEMENT_EXPAND] })
         if (pi.metadata?.order_id !== order.id) return []
-        return pi.status === 'succeeded' ? [paidFromIntent(pi)] : []
+        return pi.status === 'succeeded' ? [{ ...paidFromIntent(pi), ...settlementFields(pi) } as PaymentEvent] : []
       }
       const sessionId = params.get('session_id')
       if (!sessionId) return []
       const session = await stripe.checkout.sessions.retrieve(sessionId)
       if (orderIdOf(session) !== order.id) return []
-      return session.payment_status === 'paid' ? [paidEvent(session)] : []
+      return session.payment_status === 'paid' ? withSettlement(stripe, [paidEvent(session)]) : []
+    },
+
+    async settlement(order): Promise<PaymentSettlement | null> {
+      const intentId = order.payment.reference
+      if (!intentId?.startsWith('pi_')) return null
+      return settlementOf(await stripe.paymentIntents.retrieve(intentId, { expand: [...SETTLEMENT_EXPAND] }))
     },
   }
+}
+
+/** The PaymentIntent with its charge and the charge's balance transaction (fee, net) inline. */
+const SETTLEMENT_EXPAND = ['latest_charge.balance_transaction'] as const
+
+/**
+ * What Stripe captured and kept for a PaymentIntent retrieved with SETTLEMENT_EXPAND. The fee and net
+ * come from the balance transaction, in the account's settlement currency; while Stripe has not
+ * created it yet (it can lag the charge) they stay null and the Store API fills them in later.
+ */
+export function settlementOf(pi: Stripe.PaymentIntent): PaymentSettlement | null {
+  if (pi.status !== 'succeeded') return null
+  const charge = typeof pi.latest_charge === 'object' && pi.latest_charge ? pi.latest_charge : null
+  const bt = charge && typeof charge.balance_transaction === 'object' && charge.balance_transaction ? charge.balance_transaction : null
+  const currency = pi.currency.toLowerCase()
+  return {
+    amountReceived: { amount: pi.amount_received || charge?.amount_captured || pi.amount, currency },
+    transactionId: typeof pi.latest_charge === 'string' ? pi.latest_charge : charge?.id ?? null,
+    fee: bt ? { amount: bt.fee, currency: bt.currency.toLowerCase() } : null,
+    net: bt ? { amount: bt.net, currency: bt.currency.toLowerCase() } : null,
+  }
+}
+
+function settlementFields(pi: Stripe.PaymentIntent): { settlement?: PaymentSettlement } {
+  const settlement = settlementOf(pi)
+  return settlement ? { settlement } : {}
+}
+
+/**
+ * Attach the settlement to each paid event by reading its PaymentIntent back. A Stripe error here
+ * never loses the payment: the event goes through without it, and GET /orders/{id} fills it in later.
+ */
+async function withSettlement(stripe: Stripe, events: PaymentEvent[]): Promise<PaymentEvent[]> {
+  return Promise.all(
+    events.map(async (event) => {
+      if (event.type !== 'paid' || !event.reference?.startsWith('pi_')) return event
+      try {
+        const pi = await stripe.paymentIntents.retrieve(event.reference, { expand: [...SETTLEMENT_EXPAND] })
+        return { ...event, ...settlementFields(pi) }
+      } catch (e) {
+        console.error('stripe: could not read the settlement for', event.reference, e instanceof Error ? e.message : String(e))
+        return event
+      }
+    })
+  )
 }
 
 function metadataFor(order: Order): Record<string, string> {

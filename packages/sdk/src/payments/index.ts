@@ -1,5 +1,5 @@
 import type { Store } from '../store'
-import type { Money, Order } from '../types'
+import type { Money, Order, PaymentSettlement } from '../types'
 
 export interface PaymentContext {
   store: Store
@@ -23,10 +23,14 @@ export type PaymentEvent =
       paidAt?: string | null
       amount?: Money
       adjustments?: { discount?: Money; tax?: Money; total?: Money }
+      /** What the processor captured and kept, when it reported it with the payment. */
+      settlement?: PaymentSettlement
     }
   | { type: 'failed'; orderId: string; provider: string; reference: string | null; reason?: string }
   | { type: 'refunded'; orderId: string | null; provider: string; reference: string | null }
   | { type: 'ignored'; reason: string }
+
+export type { PaymentSettlement }
 
 export class PaymentWebhookError extends Error {
   readonly status: number
@@ -62,6 +66,12 @@ export interface PaymentAdapter {
    * confirmation page is right even when the webhook has not landed yet.
    */
   verifyReturn?(params: URLSearchParams, order: Order, ctx: PaymentContext): Promise<PaymentEvent[]>
+  /**
+   * Optional: ask the processor what it captured and kept for a paid order (its fee). The Store API
+   * calls this on `GET /orders/{id}` when the fee is still unknown. Return null when the processor
+   * does not know yet; throw on a processor error (the caller swallows it).
+   */
+  settlement?(order: Order): Promise<PaymentSettlement | null>
 }
 
 /** Apply processor events to the store. Idempotent, like the order methods underneath. */
@@ -78,6 +88,7 @@ export async function applyPaymentEvents(store: Store, events: PaymentEvent[]): 
             paidAt: event.paidAt ?? null,
             ...(event.amount ? { amount: event.amount } : {}),
             ...(event.adjustments ? { adjustments: event.adjustments } : {}),
+            ...(event.settlement ? { settlement: event.settlement } : {}),
           })
         )
         break

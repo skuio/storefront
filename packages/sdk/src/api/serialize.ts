@@ -28,11 +28,29 @@ export interface ApiFulfillment {
   created_at: string
 }
 
+export interface ApiOrderPayment {
+  status: Order['payment']['status']
+  provider: string | null
+  reference: string | null
+  method_label: string | null
+  paid_at: string | null
+  /** What the processor captured for this order. Null until a processor adapter reports it. */
+  amount_received: ApiMoney | null
+  /** What the processor kept, in its settlement currency. Null until known. */
+  fee: ApiMoney | null
+  /** amount_received minus fee, in the settlement currency. Null until known. */
+  net: ApiMoney | null
+  /** The processor's charge / capture id (Stripe `ch_…`, PayPal capture id). */
+  transaction_id: string | null
+  /** When the store recorded the fee (ISO 8601). */
+  fee_reported_at: string | null
+}
+
 export interface ApiOrder {
   id: string
   number: string
   status: Order['status']
-  payment: { status: Order['payment']['status']; provider: string | null; reference: string | null; method_label: string | null; paid_at: string | null }
+  payment: ApiOrderPayment
   currency: string
   subtotal: ApiMoney
   shipping: ApiMoney
@@ -155,7 +173,18 @@ export function serializeOrder(o: Order, numberPrefix = ''): ApiOrder {
     id: o.id,
     number: `${numberPrefix}${o.number}`,
     status: o.status,
-    payment: { status: o.payment.status, provider: o.payment.provider, reference: o.payment.reference, method_label: o.payment.methodLabel, paid_at: o.payment.paidAt },
+    payment: {
+      status: o.payment.status,
+      provider: o.payment.provider,
+      reference: o.payment.reference,
+      method_label: o.payment.methodLabel,
+      paid_at: o.payment.paidAt,
+      amount_received: o.payment.amountReceived ? money(o.payment.amountReceived) : null,
+      fee: o.payment.fee ? money(o.payment.fee) : null,
+      net: o.payment.net ? money(o.payment.net) : null,
+      transaction_id: o.payment.transactionId,
+      fee_reported_at: o.payment.feeReportedAt,
+    },
     currency: o.currency.toUpperCase(),
     subtotal: money(o.subtotal),
     shipping: money(o.shipping),

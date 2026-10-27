@@ -1,4 +1,4 @@
-import type { Address, Fulfillment, Order, OrderLine, OrderStatus, PaymentStatus } from '../types'
+import type { Address, Fulfillment, Money, Order, OrderLine, OrderStatus, PaymentStatus } from '../types'
 import { parseJson } from './context'
 
 export interface OrderRow {
@@ -9,6 +9,14 @@ export interface OrderRow {
   payment_provider: string | null
   payment_reference: string | null
   payment_method_label: string | null
+  payment_amount_received: number | null
+  payment_amount_received_currency: string | null
+  payment_fee: number | null
+  payment_fee_currency: string | null
+  payment_net: number | null
+  payment_net_currency: string | null
+  payment_transaction_id: string | null
+  payment_fee_reported_at: string | null
   paid_at: string | null
   currency: string
   subtotal: number
@@ -108,6 +116,11 @@ export function rowToFulfillment(r: FulfillmentRow, lines: FulfillmentLineRow[])
   }
 }
 
+/** A nullable amount column plus its currency column; either missing means unknown. */
+function storedMoney(amount: number | null | undefined, currency: string | null | undefined): Money | null {
+  return typeof amount === 'number' && currency ? { amount, currency } : null
+}
+
 export function rowToOrder(r: OrderRow, lines: OrderLineRow[], fulfillments: Fulfillment[]): Order {
   const money = (amount: number) => ({ amount, currency: r.currency })
   return {
@@ -120,6 +133,11 @@ export function rowToOrder(r: OrderRow, lines: OrderLineRow[], fulfillments: Ful
       reference: r.payment_reference,
       methodLabel: r.payment_method_label,
       paidAt: r.paid_at,
+      amountReceived: storedMoney(r.payment_amount_received, r.payment_amount_received_currency),
+      fee: storedMoney(r.payment_fee, r.payment_fee_currency),
+      net: storedMoney(r.payment_net, r.payment_net_currency),
+      transactionId: r.payment_transaction_id ?? null,
+      feeReportedAt: r.payment_fee_reported_at ?? null,
     },
     currency: r.currency,
     subtotal: money(r.subtotal),

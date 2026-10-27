@@ -1,4 +1,6 @@
+import type { PaymentAdapter } from '../payments'
 import type { Connection, Store } from '../store'
+import type { Order } from '../types'
 import { API_KEY_PREFIX, type ConnectScope } from '../store/connections'
 import { secretsEqual } from '../store/crypto'
 import { StoreError } from '../store/errors'
@@ -26,7 +28,17 @@ export interface StoreApiOptions {
    * request origin. `images[].url` in every response is always absolute.
    */
   imageUrl?: ImageUrlResolver
+  /**
+   * The store's payment adapters, or a function returning them (called only when needed, so a
+   * processor client is not built on every request). `GET /orders/{id}` uses the adapter that took
+   * a paid order to ask its processor for the fee when the store has not recorded it yet. Omit it
+   * and the fee is only what the adapters recorded when they confirmed the payment.
+   */
+  payments?: PaymentAdapter[] | (() => PaymentAdapter[])
 }
+
+/** How long `GET /orders/{id}` waits for a processor before answering without the fee. */
+const SETTLEMENT_TIMEOUT_MS = 8000
 
 /** Who a request authenticated as: the environment key, or an approved connection. */
 export type ApiCaller = { kind: 'env' } | { kind: 'connection'; connection: Connection }
@@ -77,7 +89,7 @@ export async function handleStoreApi(request: Request, options: StoreApiOptions)
     }
 
     const images: SerializeProductOptions = { imageUrl: options.imageUrl, origin: url.origin }
-    return await route(method, path, url, request, options.store, caller, images)
+    return await route(method, path, url, request, options.store, caller, images, options.payments)
   } catch (e) {
     if (e instanceof ValidationError) return error(422, 'validation_failed', e.message, e.details)
     if (e instanceof StoreError) return error(e.status, e.code, e.message, e.details)
@@ -147,7 +159,10 @@ function scopeFor(path: string): ConnectScope | null {
   return null // /health, /connect
 }
 
-async function route(method: string, path: string, url: URL, request: Request, store: Store, caller: ApiCaller, images: SerializeProductOptions): Promise<Response> {
+async function route(
+  method: string, path: string, url: URL, request: Request, store: Store, caller: ApiCaller, images: SerializeProductOptions,
+  payments: StoreApiOptions['payments']
+): Promise<Response> {
   const segments = path.split('/').filter(Boolean)
 
   if (path === '/health' && method === 'GET') {
@@ -180,7 +195,10 @@ async function route(method: string, path: string, url: URL, request: Request, s
     }
     const id = segments[1] ? decodeURIComponent(segments[1]) : ''
     if (segments.length === 2 && id) {
-      if (method === 'GET') return json({ data: serializeOrder(await store.orders.require(id), store.config.orders.numberPrefix) })
+      if (method === 'GET') {
+        const order = await fillSettlement(store, await store.orders.require(id), payments)
+        return json({ data: serializeOrder(order, store.config.orders.numberPrefix) })
+      }
       if (method === 'PATCH') {
         const patch = validateOrderPatch(await readJson(request))
         // Recording a payment is its own scope: a key that may read and stamp orders cannot
@@ -265,9 +283,37 @@ async function route(method: string, path: string, url: URL, request: Request, s
   return error(404, 'not_found', `No such endpoint: ${method} ${path}`)
 }
 
+/**
+ * Lazy fill for one order: a paid (or since refunded) order whose fee is not recorded yet asks the
+ * processor that took it, through that adapter's `settlement()`, and stores the answer (which bumps
+ * `updated_at`). Any failure — no adapter, a processor error, a timeout — returns the order unchanged:
+ * reading an order never fails because the processor is unreachable.
+ */
+async function fillSettlement(store: Store, order: Order, payments: StoreApiOptions['payments']): Promise<Order> {
+  if (!payments || order.payment.fee || !order.payment.provider || !order.payment.reference) return order
+  if (order.payment.status !== 'paid' && order.payment.status !== 'refunded') return order
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    const adapters = typeof payments === 'function' ? payments() : payments
+    const adapter = adapters.find((a) => a.id === order.payment.provider)
+    if (!adapter?.settlement) return order
+    const timeout = new Promise<null>((resolve) => {
+      timer = setTimeout(() => resolve(null), SETTLEMENT_TIMEOUT_MS)
+    })
+    const settlement = await Promise.race([adapter.settlement(order), timeout])
+    if (!settlement) return order
+    return await store.orders.recordSettlement(order.id, settlement)
+  } catch (e) {
+    console.error('store api: could not read the payment settlement for', order.id, e instanceof Error ? e.message : String(e))
+    return order
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
 export {
   serializeOrder, serializeFulfillment, serializeProduct, serializeCategory, serializeQuote, absoluteImageUrl,
   type ImageUrlResolver, type SerializeProductOptions,
-  type ApiOrder, type ApiFulfillment, type ApiProduct, type ApiCategory, type ApiQuote,
+  type ApiOrder, type ApiOrderPayment, type ApiFulfillment, type ApiProduct, type ApiCategory, type ApiQuote,
 } from './serialize'
 export { ValidationError } from './validate'

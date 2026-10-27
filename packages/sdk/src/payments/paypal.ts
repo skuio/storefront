@@ -1,4 +1,4 @@
-import type { Address, Order } from '../types'
+import type { Address, Money, Order, PaymentSettlement } from '../types'
 import type { Quote } from '../store/checkout'
 import { PaymentWebhookError, type PaymentAdapter, type PaymentContext, type PaymentEvent, type PaymentStart } from './index'
 
@@ -22,11 +22,17 @@ interface PayPalLink {
   href: string
   rel: string
 }
+interface PayPalMoney {
+  currency_code: string
+  value: string
+}
 interface PayPalCapture {
   id: string
   status: string
-  amount?: { currency_code: string; value: string }
+  amount?: PayPalMoney
   custom_id?: string
+  /** What PayPal kept and what the merchant receives (present on completed captures). */
+  seller_receivable_breakdown?: { gross_amount?: PayPalMoney; paypal_fee?: PayPalMoney; net_amount?: PayPalMoney }
 }
 interface PayPalOrder {
   id: string
@@ -224,7 +230,34 @@ export function paypalPayments(options: PayPalPaymentOptions): PaymentAdapter {
       if (current.status !== 'APPROVED') return []
       return eventsFromOrder(await capture(paypalOrderId))
     },
+
+    async settlement(order): Promise<PaymentSettlement | null> {
+      const captureId = order.payment.reference
+      if (!captureId) return null
+      return settlementOf(await api<PayPalCapture>('GET', `/v2/payments/captures/${encodeURIComponent(captureId)}`))
+    },
   }
+}
+
+/**
+ * What PayPal captured and kept, from a capture's `seller_receivable_breakdown`. The fee and net are
+ * each in their own currency (PayPal's receivable side). Null for a capture that is not completed.
+ */
+export function settlementOf(c: PayPalCapture): PaymentSettlement | null {
+  if (c.status !== 'COMPLETED' && c.status !== 'REFUNDED' && c.status !== 'PARTIALLY_REFUNDED') return null
+  const b = c.seller_receivable_breakdown
+  const gross = b?.gross_amount ?? c.amount
+  return {
+    amountReceived: gross ? paypalMoney(gross) : null,
+    fee: b?.paypal_fee ? paypalMoney(b.paypal_fee) : null,
+    net: b?.net_amount ? paypalMoney(b.net_amount) : null,
+    transactionId: c.id,
+  }
+}
+
+function paypalMoney(m: PayPalMoney): Money {
+  const currency = m.currency_code.toLowerCase()
+  return { amount: minor(m.value, currency), currency }
 }
 
 class PayPalError extends Error {
@@ -244,6 +277,7 @@ function paidFromCapture(c: PayPalCapture): PaymentEvent {
   if (!c.custom_id) return { type: 'ignored', reason: `capture ${c.id} has no custom_id` }
   if (c.status !== 'COMPLETED') return { type: 'ignored', reason: `capture ${c.id} is ${c.status}` }
   const currency = (c.amount?.currency_code ?? 'USD').toLowerCase()
+  const settlement = settlementOf(c)
   return {
     type: 'paid',
     orderId: c.custom_id,
@@ -252,6 +286,7 @@ function paidFromCapture(c: PayPalCapture): PaymentEvent {
     methodLabel: 'PayPal',
     paidAt: new Date().toISOString(),
     ...(c.amount ? { amount: { amount: minor(c.amount.value, currency), currency } } : {}),
+    ...(settlement ? { settlement } : {}),
   }
 }
 
