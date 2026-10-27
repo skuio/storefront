@@ -257,6 +257,15 @@ paid or cancelled order), so polling `updated_since` picks up stock drift withou
 }
 ```
 
+`images[].url` is **always an absolute URL** the consumer can load as-is. A store may keep
+images as bare filenames or paths (`"civic.jpg"`, served by the site at a fingerprinted
+`/_astro/civic.<hash>.jpg`); the API resolves each through the store's `imageUrl` option of
+`handleStoreApi` — the reference template passes its `resolveImage()` against the site URL —
+and otherwise passes an absolute URL through unchanged and resolves a relative one against the
+request origin. That last fallback is only a guess at where the file lives: a store whose
+assets are fingerprinted must pass `imageUrl`, or the URL will 404. URLs pushed through
+`PUT /products` (hosted images) come back exactly as sent.
+
 Two shapes to handle rather than assume away. `inventory` is `null` when the store holds no
 stock row for that SKU, which is **not** the same as `available: 0`. And a `categories` entry
 carries `slug: null, name: null` when the product links to a category id the store never

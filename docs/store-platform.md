@@ -47,8 +47,10 @@ buyer ──▶ store (Astro + its DB) ◀────────── Store A
 - **Core:** `@skuio/storefront/store` — `createStore({ db, config, env, mail?, clock? })`
   returns the services: `catalog`, `inventory`, `checkout`, `orders` (incl. fulfilments), `quotes`,
   `customers`, `sessions`, `events`, `health()`. Framework-agnostic (no Astro, no DOM).
-- **Store API:** `@skuio/storefront/api` — `handleStoreApi(request, { store, apiKey })`
-  implements `/api/skuio/v1/*` as one handler the Astro route delegates to. Auth is the
+- **Store API:** `@skuio/storefront/api` — `handleStoreApi(request, { store, apiKey, imageUrl? })`
+  implements `/api/skuio/v1/*` as one handler the Astro route delegates to. `imageUrl` maps a
+  stored image src to the absolute URL the site serves it at (the template wires `resolveImage()`),
+  so `images[].url` is always loadable. Auth is the
   `STORE_API_KEY` secret (bearer, constant-time compare).
 - **Payments:** `@skuio/storefront/payments` — `PaymentAdapter` interface;
   `@skuio/storefront/payments/stripe`, `@skuio/storefront/payments/manual`.
