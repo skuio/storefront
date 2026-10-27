@@ -4,7 +4,7 @@ import { defineStorefront, flatRate, freeShipping } from '../src'
 import { applyPaymentEvents, PaymentWebhookError } from '../src/payments'
 import { btcpayPayments, validSignature } from '../src/payments/btcpay'
 import { decimal, paypalExpress, paypalPayments } from '../src/payments/paypal'
-import { eventsFromStripe, stripeExpress, stripePayments } from '../src/payments/stripe'
+import { eventsFromStripe, settlementOf, stripeExpress, stripePayments } from '../src/payments/stripe'
 import { placeOrder, rig, seed } from './helpers'
 
 const config = defineStorefront({
@@ -282,6 +282,145 @@ describe('stripe express', () => {
     expect(await adapter.verifyReturn!(params, order, ctx)).toMatchObject([{ type: 'paid', orderId: order.id, reference: 'pi_9' }])
     orderId = 'ord_other'
     expect(await adapter.verifyReturn!(params, order, ctx)).toEqual([])
-    expect(retrieve).toHaveBeenCalledWith('pi_9')
+    expect(retrieve).toHaveBeenCalledWith('pi_9', { expand: ['latest_charge.balance_transaction'] })
+  })
+})
+
+describe('processor fees (payment settlement)', () => {
+  const expanded = (overrides: Record<string, unknown> = {}, bt: unknown = { id: 'txn_1', fee: 2898, net: 96012, currency: 'usd' }) => ({
+    id: 'pi_1',
+    status: 'succeeded',
+    currency: 'usd',
+    amount: 98910,
+    amount_received: 98910,
+    payment_method_types: ['card'],
+    metadata: {},
+    latest_charge: { id: 'ch_1', amount_captured: 98910, balance_transaction: bt },
+    ...overrides,
+  })
+
+  it('stripe: reads amount, fee, net and charge id from the expanded balance transaction, fee null while it is pending', () => {
+    expect(settlementOf(expanded() as unknown as Stripe.PaymentIntent)).toEqual({
+      amountReceived: { amount: 98910, currency: 'usd' },
+      fee: { amount: 2898, currency: 'usd' },
+      net: { amount: 96012, currency: 'usd' },
+      transactionId: 'ch_1',
+    })
+    // Stripe settles in the account's currency: a CAD charge on a USD account.
+    expect(settlementOf(expanded({ currency: 'cad' }, { fee: 2100, net: 70000, currency: 'USD' }) as unknown as Stripe.PaymentIntent)).toMatchObject({
+      amountReceived: { amount: 98910, currency: 'cad' },
+      fee: { amount: 2100, currency: 'usd' },
+    })
+    expect(settlementOf(expanded({}, null) as unknown as Stripe.PaymentIntent)).toEqual({
+      amountReceived: { amount: 98910, currency: 'usd' },
+      fee: null,
+      net: null,
+      transactionId: 'ch_1',
+    })
+    expect(settlementOf(expanded({ status: 'processing' }) as unknown as Stripe.PaymentIntent)).toBeNull()
+  })
+
+  it('stripe: the webhook records the fee with the payment, and an unreadable intent never loses the payment', async () => {
+    const { store, order, ctx } = await discountedOrder()
+    let fail = false
+    const retrieve = vi.fn(async () => {
+      if (fail) throw new Error('rate limited')
+      return expanded({ metadata: { order_id: order.id } })
+    })
+    const session = { id: 'cs_1', client_reference_id: order.id, payment_status: 'paid', currency: 'usd', amount_total: 98910, payment_intent: 'pi_1', payment_method_types: ['card'], total_details: {} }
+    const stripe = {
+      paymentIntents: { retrieve },
+      webhooks: { constructEventAsync: vi.fn(async () => ({ type: 'checkout.session.completed', data: { object: session } })) },
+    } as unknown as Stripe
+    const adapter = stripePayments({ stripe, webhookSecret: 'whsec' })
+    const req = () => new Request('https://store.test/api/payments/webhook', { method: 'POST', headers: { 'stripe-signature': 's' }, body: '{}' })
+
+    fail = true
+    const bare = await adapter.handleWebhook(req(), ctx)
+    expect(bare).toMatchObject([{ type: 'paid', reference: 'pi_1' }])
+    expect(bare[0]).not.toHaveProperty('settlement')
+    const [paid] = await applyPaymentEvents(store, bare)
+    expect(paid!.payment).toMatchObject({ status: 'paid', fee: null, feeReportedAt: null })
+
+    // Redelivery after Stripe answers: the already-paid order gains its fee, nothing else changes.
+    fail = false
+    const events = await adapter.handleWebhook(req(), ctx)
+    expect(retrieve).toHaveBeenLastCalledWith('pi_1', { expand: ['latest_charge.balance_transaction'] })
+    const [filled] = await applyPaymentEvents(store, events)
+    expect(filled!.payment).toMatchObject({
+      status: 'paid',
+      amountReceived: { amount: 98910, currency: 'usd' },
+      fee: { amount: 2898, currency: 'usd' },
+      net: { amount: 96012, currency: 'usd' },
+      transactionId: 'ch_1',
+      feeReportedAt: expect.any(String),
+    })
+    expect(filled!.updatedAt > paid!.updatedAt).toBe(true)
+    expect(filled!.total).toEqual(paid!.total)
+    // Same report again: no write, updated_at stays.
+    const [again] = await applyPaymentEvents(store, events)
+    expect(again!.updatedAt).toBe(filled!.updatedAt)
+    expect(again!.payment.feeReportedAt).toBe(filled!.payment.feeReportedAt)
+  })
+
+  it('stripe: the return page records the fee, and settlement() reads it later for the Store API', async () => {
+    const { store, order, ctx } = await discountedOrder()
+    let bt: unknown = null
+    const retrieve = vi.fn(async () => expanded({ metadata: { order_id: order.id } }, bt))
+    const sessions = { retrieve: vi.fn(async () => ({ id: 'cs_1', client_reference_id: order.id, payment_status: 'paid', currency: 'usd', amount_total: 98910, payment_intent: 'pi_1', total_details: {} })) }
+    const stripe = { paymentIntents: { retrieve }, checkout: { sessions } } as unknown as Stripe
+    const adapter = stripePayments({ stripe, webhookSecret: 'x' })
+    const [paid] = await applyPaymentEvents(store, await adapter.verifyReturn!(new URLSearchParams('session_id=cs_1'), order, ctx))
+    expect(paid!.payment).toMatchObject({ status: 'paid', reference: 'pi_1', transactionId: 'ch_1', amountReceived: { amount: 98910 }, fee: null })
+
+    bt = { fee: 2898, net: 96012, currency: 'usd' }
+    expect(await adapter.settlement!(paid!)).toMatchObject({ fee: { amount: 2898, currency: 'usd' }, transactionId: 'ch_1' })
+    expect(await adapter.settlement!({ ...paid!, payment: { ...paid!.payment, reference: 'cs_only' } })).toBeNull()
+  })
+
+  const token = { 'POST https://api-m.sandbox.paypal.com/v1/oauth2/token': () => ({ body: { access_token: 'A', expires_in: 3600 } }) }
+  const breakdown = {
+    gross_amount: { currency_code: 'USD', value: '989.10' },
+    paypal_fee: { currency_code: 'USD', value: '34.99' },
+    net_amount: { currency_code: 'USD', value: '954.11' },
+  }
+
+  it('paypal: records the fee from the capture response at capture time', async () => {
+    const { store, order } = await discountedOrder()
+    const capture = { id: 'CAP1', status: 'COMPLETED', amount: { currency_code: 'USD', value: '989.10' }, seller_receivable_breakdown: breakdown }
+    const { fetch } = fakeFetch({
+      ...token,
+      'GET https://api-m.sandbox.paypal.com/v2/checkout/orders/PP1': () => ({ body: { id: 'PP1', status: 'APPROVED', purchase_units: [{ custom_id: order.id }] } }),
+      'POST https://api-m.sandbox.paypal.com/v2/checkout/orders/PP1/capture': () => ({ body: { id: 'PP1', status: 'COMPLETED', purchase_units: [{ custom_id: order.id, payments: { captures: [capture] } }] } }),
+    })
+    const adapter = paypalPayments({ clientId: 'c', clientSecret: 's', webhookId: 'W', fetch })
+    const events = await adapter.verifyReturn!(new URLSearchParams('token=PP1'), order, { store, siteUrl: '' })
+    const [paid] = await applyPaymentEvents(store, events)
+    expect(paid!.payment).toMatchObject({
+      reference: 'CAP1',
+      transactionId: 'CAP1',
+      amountReceived: { amount: 98910, currency: 'usd' },
+      fee: { amount: 3499, currency: 'usd' },
+      net: { amount: 95411, currency: 'usd' },
+      feeReportedAt: expect.any(String),
+    })
+  })
+
+  it('paypal: settlement() reads a capture back, fee null while PayPal has not reported it', async () => {
+    const { store, order } = await discountedOrder()
+    let capture: Record<string, unknown> = { id: 'CAP1', status: 'COMPLETED', amount: { currency_code: 'USD', value: '989.10' } }
+    const { fetch, calls } = fakeFetch({ ...token, 'GET https://api-m.sandbox.paypal.com/v2/payments/captures/CAP1': () => ({ body: capture }) })
+    const adapter = paypalPayments({ clientId: 'c', clientSecret: 's', webhookId: 'W', fetch })
+    const paid = await store.orders.markPaid(order.id, { provider: 'paypal', reference: 'CAP1' })
+    expect(await adapter.settlement!(paid)).toEqual({ amountReceived: { amount: 98910, currency: 'usd' }, fee: null, net: null, transactionId: 'CAP1' })
+    capture = { ...capture, seller_receivable_breakdown: breakdown }
+    expect(await adapter.settlement!(paid)).toMatchObject({ fee: { amount: 3499, currency: 'usd' }, net: { amount: 95411, currency: 'usd' } })
+    expect(calls.filter((c) => c.url.endsWith('/v2/payments/captures/CAP1'))).toHaveLength(2)
+  })
+
+  it('manual, btcpay and bitcoin adapters report no fee', async () => {
+    const { manualPayments } = await import('../src/payments/manual')
+    expect(manualPayments().settlement).toBeUndefined()
+    expect(btcpayPayments({ serverUrl: 'https://btcpay.test', storeId: 's', apiKey: 'k', webhookSecret: 'w' }).settlement).toBeUndefined()
   })
 })

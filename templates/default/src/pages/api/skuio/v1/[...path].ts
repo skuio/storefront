@@ -1,7 +1,7 @@
 import type { APIContext } from 'astro'
 import { handleStoreApi } from '@skuio/storefront/api'
 import { resolveImage } from '../../../../lib/images'
-import { readEnv, siteUrl, store } from '../../../../lib/store'
+import { paymentMethods, readEnv, siteUrl, store } from '../../../../lib/store'
 
 export const prerender = false
 
@@ -21,5 +21,7 @@ export function ALL(context: APIContext): Promise<Response> {
       const resolved = resolveImage({ src })
       return resolved ? new URL(resolved.src, `${site}/`).href : null
     },
+    // GET /orders/{id} asks the processor that took a paid order for its fee when the store has not recorded it yet.
+    payments: () => paymentMethods(context),
   })
 }

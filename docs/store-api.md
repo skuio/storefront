@@ -112,7 +112,14 @@ watermark by a minute and de-duplicate by `id`.
 {
   "id": "ord_01J9…", "number": "1042",
   "status": "paid",
-  "payment": { "status": "paid", "provider": "stripe", "reference": "pi_3UF…", "method_label": "Card", "paid_at": "…" },
+  "payment": {
+    "status": "paid", "provider": "stripe", "reference": "pi_3UF…", "method_label": "Card", "paid_at": "…",
+    "amount_received": { "amount": 98910, "currency": "USD" },
+    "fee": { "amount": 2898, "currency": "USD" },
+    "net": { "amount": 96012, "currency": "USD" },
+    "transaction_id": "ch_3UF…",
+    "fee_reported_at": "…"
+  },
   "currency": "USD", "subtotal": {…}, "shipping": {…}, "tax": {…}, "discount": {…}, "total": {…},
   "customer": { "id": "cus_…", "email": "…", "name": "…", "phone": "…" },
   "shipping_address": { "name", "line1", "line2", "city", "state", "postal_code", "country" },
@@ -144,6 +151,30 @@ If the processor reports a payment for an order that was already expired, the st
 a paid order is never lost — so a consumer that mirrors `cancelled` must accept a later
 `paid`. `payment.provider` is set as soon as the adapter starts (`stripe`, `manual`), before
 `payment.status` becomes `paid`.
+
+### What the processor captured and kept
+
+`payment` carries what the processor actually took, so an operations system never has to call
+Stripe or PayPal itself. Money values are the same `{ amount, currency }` (integer minor units)
+as every other amount:
+
+| Field | Meaning | Stripe | PayPal |
+|---|---|---|---|
+| `amount_received` | What the processor captured for this order | PaymentIntent `amount_received`, in the charge currency | capture `seller_receivable_breakdown.gross_amount` |
+| `fee` | What the processor kept, **in its settlement currency** (may differ from the order's) | `balance_transaction.fee` / `.currency` | `paypal_fee` |
+| `net` | `amount_received` − `fee`, in the settlement currency | `balance_transaction.net` | `net_amount` |
+| `transaction_id` | The processor's charge / capture id | `ch_…` (the intent's `latest_charge`) | capture id (also `reference`) |
+| `fee_reported_at` | When the store recorded the fee (ISO 8601) | | |
+
+All five are `null` until known. The Stripe and PayPal adapters record them when they confirm the
+payment (webhook or the buyer's return). Stripe can create the balance transaction a moment after
+the charge, so `fee` may still be `null` then; `GET /orders/{id}` fills it in: for a paid (or
+since refunded) `stripe`/`paypal` order whose `fee` is `null`, the store asks the processor first,
+stores the answer and returns it. If the processor is unreachable the GET still succeeds, with
+`fee: null`. The list endpoint never calls a processor. Recording a fee bumps the order's
+`updated_at`, so the next `GET /orders?updated_since=` returns it. `manual`, `bitcoin` and `btcpay`
+orders always have all five `null`; a fee is never invented, and a processor-side refund does not
+change them.
 
 `PATCH /orders/{id}` accepts any of `external_reference` (string), `status: "cancelled"`,
 `payment: { "status": "paid"|"refunded"|"failed", "provider"?, "reference"?, "paid_at"? }`

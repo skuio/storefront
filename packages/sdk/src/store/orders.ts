@@ -1,6 +1,6 @@
 import type { DbStatement } from '../db/driver'
 import { merchantNewOrderMail, orderConfirmationMail, shippingConfirmationMail } from '../mail/templates'
-import type { Fulfillment, Money, Order, OrderStatus } from '../types'
+import type { Fulfillment, Money, Order, OrderStatus, PaymentSettlement } from '../types'
 import { chunk, placeholders, type StoreContext } from './context'
 import { newId } from './crypto'
 import { normalizeEmail } from './customers'
@@ -17,6 +17,8 @@ export interface PaymentRecord {
   /** What the processor actually charged, when it may differ from the order (promotion codes). */
   amount?: Money
   adjustments?: { discount?: Money; tax?: Money; total?: Money }
+  /** What the processor captured and kept, when the adapter knows it at confirmation time. */
+  settlement?: PaymentSettlement
 }
 
 export interface FulfillmentInput {
@@ -250,7 +252,8 @@ export class OrdersService {
    */
   async markPaid(id: string, payment: PaymentRecord, opts: { notify?: boolean } = {}): Promise<Order> {
     const order = await this.require(id)
-    if (order.payment.status === 'paid') return order
+    // Already paid (webhook redelivery, or the return page beat the webhook): only fill in what the processor now knows.
+    if (order.payment.status === 'paid') return payment.settlement ? this.recordSettlement(id, payment.settlement) : order
     if (order.payment.status === 'refunded') {
       this.ctx.log('orders: ignoring a payment for a refunded order', { id, provider: payment.provider, reference: payment.reference })
       return order
@@ -263,13 +266,14 @@ export class OrdersService {
     const tax = payment.adjustments?.tax?.amount ?? order.tax.amount
     const total = payment.adjustments?.total?.amount ?? payment.amount?.amount ?? order.subtotal.amount + order.shipping.amount + tax - discount
     const nextStatus: OrderStatus = order.status === 'pending_payment' || reopened ? 'paid' : order.status
+    const settled = settlementColumns(order, payment.settlement, now)
     const statements: DbStatement[] = [
       this.ctx.db
         .prepare(
           `UPDATE orders SET status = ?, payment_status = 'paid', payment_provider = ?, payment_reference = ?, payment_method_label = ?, paid_at = ?,
-             discount = ?, tax = ?, total = ?, cancelled_at = ?, updated_at = ? WHERE id = ?`
+             discount = ?, tax = ?, total = ?, cancelled_at = ?, ${SETTLEMENT_SET}, updated_at = ? WHERE id = ?`
         )
-        .bind(nextStatus, payment.provider, payment.reference ?? null, payment.methodLabel ?? null, paidAt, discount, tax, total, reopened ? null : order.cancelledAt, now, id),
+        .bind(nextStatus, payment.provider, payment.reference ?? null, payment.methodLabel ?? null, paidAt, discount, tax, total, reopened ? null : order.cancelledAt, ...settled.values, now, id),
       this.ctx.db
         .prepare(`INSERT INTO payments (id, order_id, provider, reference, status, amount, currency, method_label, created_at) VALUES (?, ?, ?, ?, 'paid', ?, ?, ?, ?)`)
         .bind(newId('pay'), id, payment.provider, payment.reference ?? null, total, order.currency, payment.methodLabel ?? null, now),
@@ -281,6 +285,29 @@ export class OrdersService {
     const updated = await this.require(id)
     if (opts.notify !== false) await this.notifyPaid(updated)
     return updated
+  }
+
+  /**
+   * Record what the processor captured and kept (fee, net, charge id). A field the processor did
+   * not report keeps its stored value; `fee_reported_at` is stamped the first time a fee lands.
+   * Bumps `updated_at` when anything changed, so `GET /orders?updated_since=` returns the order.
+   * Idempotent: the same report twice changes nothing the second time.
+   */
+  async recordSettlement(id: string, settlement: PaymentSettlement): Promise<Order> {
+    const order = await this.require(id)
+    const now = this.ctx.now()
+    const settled = settlementColumns(order, settlement, now)
+    if (!settled.changed) return order
+    await this.ctx.db.batch([
+      this.ctx.db.prepare(`UPDATE orders SET ${SETTLEMENT_SET}, updated_at = ? WHERE id = ?`).bind(...settled.values, now, id),
+      this.events.statement(id, 'payment_settlement_recorded', {
+        transaction_id: settled.next.transactionId,
+        fee: settled.next.fee?.amount ?? null,
+        fee_currency: settled.next.fee?.currency ?? null,
+        net: settled.next.net?.amount ?? null,
+      }),
+    ])
+    return this.require(id)
   }
 
   async setPaymentStatus(id: string, input: { status: 'paid' | 'refunded' | 'failed'; provider?: string | null; reference?: string | null; paid_at?: string | null }): Promise<Order> {
@@ -420,4 +447,39 @@ export class OrdersService {
       return false
     }
   }
+}
+
+const SETTLEMENT_SET = `payment_amount_received = ?, payment_amount_received_currency = ?, payment_fee = ?, payment_fee_currency = ?,
+  payment_net = ?, payment_net_currency = ?, payment_transaction_id = ?, payment_fee_reported_at = ?`
+
+/** The settlement columns after merging a processor report over what the order already has. */
+function settlementColumns(order: Order, report: PaymentSettlement | undefined, now: string) {
+  const p = order.payment
+  const pick = <T>(reported: T | null | undefined, stored: T | null): T | null => (reported === undefined || reported === null ? stored : reported)
+  const fee = pick(report?.fee, p.fee)
+  const next = {
+    amountReceived: pick(report?.amountReceived, p.amountReceived),
+    fee,
+    net: pick(report?.net, p.net),
+    transactionId: pick(report?.transactionId, p.transactionId),
+    feeReportedAt: p.feeReportedAt ?? (fee ? now : null),
+  }
+  const sameMoney = (a: Money | null, b: Money | null) => (a === null || b === null ? a === b : a.amount === b.amount && a.currency === b.currency)
+  const changed =
+    !sameMoney(next.amountReceived, p.amountReceived) ||
+    !sameMoney(next.fee, p.fee) ||
+    !sameMoney(next.net, p.net) ||
+    next.transactionId !== p.transactionId ||
+    next.feeReportedAt !== p.feeReportedAt
+  const values: (string | number | null)[] = [
+    next.amountReceived?.amount ?? null,
+    next.amountReceived?.currency ?? null,
+    next.fee?.amount ?? null,
+    next.fee?.currency ?? null,
+    next.net?.amount ?? null,
+    next.net?.currency ?? null,
+    next.transactionId,
+    next.feeReportedAt,
+  ]
+  return { next, changed, values }
 }

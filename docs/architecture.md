@@ -59,7 +59,9 @@ database.
 `PaymentAdapter` is the seam: `start(order)` takes a complete, priced,
 addressed order and returns a redirect or instructions; `handleWebhook`
 decodes what the processor reports; `verifyReturn` covers the buyer coming
-back before the webhook lands. `stripe` (hosted Checkout in payment-only
+back before the webhook lands; the optional `settlement(order)` asks the
+processor what it captured and kept (its fee), which the Store API uses to fill
+in `payment.fee` on `GET /orders/{id}` when the confirmation did not carry it. `stripe` (hosted Checkout in payment-only
 mode) and `manual` (pay later, marked paid by the operations system) ship;
 `manual` is the proof that the pipeline needs no processor at all.
 

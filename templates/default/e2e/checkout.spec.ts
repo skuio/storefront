@@ -99,6 +99,9 @@ test('an order goes cart → checkout → pending → paid → shipped through t
   const paid = await request.patch(`/api/skuio/v1/orders/${orderId}`, { headers: api, data: { external_reference: 'SO-E2E', payment: { status: 'paid', provider: 'manual', reference: 'e2e' } } })
   expect(paid.status()).toBe(200)
   expect((await paid.json()).data.status).toBe('paid')
+  // A manual payment has no processor: the processor fields are present and null, and reading the order still works.
+  const paidOrder = await (await request.get(`/api/skuio/v1/orders/${orderId}`, { headers: api })).json()
+  expect(paidOrder.data.payment).toMatchObject({ status: 'paid', amount_received: null, fee: null, net: null, transaction_id: null, fee_reported_at: null })
 
   const shipped = await request.post(`/api/skuio/v1/orders/${orderId}/fulfillments`, {
     headers: api,

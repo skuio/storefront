@@ -96,6 +96,24 @@ export interface OrderPayment {
   reference: string | null
   methodLabel: string | null
   paidAt: string | null
+  /** What the processor captured for this order. Null until a processor adapter reports it. */
+  amountReceived: Money | null
+  /** What the processor kept, in its settlement currency. Null until known. */
+  fee: Money | null
+  /** Received minus fee, in the settlement currency. Null until known. */
+  net: Money | null
+  /** The processor's charge / capture id (Stripe `ch_…`, PayPal capture id). */
+  transactionId: string | null
+  /** When the store recorded the fee. */
+  feeReportedAt: string | null
+}
+
+/** What a processor reports about a settled payment: captured amount, fee, net, charge id. Every field optional. */
+export interface PaymentSettlement {
+  amountReceived?: Money | null
+  fee?: Money | null
+  net?: Money | null
+  transactionId?: string | null
 }
 
 export interface OrderCustomer {

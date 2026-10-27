@@ -1,19 +1,21 @@
 import { describe, expect, it } from 'vitest'
-import { absoluteImageUrl, handleStoreApi } from '../src/api'
+import { absoluteImageUrl, handleStoreApi, type StoreApiOptions } from '../src/api'
+import type { PaymentAdapter } from '../src/payments'
+import type { PaymentSettlement } from '../src/types'
 import type { Store } from '../src/store'
 import { placeOrder, products, rig, seed } from './helpers'
 
 const KEY = 'k'.repeat(64)
 
 /** `configured: null` runs the handler with no STORE_API_KEY set at all. */
-function client(store: Store, configured: string | null = KEY) {
+function client(store: Store, configured: string | null = KEY, payments?: StoreApiOptions['payments']) {
   const apiKey = configured ?? undefined
   return async (method: string, path: string, body?: unknown, key: string | null = apiKey ?? null) => {
     const headers: Record<string, string> = {}
     if (key !== null) headers.authorization = `Bearer ${key}`
     if (body !== undefined) headers['content-type'] = 'application/json'
     const request = new Request(`https://store.test/api/skuio/v1${path}`, { method, headers, body: body === undefined ? undefined : typeof body === 'string' ? body : JSON.stringify(body) })
-    const response = await handleStoreApi(request, { store, apiKey })
+    const response = await handleStoreApi(request, { store, apiKey, ...(payments ? { payments } : {}) })
     const text = await response.text()
     return { status: response.status, body: text ? JSON.parse(text) : null, headers: response.headers }
   }
@@ -75,7 +77,10 @@ describe('Store API orders', () => {
       id: a.id,
       number: '1001',
       status: 'pending_payment',
-      payment: { status: 'unpaid', provider: null, reference: null, method_label: null, paid_at: null },
+      payment: {
+        status: 'unpaid', provider: null, reference: null, method_label: null, paid_at: null,
+        amount_received: null, fee: null, net: null, transaction_id: null, fee_reported_at: null,
+      },
       currency: 'USD',
       subtotal: { amount: 109900, currency: 'USD' },
       shipping: { amount: 0, currency: 'USD' },
@@ -116,7 +121,9 @@ describe('Store API orders', () => {
     const paid = await api('PATCH', `/orders/${order.id}`, { payment: { status: 'paid', provider: 'manual', reference: 'wire-1', paid_at: '2026-09-13T10:00:00Z' } })
     expect(paid.status).toBe(200)
     expect(paid.body.data.status).toBe('paid')
-    expect(paid.body.data.payment).toEqual({ status: 'paid', provider: 'manual', reference: 'wire-1', method_label: null, paid_at: '2026-09-13T10:00:00.000Z' })
+    expect(paid.body.data.payment).toEqual({ status: 'paid', provider: 'manual', reference: 'wire-1', method_label: null, paid_at: '2026-09-13T10:00:00.000Z',
+      amount_received: null, fee: null, net: null, transaction_id: null, fee_reported_at: null,
+    })
 
     expect((await api('PATCH', `/orders/${order.id}`, { status: 'refunded' })).status).toBe(422)
     expect((await api('PATCH', `/orders/${order.id}`, {})).status).toBe(422)
@@ -505,5 +512,112 @@ describe('absoluteImageUrl', () => {
     expect(absoluteImageUrl('a.jpg', { origin })).toBe('https://shop.example/a.jpg')
     expect(absoluteImageUrl('a.jpg')).toBe('a.jpg')
     expect(absoluteImageUrl('a.jpg', { origin, imageUrl: () => undefined })).toBe('https://shop.example/a.jpg')
+  })
+})
+
+describe('Store API payment settlement (fee)', () => {
+  const settled: PaymentSettlement = {
+    amountReceived: { amount: 109900, currency: 'usd' },
+    fee: { amount: 3217, currency: 'usd' },
+    net: { amount: 106683, currency: 'usd' },
+    transactionId: 'ch_1',
+  }
+  function adapter(id: string, settlement: () => Promise<PaymentSettlement | null>): PaymentAdapter & { calls: number } {
+    const a = {
+      id,
+      label: id,
+      calls: 0,
+      async start() {
+        return { kind: 'instructions' as const, html: '' }
+      },
+      async handleWebhook() {
+        return []
+      },
+      async settlement() {
+        a.calls++
+        return settlement()
+      },
+    }
+    return a
+  }
+
+  it('serializes amount_received, fee, net, transaction_id and fee_reported_at as ApiMoney / strings', async () => {
+    const { store } = rig()
+    await seed(store)
+    const order = await placeOrder(store)
+    await store.orders.markPaid(order.id, { provider: 'stripe', reference: 'pi_1', settlement: settled })
+    const res = await client(store)('GET', `/orders/${order.id}`)
+    expect(res.body.data.payment).toEqual({
+      status: 'paid',
+      provider: 'stripe',
+      reference: 'pi_1',
+      method_label: null,
+      paid_at: expect.any(String),
+      amount_received: { amount: 109900, currency: 'USD' },
+      fee: { amount: 3217, currency: 'USD' },
+      net: { amount: 106683, currency: 'USD' },
+      transaction_id: 'ch_1',
+      fee_reported_at: expect.any(String),
+    })
+    expect(Date.parse(res.body.data.payment.fee_reported_at)).not.toBeNaN()
+  })
+
+  it('fills a missing fee on GET /orders/{id} from the processor, persists it and bumps updated_at', async () => {
+    const { store } = rig()
+    await seed(store)
+    const order = await placeOrder(store)
+    const paid = await store.orders.markPaid(order.id, { provider: 'stripe', reference: 'pi_1', settlement: { amountReceived: settled.amountReceived, transactionId: 'ch_1' } })
+    expect(paid.payment.fee).toBeNull()
+    expect(paid.payment.feeReportedAt).toBeNull()
+    const stripe = adapter('stripe', async () => settled)
+    const api = client(store, KEY, () => [adapter('paypal', async () => null), stripe])
+
+    // The list never calls the processor.
+    const list = await api('GET', '/orders')
+    expect(list.body.data[0].payment.fee).toBeNull()
+    expect(stripe.calls).toBe(0)
+
+    const one = await api('GET', `/orders/${order.id}`)
+    expect(one.status).toBe(200)
+    expect(one.body.data.payment).toMatchObject({ fee: { amount: 3217, currency: 'USD' }, net: { amount: 106683, currency: 'USD' }, transaction_id: 'ch_1' })
+    expect(one.body.data.updated_at > paid.updatedAt).toBe(true)
+    const since = await api('GET', `/orders?updated_since=${encodeURIComponent(one.body.data.updated_at)}`)
+    expect(since.body.data.map((o: { id: string }) => o.id)).toEqual([order.id])
+    expect((await store.orders.require(order.id)).payment.fee).toEqual({ amount: 3217, currency: 'usd' })
+
+    // Known now: the processor is not asked again.
+    await api('GET', `/orders/${order.id}`)
+    expect(stripe.calls).toBe(1)
+  })
+
+  it('never fails the GET when the processor errors, and leaves unpaid, manual and unknown-provider orders alone', async () => {
+    const { store } = rig()
+    await seed(store)
+    const broken = adapter('stripe', async () => {
+      throw new Error('stripe is down')
+    })
+    const manual = adapter('manual', async () => settled)
+    const api = client(store, KEY, [broken, manual])
+    const order = await placeOrder(store)
+    await store.orders.markPaid(order.id, { provider: 'stripe', reference: 'pi_1' })
+    const errored = await api('GET', `/orders/${order.id}`)
+    expect(errored.status).toBe(200)
+    expect(errored.body.data.payment.fee).toBeNull()
+    expect(broken.calls).toBe(1)
+
+    const unpaid = await placeOrder(store)
+    await store.orders.startPayment(unpaid.id, { provider: 'stripe', kind: 'redirect' })
+    await api('GET', `/orders/${unpaid.id}`)
+    expect(broken.calls).toBe(1)
+
+    const btc = await placeOrder(store)
+    await store.orders.markPaid(btc.id, { provider: 'bitcoin', reference: 'txid' })
+    expect((await api('GET', `/orders/${btc.id}`)).body.data.payment).toMatchObject({ amount_received: null, fee: null, net: null, transaction_id: null, fee_reported_at: null })
+
+    // A throwing adapter list is swallowed too.
+    const throwing = client(store, KEY, () => {
+      throw new Error('STRIPE_SECRET_KEY is not set')
+    })
+    expect((await throwing('GET', `/orders/${order.id}`)).status).toBe(200)
   })
 })

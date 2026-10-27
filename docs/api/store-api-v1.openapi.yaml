@@ -61,6 +61,10 @@ paths:
   /orders/{id}:
     get:
       operationId: getOrder
+      description: >-
+        One order. When the order was paid through stripe or paypal and payment.fee is still null, the store first
+        asks the processor for the fee, stores it (bumping updated_at) and returns it. A processor failure never fails
+        this request: the order comes back with fee null. GET /orders (the list) never calls the processor.
       parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
       responses:
         '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/OrderEnvelope' } } } }
@@ -356,6 +360,17 @@ components:
             reference: { type: [string, 'null'] }
             method_label: { type: [string, 'null'] }
             paid_at: { type: [string, 'null'], format: date-time }
+            amount_received:
+              description: What the processor captured for this order (Stripe PaymentIntent amount_received; PayPal capture gross). Null for manual, bitcoin and btcpay orders, and until a Stripe/PayPal adapter reports it.
+              oneOf: [{ $ref: '#/components/schemas/Money' }, { type: 'null' }]
+            fee:
+              description: What the processor kept, in its settlement currency (Stripe balance_transaction.currency; PayPal paypal_fee.currency_code), which may differ from the order currency. Null until known. GET /orders/{id} asks the processor when it is still null on a paid stripe/paypal order.
+              oneOf: [{ $ref: '#/components/schemas/Money' }, { type: 'null' }]
+            net:
+              description: amount_received minus fee, in the settlement currency (Stripe balance_transaction.net; PayPal net_amount). Null until known.
+              oneOf: [{ $ref: '#/components/schemas/Money' }, { type: 'null' }]
+            transaction_id: { type: [string, 'null'], description: "The processor's charge / capture id: Stripe ch_…, PayPal capture id." }
+            fee_reported_at: { type: [string, 'null'], format: date-time, description: When the store recorded the fee. Recording it bumps the order's updated_at. }
         currency: { type: string }
         subtotal: { $ref: '#/components/schemas/Money' }
         shipping: { $ref: '#/components/schemas/Money' }
