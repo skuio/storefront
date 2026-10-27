@@ -462,7 +462,7 @@ components:
           items: { type: object, properties: { id: { type: string }, slug: { type: [string, 'null'] }, name: { type: [string, 'null'] } } }
         images:
           type: array
-          items: { type: object, properties: { url: { type: string }, alt: { type: [string, 'null'] }, position: { type: integer } } }
+          items: { type: object, properties: { url: { type: string, format: uri, description: 'Always absolute and publicly loadable. A stored filename or path is resolved to the URL the store serves it at; a URL pushed with PUT /products comes back unchanged.' }, alt: { type: [string, 'null'] }, position: { type: integer } } }
         inventory:
           type: [object, 'null']
           description: Null when the store holds no stock row for the SKU, which is not the same as zero.

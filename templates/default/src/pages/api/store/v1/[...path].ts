@@ -1,6 +1,7 @@
 import type { APIContext } from 'astro'
 import { handleStoreApi } from '@skuio/storefront/api'
-import { readEnv, store } from '../../../../lib/store'
+import { resolveImage } from '../../../../lib/images'
+import { readEnv, siteUrl, store } from '../../../../lib/store'
 
 export const prerender = false
 
@@ -12,5 +13,14 @@ export const prerender = false
  * through /admin/connect, or the STORE_API_KEY secret as a break-glass.
  */
 export function ALL(context: APIContext): Promise<Response> {
-  return handleStoreApi(context.request, { store: store(context), apiKey: readEnv(context, 'STORE_API_KEY') })
+  const site = siteUrl(context)
+  return handleStoreApi(context.request, {
+    store: store(context),
+    apiKey: readEnv(context, 'STORE_API_KEY'),
+    // images[].url is the URL this site serves the image at (/_astro/<name>.<hash>.jpg), absolute.
+    imageUrl: (src) => {
+      const resolved = resolveImage({ src })
+      return resolved ? new URL(resolved.src, `${site}/`).href : null
+    },
+  })
 }

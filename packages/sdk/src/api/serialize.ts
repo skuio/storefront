@@ -228,8 +228,42 @@ export function serializeQuote(q: StoreQuote, numberPrefix = ''): ApiQuote {
   }
 }
 
+/**
+ * Maps a stored image src to the public URL a consumer can load. Return null
+ * (or undefined) to fall back to the default: an absolute URL as-is, anything
+ * else resolved against the request origin.
+ */
+export type ImageUrlResolver = (src: string) => string | null | undefined
+
+export interface SerializeProductOptions {
+  /** The store's own image resolver; see StoreApiOptions.imageUrl. */
+  imageUrl?: ImageUrlResolver
+  /** The origin relative srcs resolve against when the resolver has no answer ("https://store.example"). */
+  origin?: string
+}
+
+const ABSOLUTE = /^[a-z][a-z0-9+.-]*:/i
+
+/**
+ * The absolute URL the Store API reports for an image. The store's resolver
+ * wins; without one (or when it returns null) an absolute URL passes through
+ * unchanged and a relative path or bare filename is resolved against the
+ * request origin. Resolving a bare filename only produces a loadable URL when
+ * the store serves the file at that path — stores that fingerprint their
+ * assets must pass a resolver.
+ */
+export function absoluteImageUrl(src: string, options: SerializeProductOptions = {}): string {
+  const url = options.imageUrl?.(src) || src
+  if (ABSOLUTE.test(url) || !options.origin) return url
+  try {
+    return new URL(url, `${options.origin.replace(/\/+$/, '')}/`).href
+  } catch {
+    return url
+  }
+}
+
 /** The Store API's view of a catalog product — the stored row, not the shopper projection. */
-export function serializeProduct(p: ProductRecord): ApiProduct {
+export function serializeProduct(p: ProductRecord, options: SerializeProductOptions = {}): ApiProduct {
   return {
     sku: p.sku,
     name: p.name,
@@ -243,7 +277,7 @@ export function serializeProduct(p: ProductRecord): ApiProduct {
     position: p.position,
     legacy_path: p.legacyPath,
     categories: p.categories.map((c) => ({ id: c.id, slug: c.slug, name: c.name })),
-    images: p.images.map((i) => ({ url: i.url, alt: i.alt, position: i.position })),
+    images: p.images.map((i) => ({ url: absoluteImageUrl(i.url, options), alt: i.alt, position: i.position })),
     inventory: p.inventory ? { available: p.inventory.available, allow_backorder: p.inventory.allowBackorder, updated_at: p.inventory.updatedAt } : null,
     created_at: p.createdAt,
     updated_at: p.updatedAt,

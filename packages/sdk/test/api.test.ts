@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { handleStoreApi } from '../src/api'
+import { absoluteImageUrl, handleStoreApi } from '../src/api'
 import type { Store } from '../src/store'
 import { placeOrder, products, rig, seed } from './helpers'
 
@@ -441,5 +441,69 @@ describe('Store API catalog reads', () => {
     expect((await api('GET', '/products', undefined, null)).status).toBe(401)
     expect((await api('GET', '/products/VDCTOYTAC9504', undefined, null)).status).toBe(401)
     expect((await api('GET', '/categories', undefined, null)).status).toBe(401)
+  })
+})
+
+describe('Store API image URLs', () => {
+  const imageApi = (store: Store, imageUrl?: (src: string) => string | null) =>
+    async (path: string, base = 'https://store.test') => {
+      const request = new Request(`${base}/api/skuio/v1${path}`, { headers: { authorization: `Bearer ${KEY}` } })
+      const response = await handleStoreApi(request, { store, apiKey: KEY, imageUrl })
+      return { status: response.status, body: await response.json() }
+    }
+  const urls = (product: { images: { url: string }[] }) => product.images.map((i) => i.url)
+
+  it('makes a bare stored filename absolute against the request origin when the store has no resolver', async () => {
+    const { store } = rig()
+    await seed(store)
+    const api = imageApi(store)
+    expect(urls((await api('/products/VDCHCIV0611')).body.data)).toEqual(['https://store.test/civic.jpg'])
+    expect(urls((await api('/products/VDCHCIV0611', 'http://localhost:4321')).body.data)).toEqual(['http://localhost:4321/civic.jpg'])
+    // An absolute URL (an image SKU.io pushed) passes through unchanged.
+    expect(urls((await api('/products/VDCTOYTAC9504')).body.data)).toEqual(['https://cdn.test/tacoma.jpg'])
+  })
+
+  it("applies the store's resolver on list and get, and resolves a relative answer against the origin", async () => {
+    const { store } = rig()
+    await seed(store)
+    const seen: string[] = []
+    const api = imageApi(store, (src) => {
+      seen.push(src)
+      return src === 'civic.jpg' ? '/_astro/civic.Ab12Cd.jpg' : null
+    })
+
+    const one = await api('/products/VDCHCIV0611')
+    expect(urls(one.body.data)).toEqual(['https://store.test/_astro/civic.Ab12Cd.jpg'])
+
+    const list = await api('/products')
+    const bySku = Object.fromEntries(list.body.data.map((p: { sku: string; images: { url: string }[] }) => [p.sku, urls(p)]))
+    expect(bySku).toEqual({
+      VDCHCIV0611: ['https://store.test/_astro/civic.Ab12Cd.jpg'],
+      // The resolver returned null: the absolute URL falls back to passing through.
+      VDCTOYTAC9504: ['https://cdn.test/tacoma.jpg'],
+      VDCTOYSUP9302: [],
+    })
+    expect(seen).toContain('https://cdn.test/tacoma.jpg')
+  })
+
+  it("keeps an absolute URL the resolver returns, so a store can point at its CDN", async () => {
+    const { store } = rig()
+    await seed(store)
+    const api = imageApi(store, (src) => `https://images.example/${src.split('/').pop()}`)
+    expect(urls((await api('/products/VDCHCIV0611')).body.data)).toEqual(['https://images.example/civic.jpg'])
+    expect(urls((await api('/products/VDCTOYTAC9504')).body.data)).toEqual(['https://images.example/tacoma.jpg'])
+  })
+})
+
+describe('absoluteImageUrl', () => {
+  it('passes absolute and scheme URLs through, resolves paths and bare names, and leaves srcs alone without an origin', () => {
+    const origin = 'https://shop.example/'
+    expect(absoluteImageUrl('https://cdn.test/a.jpg', { origin })).toBe('https://cdn.test/a.jpg')
+    expect(absoluteImageUrl('data:image/png;base64,AAAA', { origin })).toBe('data:image/png;base64,AAAA')
+    expect(absoluteImageUrl('//cdn.test/a.jpg', { origin })).toBe('https://cdn.test/a.jpg')
+    expect(absoluteImageUrl('/img/a b.jpg', { origin })).toBe('https://shop.example/img/a%20b.jpg')
+    expect(absoluteImageUrl('a.jpg', { origin })).toBe('https://shop.example/a.jpg')
+    expect(absoluteImageUrl('a.jpg')).toBe('a.jpg')
+    expect(absoluteImageUrl('a.jpg', { origin, imageUrl: () => undefined })).toBe('https://shop.example/a.jpg')
   })
 })

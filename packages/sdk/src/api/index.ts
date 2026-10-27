@@ -2,7 +2,7 @@ import type { Connection, Store } from '../store'
 import { API_KEY_PREFIX, type ConnectScope } from '../store/connections'
 import { secretsEqual } from '../store/crypto'
 import { StoreError } from '../store/errors'
-import { serializeCategory, serializeFulfillment, serializeOrder, serializeProduct, serializeQuote } from './serialize'
+import { serializeCategory, serializeFulfillment, serializeOrder, serializeProduct, serializeQuote, type ImageUrlResolver, type SerializeProductOptions } from './serialize'
 import {
   validateCategories, validateFulfillment, validateInventory, validateListQuery, validateOrderPatch, validateProducts, validateQuotePatch, ValidationError,
 } from './validate'
@@ -17,6 +17,15 @@ export interface StoreApiOptions {
   apiKey: string | undefined
   /** Where the API is mounted in the request URL. */
   basePath?: string
+  /**
+   * Maps a stored product image src (a bare filename, a path, or an absolute
+   * URL) to the absolute URL the store actually serves it at — e.g. the
+   * fingerprinted `/_astro/<name>.<hash>.jpg` a template's `resolveImage()`
+   * finds, made absolute against the site URL. Return null to fall back to the
+   * default: an absolute src as-is, a relative one resolved against the
+   * request origin. `images[].url` in every response is always absolute.
+   */
+  imageUrl?: ImageUrlResolver
 }
 
 /** Who a request authenticated as: the environment key, or an approved connection. */
@@ -67,7 +76,8 @@ export async function handleStoreApi(request: Request, options: StoreApiOptions)
       return error(403, 'forbidden', `This connection was not approved for "${scope}"; reconnect and approve it at /admin/connect`)
     }
 
-    return await route(method, path, url, request, options.store, caller)
+    const images: SerializeProductOptions = { imageUrl: options.imageUrl, origin: url.origin }
+    return await route(method, path, url, request, options.store, caller, images)
   } catch (e) {
     if (e instanceof ValidationError) return error(422, 'validation_failed', e.message, e.details)
     if (e instanceof StoreError) return error(e.status, e.code, e.message, e.details)
@@ -137,7 +147,7 @@ function scopeFor(path: string): ConnectScope | null {
   return null // /health, /connect
 }
 
-async function route(method: string, path: string, url: URL, request: Request, store: Store, caller: ApiCaller): Promise<Response> {
+async function route(method: string, path: string, url: URL, request: Request, store: Store, caller: ApiCaller, images: SerializeProductOptions): Promise<Response> {
   const segments = path.split('/').filter(Boolean)
 
   if (path === '/health' && method === 'GET') {
@@ -228,12 +238,12 @@ async function route(method: string, path: string, url: URL, request: Request, s
   if (path === '/products' && method === 'GET') {
     const query = validateListQuery(url.searchParams, { defaultLimit: 50, maxLimit: 200, allowUpdatedSince: true, allowActive: true })
     const page = await store.catalog.listProducts(query)
-    return json({ data: page.products.map(serializeProduct), next_cursor: page.nextCursor })
+    return json({ data: page.products.map((p) => serializeProduct(p, images)), next_cursor: page.nextCursor })
   }
 
   if (segments[0] === 'products' && segments.length === 2) {
     const sku = decodeURIComponent(segments[1]!)
-    if (method === 'GET') return json({ data: serializeProduct(await store.catalog.requireProduct(sku)) })
+    if (method === 'GET') return json({ data: serializeProduct(await store.catalog.requireProduct(sku), images) })
     if (method === 'DELETE') {
       const done = await store.catalog.deactivateProduct(sku)
       if (!done) return error(404, 'not_found', `Product ${sku} not found`)
@@ -256,7 +266,8 @@ async function route(method: string, path: string, url: URL, request: Request, s
 }
 
 export {
-  serializeOrder, serializeFulfillment, serializeProduct, serializeCategory, serializeQuote,
+  serializeOrder, serializeFulfillment, serializeProduct, serializeCategory, serializeQuote, absoluteImageUrl,
+  type ImageUrlResolver, type SerializeProductOptions,
   type ApiOrder, type ApiFulfillment, type ApiProduct, type ApiCategory, type ApiQuote,
 } from './serialize'
 export { ValidationError } from './validate'
