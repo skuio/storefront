@@ -39,12 +39,34 @@ jobs:
       - run: npm ci
       - run: npm run build && npm test
       # A version already on npm (e.g. published by hand) is skipped, not an error.
+      #
+      # `npm publish` can fail AFTER the version has landed: the v0.9.0 run got
+      # "409 Conflict - Cannot publish over previously staged version" for a
+      # publish that succeeded, which stopped the step before @skuio/cli; the
+      # re-run then read a stale registry, published again and got 403. So a
+      # failed publish is judged by the registry, polled for about a minute, and
+      # never stops the other package from being published.
       - name: Publish
         run: |
+          version="${GITHUB_REF_NAME#v}"
+          on_npm() {
+            for i in 1 2 3 4 5 6; do
+              npm view "$1@$version" version --prefer-online >/dev/null 2>&1 && return 0
+              sleep 10
+            done
+            return 1
+          }
+          failed=""
           for w in @skuio/storefront @skuio/cli; do
-            if npm view "$w@${GITHUB_REF_NAME#v}" version >/dev/null 2>&1; then
-              echo "$w@${GITHUB_REF_NAME#v} is already on npm; skipping"
+            if npm view "$w@$version" version --prefer-online >/dev/null 2>&1; then
+              echo "$w@$version is already on npm; skipping"
+            elif npm publish -w "$w" --access public; then
+              echo "$w@$version published"
+            elif on_npm "$w"; then
+              echo "::warning::npm reported an error publishing $w@$version, but the version is on npm; treating it as published"
             else
-              npm publish -w "$w" --access public
+              echo "::error::$w@$version did not publish"
+              failed="$failed $w"
             fi
           done
+          [ -z "$failed" ] || exit 1
