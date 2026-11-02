@@ -89,7 +89,11 @@ publishes with a short-lived OIDC credential — no token stored, no passkey.
 4. `gh release create vX.Y.Z --notes …`
 
 The workflow refuses a run that is not on a tag or whose tag does not match both
-versions, and skips a version that is already on npm. If publishing fails with
+versions, and skips a version that is already on npm. A publish that npm answers
+with an error is judged by the registry: if the version appears within about a
+minute the run passes with a warning (npm can return 409 "previously staged
+version" for a publish that landed), and one package failing never stops the
+other from being published. If publishing fails with
 an auth error, the trust was removed or the workflow file renamed: someone with
 the npm account's passkey re-runs
 `npx -y npm@latest trust github <pkg> --file publish.yml --repo skuio/storefront --allow-publish --yes`
