@@ -236,7 +236,11 @@ export function stripeExpress(options: StripeExpressOptions): StripeExpress {
           metadata: { ...metadataFor(order), checkout: EXPRESS },
           description: describeOrder(order, ctx),
           receipt_email: order.customer.email,
-          ...shippingFor(order),
+          // No `shipping` here. The Express Checkout Element sends the wallet's address with the
+          // confirmation, and Stripe refuses to let a publishable key change shipping a secret or
+          // restricted key set: every express payment failed with payment_intent_invalid_parameter
+          // ("The shipping information on this PaymentIntent was last set with a restricted key")
+          // before reaching the card. The address still lands on the intent, from the wallet.
         },
         { idempotencyKey: `express-${order.id}-${order.updatedAt}` }
       )

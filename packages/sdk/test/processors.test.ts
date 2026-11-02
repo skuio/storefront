@@ -250,8 +250,9 @@ describe('stripe express', () => {
       automatic_payment_methods: { enabled: true },
       receipt_email: order.customer.email,
       metadata: { order_id: order.id, order_number: order.number, checkout: 'express' },
-      shipping: { address: { line1: order.shippingAddress.line1, country: order.shippingAddress.country } },
     })
+    // The wallet sends the address at confirmation; a server-set `shipping` makes Stripe reject that confirmation.
+    expect(params).not.toHaveProperty('shipping')
     expect(opts.idempotencyKey).toBe(`express-${order.id}-${order.updatedAt}`)
   })
 
