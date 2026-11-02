@@ -270,6 +270,121 @@ describe('stripe express', () => {
     expect(eventsFromStripe(ev('payment_intent.succeeded', pi({ checkout: 'express' })))).toEqual([{ type: 'ignored', reason: expect.stringContaining('no order id') }])
   })
 
+  it('authorize: holds the wallet payment from a ConfirmationToken, makes no order, and never charges', async () => {
+    let status = 'requires_capture'
+    const create = vi.fn(async (params: Stripe.PaymentIntentCreateParams) => ({ id: 'pi_h', status, client_secret: 'pi_h_secret', ...params }))
+    const stripe = { paymentIntents: { create } } as unknown as Stripe
+    const express = stripeExpress({ stripe })
+    const input = { confirmationTokenId: 'ctoken_1', amount: 12219, currency: 'USD', items: [{ sku: 'GNE2', quantity: 1 }], description: 'Store order', metadata: { checkout: 'spoofed', meta_ip: '1.2.3.4' } }
+
+    expect(await express.authorize(input)).toEqual({ status: 'authorized', intentId: 'pi_h' })
+    const [params, opts] = create.mock.calls[0]! as unknown as [Stripe.PaymentIntentCreateParams, Stripe.RequestOptions]
+    expect(params).toMatchObject({
+      amount: 12219,
+      currency: 'usd',
+      confirm: true,
+      confirmation_token: 'ctoken_1',
+      capture_method: 'manual',
+      automatic_payment_methods: { enabled: true, allow_redirects: 'never' },
+      metadata: { checkout: 'express', items: '[["GNE2",1]]', confirmation_token: 'ctoken_1', meta_ip: '1.2.3.4' },
+    })
+    // The server confirms, so nothing here may collide with what the wallet sends.
+    expect(params).not.toHaveProperty('shipping')
+    expect(params.metadata).not.toHaveProperty('order_id')
+    expect(opts.idempotencyKey).toBe('express-authorize-ctoken_1')
+
+    status = 'requires_action'
+    expect(await express.authorize(input)).toEqual({ status: 'requires_action', intentId: 'pi_h', clientSecret: 'pi_h_secret' })
+    status = 'requires_payment_method'
+    expect(await express.authorize(input)).toMatchObject({ status: 'declined', intentId: 'pi_h' })
+  })
+
+  it('authorize: a declined card is an answer, not an exception', async () => {
+    const create = vi.fn(async () => {
+      throw Object.assign(new Error('Your card has insufficient funds.'), { type: 'StripeCardError', payment_intent: { id: 'pi_d' } })
+    })
+    const express = stripeExpress({ stripe: { paymentIntents: { create } } as unknown as Stripe })
+    expect(await express.authorize({ confirmationTokenId: 'ctoken_2', amount: 100, currency: 'usd', items: [{ sku: 'A', quantity: 1 }], description: 'x' })).toEqual({
+      status: 'declined',
+      intentId: 'pi_d',
+      message: 'Your card has insufficient funds.',
+    })
+    const broken = stripeExpress({ stripe: { paymentIntents: { create: vi.fn(async () => { throw Object.assign(new Error('boom'), { type: 'StripeAPIError' }) }) } } as unknown as Stripe })
+    await expect(broken.authorize({ confirmationTokenId: 'ctoken_3', amount: 100, currency: 'usd', items: [{ sku: 'A', quantity: 1 }], description: 'x' })).rejects.toThrow('boom')
+  })
+
+  it('buyer → attach → capture: the order is built from Stripe, tied to the hold, then charged once', async () => {
+    const { order, ctx } = await discountedOrder()
+    const held = {
+      id: 'pi_h',
+      status: 'requires_capture',
+      amount: 12219,
+      currency: 'usd',
+      receipt_email: null,
+      shipping: { name: 'Dan Lyon', phone: '8605550100', address: { line1: '51 Smithfield Ave', line2: null, city: 'Meriden', state: 'CT', postal_code: '06451', country: 'us' } },
+      payment_method: { billing_details: { email: 'dan@example.com', name: 'Daniel Lyon', phone: null } },
+      metadata: { checkout: 'express', items: '[["GNE2",1],["GNE3",2]]', confirmation_token: 'ctoken_1' },
+    }
+    let captured = false
+    const retrieve = vi.fn(async (_id: string, params?: { expand?: string[] }) =>
+      params?.expand?.includes('payment_method')
+        ? held
+        : { ...held, status: captured ? 'succeeded' : 'requires_capture', amount_received: captured ? 12219 : 0, payment_method_types: ['card'], metadata: { ...held.metadata, order_id: order.id }, latest_charge: { id: 'ch_1', amount_captured: 12219, balance_transaction: { fee: 384, net: 11835, currency: 'usd' } } }
+    )
+    const update = vi.fn(async () => ({}))
+    const capture = vi.fn(async () => {
+      if (captured) throw Object.assign(new Error('already captured'), { code: 'payment_intent_unexpected_state' })
+      captured = true
+      return {}
+    })
+    const stripe = { paymentIntents: { retrieve, update, capture } } as unknown as Stripe
+    const express = stripeExpress({ stripe })
+
+    expect(await express.buyer('pi_h')).toEqual({
+      intentId: 'pi_h',
+      status: 'requires_capture',
+      email: 'dan@example.com',
+      name: 'Dan Lyon',
+      phone: '8605550100',
+      shippingAddress: { name: 'Dan Lyon', line1: '51 Smithfield Ave', city: 'Meriden', state: 'CT', postalCode: '06451', country: 'US' },
+      amount: { amount: 12219, currency: 'usd' },
+      items: [{ sku: 'GNE2', quantity: 1 }, { sku: 'GNE3', quantity: 2 }],
+      orderId: null,
+    })
+
+    await express.attach('pi_h', order, ctx)
+    expect(update).toHaveBeenCalledWith('pi_h', expect.objectContaining({ metadata: { order_id: order.id, order_number: order.number }, receipt_email: order.customer.email }))
+
+    const events = await express.capture('pi_h')
+    expect(events).toMatchObject([{ type: 'paid', orderId: order.id, reference: 'pi_h', settlement: { fee: { amount: 384 } } }])
+    expect(capture).toHaveBeenCalledWith('pi_h', {}, { idempotencyKey: 'express-capture-pi_h' })
+    // A repeated request reads the captured intent back instead of failing.
+    expect(await express.capture('pi_h')).toMatchObject([{ type: 'paid', orderId: order.id }])
+  })
+
+  it('buyer reads the address from the ConfirmationToken when the intent has none', async () => {
+    const retrieve = vi.fn(async () => ({ id: 'pi_h', status: 'requires_capture', amount: 100, currency: 'usd', shipping: null, payment_method: { billing_details: { email: 'a@b.co' } }, metadata: { confirmation_token: 'ctoken_9', items: '[["A",1]]' } }))
+    const tokens = vi.fn(async () => ({ shipping: { name: 'Ada', address: { line1: '1 Way', city: 'Toronto', state: 'ON', postal_code: 'M5V', country: 'CA' } } }))
+    const express = stripeExpress({ stripe: { paymentIntents: { retrieve }, confirmationTokens: { retrieve: tokens } } as unknown as Stripe })
+    expect(await express.buyer('pi_h')).toMatchObject({ email: 'a@b.co', name: 'Ada', shippingAddress: { line1: '1 Way', country: 'CA' } })
+    expect(tokens).toHaveBeenCalledWith('ctoken_9')
+  })
+
+  it('release drops a hold and never throws', async () => {
+    const cancel = vi.fn(async () => {
+      throw new Error('already canceled')
+    })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await expect(stripeExpress({ stripe: { paymentIntents: { cancel } } as unknown as Stripe }).release('pi_h')).resolves.toBeUndefined()
+    expect(cancel).toHaveBeenCalledWith('pi_h', { cancellation_reason: 'abandoned' })
+    warn.mockRestore()
+  })
+
+  it('a held express payment that no order owns yet is never paid by the webhook', () => {
+    const held = { id: 'pi_h', currency: 'usd', amount: 100, amount_received: 100, payment_method_types: ['card'], status: 'succeeded', metadata: { checkout: 'express', items: '[["A",1]]' } }
+    expect(eventsFromStripe(ev('payment_intent.succeeded', held))).toEqual([{ type: 'ignored', reason: expect.stringContaining('no order id') }])
+  })
+
   it('confirms an express return from the payment_intent parameter', async () => {
     const { order, ctx } = await discountedOrder()
     let status = 'processing'
