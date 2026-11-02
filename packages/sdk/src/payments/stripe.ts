@@ -1,5 +1,6 @@
 import type Stripe from 'stripe'
-import type { Order, PaymentSettlement } from '../types'
+import type { CheckoutItem } from '../store/checkout'
+import type { Address, Order, PaymentSettlement } from '../types'
 import { PaymentWebhookError, type PaymentAdapter, type PaymentContext, type PaymentEvent, type PaymentStart } from './index'
 
 export interface StripePaymentOptions {
@@ -210,6 +211,25 @@ export interface StripeExpressOptions {
 
 export interface StripeExpress {
   /**
+   * Approve-first express checkout (preferred). Confirms the wallet's ConfirmationToken on the
+   * server as a HOLD (`capture_method: manual`) for exactly `amount`: nothing is charged and no
+   * store order exists yet. A decline, a dismissed sheet or any wallet error therefore leaves
+   * nothing behind. Create the store order only from an `authorized` result (read the buyer back
+   * with `buyer`), then `attach` and `capture`. A hold that is never captured expires on its own.
+   */
+  authorize(input: StripeExpressAuthorizeInput): Promise<StripeExpressAuthorization>
+  /** What the buyer approved, read back from Stripe — never from the browser. */
+  buyer(intentId: string): Promise<StripeExpressBuyer>
+  /** Tie the hold to the store order made for it, so the webhook and the dashboard name the order. */
+  attach(intentId: string, order: Order, ctx: PaymentContext): Promise<void>
+  /** Take the held money. Idempotent; returns the `paid` event (with settlement) for `applyPaymentEvents`. */
+  capture(intentId: string): Promise<PaymentEvent[]>
+  /** Drop a hold that will not become an order (price changed, order could not be made). Never throws. */
+  release(intentId: string): Promise<void>
+  /**
+   * @deprecated Order-first express: the store order exists before the wallet confirms, so every
+   * failed or abandoned tap leaves an unpaid order. Use `authorize` → `buyer` → `attach` → `capture`.
+   *
    * A PaymentIntent for exactly the store order's total, for the browser to confirm with the
    * Express Checkout Element (Apple Pay, Google Pay, Link). Create the store order from the
    * wallet's address first; the intent is tagged `checkout: express` so its
@@ -218,15 +238,150 @@ export interface StripeExpress {
   intent(order: Order, ctx: PaymentContext): Promise<{ clientSecret: string; paymentIntentId: string }>
 }
 
+export interface StripeExpressAuthorizeInput {
+  /** `stripe.createConfirmationToken({ elements })` from the Express Checkout Element's `confirm` event. */
+  confirmationTokenId: string
+  /** The store's price for these items to the wallet's address, minor units. Never the browser's number. */
+  amount: number
+  currency: string
+  /** Recorded on the hold so the order is rebuilt from Stripe, not from a second browser request. */
+  items: CheckoutItem[]
+  /** Statement description until the order exists, e.g. `${store.config.name} order`. */
+  description: string
+  /** Attribution and the like; at most 10 entries are kept. */
+  metadata?: Record<string, string>
+}
+
+export type StripeExpressAuthorization =
+  /** Held: read the buyer, make the order, attach, capture. */
+  | { status: 'authorized'; intentId: string }
+  /** 3-D Secure or similar: the browser runs `stripe.handleNextAction({ clientSecret })`, then the store continues with `intentId`. */
+  | { status: 'requires_action'; intentId: string; clientSecret: string }
+  /** The card or wallet said no. Nothing was held and no order should be made. */
+  | { status: 'declined'; intentId: string | null; message: string }
+
+export interface StripeExpressBuyer {
+  intentId: string
+  /** Stripe's status; `requires_capture` means the hold is in place and can become an order. */
+  status: string
+  email: string
+  name: string | null
+  phone: string | null
+  shippingAddress: Address
+  /** What is held, minor units. */
+  amount: { amount: number; currency: string }
+  /** The items the hold was placed for. */
+  items: CheckoutItem[]
+  /** The store order already made for this hold (a repeated request), or null. */
+  orderId: string | null
+}
+
 /**
  * Stripe express checkout: the buyer pays from a wallet button before seeing any form, and the
- * wallet supplies name, email and address. The page builds the store order from those (priced by
- * the store, never the browser), then confirms the intent made here. Hosted Checkout
+ * wallet supplies name, email and address. Approve-first: `authorize` holds the money from the
+ * wallet's ConfirmationToken, the store makes the order only once the hold succeeds, then
+ * captures — the same shape as PayPal express (`paypalExpress`). Hosted Checkout
  * (`stripePayments`) stays the card path; both settle through the same webhook.
  */
 export function stripeExpress(options: StripeExpressOptions): StripeExpress {
   const { stripe } = options
+
+  async function intentWithMethod(intentId: string): Promise<Stripe.PaymentIntent> {
+    return stripe.paymentIntents.retrieve(intentId, { expand: ['payment_method'] })
+  }
+
   return {
+    async authorize(input) {
+      const items = encodeItems(input.items)
+      try {
+        const pi = await stripe.paymentIntents.create(
+          {
+            amount: input.amount,
+            currency: input.currency.toLowerCase(),
+            confirm: true,
+            confirmation_token: input.confirmationTokenId,
+            // Hold, then capture once the order exists: a failure never charges and never leaves an order.
+            capture_method: 'manual',
+            // Wallets and Link only; a redirect method would need a return page this flow does not have.
+            automatic_payment_methods: { enabled: true, allow_redirects: 'never' },
+            description: input.description.slice(0, 1000),
+            metadata: {
+              ...limitMetadata(input.metadata ?? {}),
+              checkout: EXPRESS,
+              items,
+              confirmation_token: input.confirmationTokenId,
+            },
+          },
+          { idempotencyKey: `express-authorize-${input.confirmationTokenId}` }
+        )
+        if (pi.status === 'requires_capture') return { status: 'authorized', intentId: pi.id }
+        if (pi.status === 'requires_action' && pi.client_secret) return { status: 'requires_action', intentId: pi.id, clientSecret: pi.client_secret }
+        return { status: 'declined', intentId: pi.id, message: pi.last_payment_error?.message ?? 'The payment was not approved.' }
+      } catch (e) {
+        const err = e as { type?: string; message?: string; payment_intent?: { id?: string } }
+        if (err?.type === 'StripeCardError') return { status: 'declined', intentId: err.payment_intent?.id ?? null, message: err.message ?? 'Your card was declined.' }
+        throw e
+      }
+    },
+
+    async buyer(intentId) {
+      const pi = await intentWithMethod(intentId)
+      const pm = typeof pi.payment_method === 'object' && pi.payment_method ? pi.payment_method : null
+      let shipping = pi.shipping ?? null
+      // Stripe copies the token's shipping onto the intent; read the token itself if it ever does not.
+      if (!shipping?.address && pi.metadata?.confirmation_token) {
+        shipping = (await stripe.confirmationTokens.retrieve(pi.metadata.confirmation_token)).shipping ?? null
+      }
+      const a = shipping?.address
+      return {
+        intentId: pi.id,
+        status: pi.status,
+        email: (pm?.billing_details?.email ?? pi.receipt_email ?? '').trim(),
+        name: shipping?.name ?? pm?.billing_details?.name ?? null,
+        phone: shipping?.phone ?? pm?.billing_details?.phone ?? null,
+        shippingAddress: {
+          ...(shipping?.name ? { name: shipping.name } : {}),
+          ...(a?.line1 ? { line1: a.line1 } : {}),
+          ...(a?.line2 ? { line2: a.line2 } : {}),
+          ...(a?.city ? { city: a.city } : {}),
+          ...(a?.state ? { state: a.state } : {}),
+          ...(a?.postal_code ? { postalCode: a.postal_code } : {}),
+          ...(a?.country ? { country: a.country.toUpperCase() } : {}),
+        },
+        amount: { amount: pi.amount, currency: pi.currency.toLowerCase() },
+        items: decodeItems(pi.metadata?.items),
+        orderId: pi.metadata?.order_id || null,
+      }
+    },
+
+    async attach(intentId, order, ctx) {
+      await stripe.paymentIntents.update(intentId, {
+        metadata: { order_id: order.id, order_number: order.number },
+        description: describeOrder(order, ctx),
+        receipt_email: order.customer.email,
+      })
+      await ctx.store.events.record(order.id, 'checkout_session_created', { provider: PROVIDER, session: intentId })
+    },
+
+    async capture(intentId) {
+      try {
+        await stripe.paymentIntents.capture(intentId, {}, { idempotencyKey: `express-capture-${intentId}` })
+      } catch (e) {
+        // Already captured (a repeated request): read it back below instead of failing.
+        if ((e as { code?: string })?.code !== 'payment_intent_unexpected_state') throw e
+      }
+      const pi = await stripe.paymentIntents.retrieve(intentId, { expand: [...SETTLEMENT_EXPAND] })
+      return pi.status === 'succeeded' ? [{ ...paidFromIntent(pi), ...settlementFields(pi) } as PaymentEvent] : []
+    },
+
+    async release(intentId) {
+      try {
+        await stripe.paymentIntents.cancel(intentId, { cancellation_reason: 'abandoned' })
+      } catch (e) {
+        console.warn('stripe express: could not release hold', intentId, e instanceof Error ? e.message : String(e))
+      }
+    },
+
     async intent(order, ctx) {
       const pi = await stripe.paymentIntents.create(
         {
@@ -248,6 +403,27 @@ export function stripeExpress(options: StripeExpressOptions): StripeExpress {
       await ctx.store.events.record(order.id, 'checkout_session_created', { provider: PROVIDER, session: pi.id })
       return { clientSecret: pi.client_secret, paymentIntentId: pi.id }
     },
+  }
+}
+
+/** At most 10 entries, Stripe's 500-character values: attribution must never fail a payment. */
+function limitMetadata(metadata: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(Object.entries(metadata).slice(0, 10).map(([k, v]) => [k.slice(0, 40), String(v).slice(0, 500)]))
+}
+
+/** Items on the hold, as `[[sku, quantity], …]` JSON in one metadata value. */
+function encodeItems(items: CheckoutItem[]): string {
+  const value = JSON.stringify(items.map((i) => [i.sku, i.quantity]))
+  if (value.length > 500) throw new Error('Too many items for express checkout')
+  return value
+}
+
+function decodeItems(value: string | undefined): CheckoutItem[] {
+  try {
+    const parsed = JSON.parse(value ?? '[]') as unknown
+    return Array.isArray(parsed) ? parsed.filter((x): x is [string, number] => Array.isArray(x) && typeof x[0] === 'string' && Number.isInteger(x[1])).map(([sku, quantity]) => ({ sku, quantity })) : []
+  } catch {
+    return []
   }
 }
 

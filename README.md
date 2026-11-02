@@ -234,7 +234,11 @@ stay underneath.
 - **Express checkout**: PayPal / Venmo / Pay Later buttons beside the buy
   button (`paypal-express` block). The address comes from the buyer's PayPal
   account, and the store refuses to capture if the approved amount differs
-  from its own price.
+  from its own price. Apple Pay / Google Pay / Link go through Stripe's
+  Express Checkout Element with the same shape (`stripeExpress`): the wallet
+  payment is **held** first (`authorize`), the store order is made only once
+  the hold succeeds, then it is captured. A declined or abandoned wallet tap
+  leaves no order behind.
 
 ## Security model
 
