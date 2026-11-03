@@ -193,25 +193,48 @@ export interface PayoutLookupOptions {
   assignments?: PayoutAssignments
 }
 
-/** A transaction fixed to a payout: its processor id and when it happened (ISO 8601 UTC with ms). */
-export interface PayoutAssignmentRow {
-  transactionId: string
-  occurredAt: string
+/** One line of a recorded payout, in its served position: the transaction it is (null for a computed line such as a carry line) and the line as served. */
+export interface PayoutRecordLine {
+  transactionId: string | null
+  /** When the transaction happened (ISO 8601 UTC with ms); null for a computed line. */
+  occurredAt: string | null
+  line: PayoutLine
+}
+
+/** A payout as the store recorded it when it was first served `paid`: the payout and its lines, in served order. */
+export interface RecordedPayout {
+  payout: Payout
+  lines: PayoutLine[]
 }
 
 /**
- * Which payout each processor transaction belongs to, persisted by the store for one provider. An
- * adapter whose grouping can move a transaction later (PayPal: an eCheck's settlement time) records a
- * payout's transactions the first time it serves that payout as `paid`, and afterwards honours the
- * record, so a paid payout's lines never change. Stripe does not need it (Stripe fixes membership).
- * `scope` separates independent groupings of the same transactions (PayPal: `withdrawal` and
- * `balance` mode); a transaction is in at most one payout per scope.
+ * The store's record of payouts served as `paid`, for one provider. An adapter whose grouping can move
+ * a transaction later (PayPal: an eCheck's settlement time) records a payout — a finalization marker
+ * plus every line in served order — the first time it serves it as `paid`, and afterwards serves the
+ * record, so a paid payout's lines (and their order) never change. Stripe does not need it (Stripe
+ * fixes membership). Everything is keyed by `scope` (independent groupings of the same transactions:
+ * PayPal `withdrawal` / `balance` mode) and the processor `accountId`, so an account switch never
+ * collides with the old account's records. A transaction is in at most one recorded payout per scope
+ * and account.
  */
 export interface PayoutAssignments {
-  /** Transaction id → payout id, for every recorded transaction of `scope` that occurred in [from, to] (ISO, inclusive). */
-  inRange(scope: string, from: string, to: string): Promise<Map<string, string>>
-  /** Record these transactions as `payoutId`'s in `scope`, atomically; a transaction already recorded there keeps its payout. */
-  assign(scope: string, payoutId: string, rows: PayoutAssignmentRow[]): Promise<void>
+  /** The recorded payout, or null. */
+  recorded(scope: string, accountId: string, payoutId: string): Promise<RecordedPayout | null>
+  /** The recorded payouts among `payoutIds` (their marker), by id. */
+  recordedAmong(scope: string, accountId: string, payoutIds: string[]): Promise<Map<string, Payout>>
+  /** The recorded payouts whose id is in [fromId, toId] (string order), by id. */
+  recordedBetween(scope: string, accountId: string, fromId: string, toId: string): Promise<Map<string, Payout>>
+  /** Transaction id → payout id, for every recorded transaction that occurred in [from, to] (ISO, inclusive). */
+  inRange(scope: string, accountId: string, from: string, to: string): Promise<Map<string, string>>
+  /**
+   * Record `payout` with `lines` (in served order) unless it is recorded already, atomically: the
+   * marker is inserted first and only the request that inserted it writes the lines, in the same
+   * transaction. Returns what is recorded afterwards — this request's payout, or the one a concurrent
+   * request recorded first — and the caller serves that.
+   */
+  finalize(scope: string, accountId: string, payout: Payout, lines: PayoutRecordLine[]): Promise<RecordedPayout>
+  /** Forget a recorded payout (its processor cancelled it): its transactions are free for another payout. */
+  release(scope: string, accountId: string, payoutId: string): Promise<void>
 }
 
 /** PayPal Transaction Search's documented reporting lag (up to three hours): its default `reportingLagMs`. */

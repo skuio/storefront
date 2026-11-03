@@ -481,6 +481,8 @@ type FakePayPalOptions = {
   token?: number
   /** More rows than this in one window is RESULTSET_TOO_LARGE. */
   maxResults?: number
+  /** The merchant payer id userinfo and Transaction Search report (default MERCHANTPAYER1). */
+  payer?: string
 }
 
 function fakePayPal(txns: PPTxn[], opts: FakePayPalOptions = {}) {
@@ -496,7 +498,7 @@ function fakePayPal(txns: PPTxn[], opts: FakePayPalOptions = {}) {
     }
     if (url.pathname === '/v1/identity/oauth2/userinfo') {
       if (opts.userinfo) return new Response('{"name":"NOT_AUTHORIZED"}', { status: opts.userinfo })
-      return Response.json({ payer_id: 'MERCHANTPAYER1' })
+      return Response.json({ payer_id: opts.payer ?? 'MERCHANTPAYER1' })
     }
     if (url.pathname === '/v1/reporting/transactions') {
       if (opts.search) return new Response('{"name":"NOT_AUTHORIZED","message":"Authorization failed due to insufficient permissions."}', { status: opts.search })
@@ -516,7 +518,7 @@ function fakePayPal(txns: PPTxn[], opts: FakePayPalOptions = {}) {
       const n = Number(q.get('page'))
       if (!id && n === 1) windows.push([start, end])
       return Response.json({
-        account_number: 'MERCHANTPAYER1',
+        account_number: opts.payer ?? 'MERCHANTPAYER1',
         transaction_details: rows.slice((n - 1) * size, n * size),
         page: n,
         total_pages: Math.max(1, Math.ceil(rows.length / size)),
@@ -1029,11 +1031,10 @@ describe('paypal payout membership, horizon and finality (Codex follow-up)', () 
     expect(await lineIds(api, 'day-2026-10-06-USD')).toEqual(['ECHK'])
     expect(await lineIds(api, 'day-2026-10-03-USD')).toEqual(['PAY'])
     const span = ['2026-09-01T00:00:00.000Z', '2026-10-31T00:00:00.000Z'] as const
-    const recorded = await store.payoutAssignments.inRange('paypal', 'withdrawal', ...span)
-    expect(recorded.get('ECHK')).toBe('W2')
-    expect(recorded.get('W2')).toBe('W2')
+    expect((await store.payoutAssignments.inRange('paypal', 'withdrawal', 'MERCHANTPAYER1', ...span)).get('ECHK')).toBe('W2')
+    expect((await store.payoutAssignments.recorded('paypal', 'withdrawal', 'MERCHANTPAYER1', 'W2'))?.lines.map((l) => l.id)).toEqual(['ECHK'])
     // Each mode keeps its own record of the same transaction.
-    expect((await store.payoutAssignments.inRange('paypal', 'balance', ...span)).get('ECHK')).toBe('day-2026-10-06-USD')
+    expect((await store.payoutAssignments.inRange('paypal', 'balance', 'MERCHANTPAYER1', ...span)).get('ECHK')).toBe('day-2026-10-06-USD')
 
     // PayPal moves transaction_updated_date when the eCheck is refunded: by its own rule it now groups by initiation.
     txns.push(pp('REFE', 'T1107', '2026-10-09T10:00:00Z', '-10.00', { ref: 'ECHK' }))
@@ -1057,7 +1058,100 @@ describe('paypal payout membership, horizon and finality (Codex follow-up)', () 
     const txns = [pp('W0', 'T0400', '2026-10-01T09:00:00Z', '-1.00'), pp('PAY', 'T0006', '2026-10-02T10:00:00Z', '20.00'), pp('WP', 'T0400', '2026-10-03T09:00:00Z', '-20.00', { status: 'P' })]
     const { api, store } = await paypalRig({ txns })
     expect(await lineIds(api, 'WP')).toEqual(['PAY'])
-    expect((await store.payoutAssignments.inRange('paypal', 'withdrawal', '2026-09-01T00:00:00.000Z', '2026-10-31T00:00:00.000Z')).size).toBe(0)
+    expect((await store.payoutAssignments.inRange('paypal', 'withdrawal', 'MERCHANTPAYER1', '2026-09-01T00:00:00.000Z', '2026-10-31T00:00:00.000Z')).size).toBe(0)
+    expect(await store.payoutAssignments.recorded('paypal', 'withdrawal', 'MERCHANTPAYER1', 'WP')).toBeNull()
+  })
+
+  it('a recorded payout pages its lines in recorded order, however PayPal would order them now', async () => {
+    // E cleared on 10-05 but is refunded (10-08): the first read sees the refund and groups E by its start (10-02).
+    const txns = [
+      pp('W0', 'T0400', '2026-10-01T09:00:00Z', '-1.00'),
+      pp('E', 'T0006', '2026-10-02T10:00:00Z', '50.00', { updated: '2026-10-05T10:00:00Z', instrument: 'BANK', subInstrument: 'ECHECK' }),
+      pp('P', 'T0006', '2026-10-03T10:00:00Z', '20.00'),
+      pp('W', 'T0400', '2026-10-06T09:00:00Z', '-70.00'),
+      pp('REF', 'T1107', '2026-10-08T10:00:00Z', '-5.00', { ref: 'E' }),
+    ]
+    const { api } = await paypalRig({ txns })
+    const first = await api('/payouts/paypal/W/lines?limit=1')
+    expect(first.body.data.map((l: any) => l.id)).toEqual(['E'])
+    // The second page reads the record: no reference look-ahead, yet the same order.
+    const second = await api(`/payouts/paypal/W/lines?limit=1&cursor=${encodeURIComponent(first.body.next_cursor)}`)
+    expect(second.body.data.map((l: any) => l.id)).toEqual(['P'])
+    expect(second.body.next_cursor).toBeNull()
+  })
+
+  it('records are per processor account: a new PayPal account\'s day is not hidden by the old account\'s', async () => {
+    const old = await paypalRig({ txns: [pp('OLD1', 'T0006', '2026-10-03T10:00:00Z', '10.00')], payer: 'PAYEROLD0001' })
+    expect(await lineIds(old.api, 'day-2026-10-03-USD')).toEqual(['OLD1'])
+    // Same store, the merchant switched PayPal accounts.
+    const fake = fakePayPal([pp('NEW1', 'T0006', '2026-10-03T11:00:00Z', '25.00')], { pageSize: 3, payer: 'PAYERNEW0002' })
+    const switched = paypalPayments({ clientId: 'CLIENT_ID', clientSecret: 's', webhookId: 'W', environment: 'live', fetch: fake.fetch, now: () => new Date(PAYPAL_NOW) })
+    const api = client(old.store, [switched])
+    expect((await api('/payouts/paypal/day-2026-10-03-USD')).body.data).toMatchObject({ account_id: 'PAYERNEW0002', amount: { amount: 2500 }, line_count: 1 })
+    expect(await lineIds(api, 'day-2026-10-03-USD')).toEqual(['NEW1'])
+    expect((await api('/payouts?provider=paypal&paypal_mode=balance&created_since=2026-10-01T00:00:00Z')).body.data.map((p: any) => [p.id, p.account_id]))
+      .toEqual([['day-2026-10-03-USD', 'PAYERNEW0002']])
+  })
+
+  it('a recorded withdrawal PayPal later reverses is released: its movements go to the next withdrawal', async () => {
+    const w1 = pp('W1', 'T0400', '2026-10-03T09:00:00Z', '-40.00', { balance: '60.00' })
+    const txns = [
+      pp('W0', 'T0400', '2026-10-01T09:00:00Z', '-1.00', { balance: '0.00' }),
+      pp('P100', 'T0006', '2026-10-02T09:00:00Z', '100.00', { balance: '100.00' }),
+      w1,
+    ]
+    const { api, store } = await paypalRig({ txns })
+    expect((await api('/payouts/paypal/W1/lines')).body.data.map((l: any) => [l.id, l.net.amount])).toEqual([['P100', 10000], ['carry_out:W1', -6000]])
+    expect(await store.payoutAssignments.recorded('paypal', 'withdrawal', 'MERCHANTPAYER1', 'W1')).not.toBeNull()
+
+    // The bank returns W1; the merchant then withdraws everything.
+    w1.transaction_info.transaction_status = 'V'
+    txns.push(pp('BACK', 'T1101', '2026-10-04T09:00:00Z', '40.00', { ref: 'W1' }), pp('W2', 'T0400', '2026-10-05T09:00:00Z', '-100.00', { balance: '0.00' }))
+    // Listing first (no record is written by a list): W2 already counts P100.
+    expect((await api('/payouts?provider=paypal&created_since=2026-09-20T00:00:00Z')).body.data.map((p: any) => [p.id, p.status, p.line_count]))
+      .toEqual([['W0', 'paid', null], ['W1', 'canceled', 0], ['W2', 'paid', 3]])
+    const w2 = (await api('/payouts/paypal/W2/lines')).body.data
+    expect(w2.map((l: any) => [l.id, l.category, l.net.amount])).toEqual([['P100', 'charge', 10000], ['W1', 'transfer', -4000], ['BACK', 'transfer', 4000]])
+    expect(sumNet(w2)).toBe(10000)
+    expect((await api('/payouts/paypal/W1')).body.data).toMatchObject({ status: 'canceled', line_count: 0 })
+    expect(await store.payoutAssignments.recorded('paypal', 'withdrawal', 'MERCHANTPAYER1', 'W1')).toBeNull()
+    // Same answer as a store that never recorded W1.
+    const fresh = await paypalRig({ txns })
+    expect((await fresh.api('/payouts/paypal/W2/lines')).body.data).toEqual(w2)
+  })
+
+  it('two concurrent first reads record one membership, and both serve it', async () => {
+    const base = [pp('W0', 'T0400', '2026-10-01T09:00:00Z', '-1.00'), pp('P', 'T0006', '2026-10-02T09:00:00Z', '20.00'), pp('W', 'T0400', '2026-10-04T09:00:00Z', '-20.00')]
+    // The second request's PayPal view includes a late-reported LATE (as if it arrived between the two reads).
+    const { store, adapter: a } = await paypalRig({ txns: base })
+    const late = fakePayPal([...base, pp('LATE', 'T0006', '2026-10-03T09:00:00Z', '7.00')], { pageSize: 3 })
+    const b = paypalPayments({ clientId: 'CLIENT_ID', clientSecret: 's', webhookId: 'W', environment: 'live', fetch: late.fetch, now: () => new Date(PAYPAL_NOW) })
+    const [x, y] = await Promise.all([client(store, [a])('/payouts/paypal/W/lines'), client(store, [b])('/payouts/paypal/W/lines')])
+    const ids = (r: any) => r.body.data.map((l: any) => l.id)
+    expect(ids(x)).toEqual(ids(y))
+    const recorded = await store.payoutAssignments.recorded('paypal', 'withdrawal', 'MERCHANTPAYER1', 'W')
+    expect(recorded!.lines.map((l) => l.id)).toEqual(ids(x))
+    expect(recorded!.payout.lineCount).toBe(ids(x).length)
+    // Later reads, from either view, serve the same record.
+    expect(ids(await client(store, [b])('/payouts/paypal/W/lines'))).toEqual(ids(x))
+    expect(ids(await client(store, [a])('/payouts/paypal/W/lines'))).toEqual(ids(x))
+  })
+
+  it('finalize records a payout once: a competing record of the same payout writes nothing', async () => {
+    const { store } = rig()
+    const rec = store.payoutAssignments.forProvider('paypal')
+    const line = (id: string) => ({ id, type: 'T0006', category: 'charge' as const, sourceId: id, orderId: null, orderNumber: null, paymentReference: id,
+      gross: { amount: 100, currency: 'usd' }, fee: { amount: 0, currency: 'usd' }, net: { amount: 100, currency: 'usd' }, feeDetails: [],
+      createdAt: '2026-10-02T09:00:00Z', availableOn: null, description: null })
+    const payout = { id: 'W', provider: 'paypal', accountId: 'A1', status: 'paid' as const, amount: { amount: 100, currency: 'usd' },
+      arrivalDate: '2026-10-04', createdAt: '2026-10-04T09:00:00Z', method: 'withdrawal', destinationLabel: null, lineCount: 1 }
+    const row = (id: string) => ({ transactionId: id, occurredAt: '2026-10-02T09:00:00.000Z', line: line(id) })
+    const [one, two] = await Promise.all([rec.finalize('withdrawal', 'A1', payout, [row('P')]), rec.finalize('withdrawal', 'A1', { ...payout, lineCount: 2 }, [row('P'), row('LATE')])])
+    expect(one).toEqual(two)
+    expect(one.lines.map((l) => l.id)).toEqual(['P'])
+    expect(one.payout.lineCount).toBe(1)
+    // Another account's record of the same payout id is independent.
+    expect((await rec.finalize('withdrawal', 'A2', payout, [row('P')])).lines.map((l) => l.id)).toEqual(['P'])
   })
 
   it('a single-provider balance run reads as of its first page: no currency appears or turns paid mid-run', async () => {

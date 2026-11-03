@@ -370,9 +370,9 @@ processor, so a late-reported PayPal withdrawal can never land behind a cursor t
 already moved past; that cutoff is also fixed by the first page and carried in the cursor. A
 single-provider list keeps that processor's own horizon (Stripe: up to now; PayPal: its lag back).
 **Every list run reads as of its first page:** the cursor also carries that page's clock, so each
-later page reads every processor's data as of the same moment (minus its lag) and reports the same
-statuses — a payout that became visible, or a day that became final, after the first page waits
-for the next run. **A `pending` payout is no watermark:** start the next run at or before the
+later page reads every processor's transactions as of the same moment (minus its lag) — a payout
+that became visible, or a day that became final, after the first page waits for the next run.
+(Statuses are still read live; see Known limits.) **A `pending` payout is no watermark:** start the next run at or before the
 `created_at` of the earliest pending payout the last run saw (a pending PayPal balance day can still
 gain a currency). Because the list can merge two processors, a consumer that
 records per-processor sync errors should page each provider separately (`?provider=stripe`, then
@@ -543,14 +543,25 @@ list, a withdrawal's `line_count` is `null` when its previous withdrawal is less
 where the read starts.
 
 **A paid payout's lines never change.** The rule above reads `transaction_updated_date`, which PayPal
-also moves when it later changes a transaction (a refund of a cleared eCheck), so the store records
-which payout each transaction is in (table `payout_line_assignments`, migration
-`0010_payout_line_assignments.sql`) the first time it serves that payout as `paid` through
-`GET /payouts/paypal/{id}` or its `/lines` — a withdrawal with status `S`, a balance day whose whole
-day was read. Every later read honours the record: a recorded transaction stays in its payout, a
-recorded payout lists exactly its recorded transactions, and a later refund or reversal is a movement
-of its own in its own payout. Withdrawal mode and balance mode keep separate records. A pending or
-in-transit payout is not recorded (its lines may still change), and the list never records.
+also moves when it later changes a transaction (a refund of a cleared eCheck), so the store records a
+payout the first time it serves it as `paid` through `GET /payouts/paypal/{id}` or its `/lines` (a
+withdrawal with status `S`; a balance day whose whole day was read): the payout and every line —
+carry lines included — in the order served (tables `payout_records` and `payout_record_lines`,
+migration `0011_payout_records.sql`). From then on that payout is served from the record: the same
+lines in the same order on every page, a balance day without reading PayPal at all, a withdrawal
+after one lookup of its current status. Its transactions are in no other payout; a later refund or
+reversal is a movement of its own in its own payout. Records are kept per processor account (an
+account switch never hides the new account's payouts behind the old one's) and per mode. Recording
+is atomic per payout: a request inserts the payout's marker first and only the request that inserted
+it writes the lines, in the same transaction, so two concurrent first reads serve the one record
+that won. A pending or in-transit payout is not recorded (its lines may still change), and the list
+never records (it shows a recorded payout's recorded `line_count`).
+
+A recorded withdrawal PayPal later **reverses** (status `V`, the bank returned it) is released: its
+record is dropped and its transactions go to the next withdrawal, where — with the reversed
+withdrawal (`transfer`, negative) and its reversal (`T1101`, positive) — they sum to that
+withdrawal's amount, exactly as a store that never recorded it would serve. `GET` on the reversed
+withdrawal answers `canceled` with no lines.
 
 **PayPal payouts appear about three hours after the withdrawal.** Transaction Search lags real time
 by up to three hours, so the store reads only transactions older than that: a withdrawal (and any
@@ -563,6 +574,13 @@ at 23:59:59.999 also returns a 23:59:59.500 transaction.
 
 **Known limits (PayPal).** The operations system should hold a payout whose lines do not sum to its
 `amount` instead of posting it:
+
+- **A paged list reflects live statuses.** The list cursor fixes the run's clock (which transactions
+  are read), not a snapshot of the payouts: PayPal can update a transaction between two pages (an
+  eCheck clearing later, a withdrawal reversed) and Stripe can change a payout's status, so a
+  payout's status, grouping or `line_count` can differ between pages, or between the list and a
+  later read. Re-read each payout by id (`GET /payouts/{provider}/{id}`, then its `/lines`) before
+  relying on it — SKU.io does — and post only what that read says is `paid`.
 
 - **No `ending_balance`.** A partial withdrawal is balanced only by its carry lines; when PayPal does
   not report `ending_balance` for the account (or it does not reconcile, above), the payout's lines
