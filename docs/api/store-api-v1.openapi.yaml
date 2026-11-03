@@ -238,6 +238,66 @@ paths:
                 categories: { type: array, maxItems: 500, items: { $ref: '#/components/schemas/CategoryInput' } }
       responses:
         '200': { description: Upserted, content: { application/json: { schema: { type: object, properties: { data: { type: object, properties: { upserted: { type: integer } } } } } } } }
+  /payouts:
+    get:
+      operationId: listPayouts
+      description: >-
+        The processors' payouts (Stripe payouts, PayPal withdrawals), ordered by created_at, provider, id ascending.
+        Without provider, every payout-capable processor on the store is merged. Needs the orders scope.
+      parameters:
+        - { name: provider, in: query, schema: { type: string, enum: [stripe, paypal] } }
+        - { name: created_since, in: query, schema: { type: string, format: date-time }, description: 'Inclusive; defaults to 90 days ago' }
+        - { name: cursor, in: query, schema: { type: string }, description: 'Opaque; echo next_cursor' }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
+      responses:
+        '200':
+          description: Payouts oldest first
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/Payout' } }
+                  next_cursor: { type: [string, 'null'] }
+                  providers: { type: array, items: { type: string }, description: 'Payout-capable processors on this store' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+        '424': { $ref: '#/components/responses/ProcessorPermissionMissing' }
+  /payouts/{provider}/{id}:
+    get:
+      operationId: getPayout
+      description: One payout; line_count is always filled.
+      parameters:
+        - { name: provider, in: path, required: true, schema: { type: string, enum: [stripe, paypal] } }
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: 'OK, content: { application/json: { schema: { type: object, properties: { data: { $ref: ''#/components/schemas/Payout'' } } } } }' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '424': { $ref: '#/components/responses/ProcessorPermissionMissing' }
+  /payouts/{provider}/{id}/lines:
+    get:
+      operationId: listPayoutLines
+      description: >-
+        What the payout is made of, in the payout currency. gross - fee = net on every line, and the net of a payout's
+        lines sums to its amount (Stripe's own payout row is excluded).
+      parameters:
+        - { name: provider, in: path, required: true, schema: { type: string, enum: [stripe, paypal] } }
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: cursor, in: query, schema: { type: string }, description: 'Opaque; echo next_cursor' }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 100 } }
+      responses:
+        '200':
+          description: Lines
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/PayoutLine' } }
+                  next_cursor: { type: [string, 'null'] }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+        '424': { $ref: '#/components/responses/ProcessorPermissionMissing' }
 components:
   securitySchemes:
     bearer: { type: http, scheme: bearer }
@@ -246,6 +306,12 @@ components:
     Conflict: { description: Conflict, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
     Unprocessable: { description: Validation failed, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
     RateLimited: { description: Too many failures from this address; try later, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    ProcessorPermissionMissing:
+      description: >-
+        The processor refused the store's key (HTTP 401/403). error.code is processor_permission_missing and
+        error.details is { provider, permission } with permission one of "Payouts: Read", "Balance: Read",
+        "Account: Read" (Stripe restricted key) or "Transaction search" (PayPal app feature).
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
   schemas:
     Error:
       type: object
@@ -524,3 +590,39 @@ components:
         description_html: { type: [string, 'null'] }
         image: { type: [object, 'null'], properties: { url: { type: string }, alt: { type: [string, 'null'] } } }
         position: { type: integer }
+    Payout:
+      type: object
+      required: [id, provider, account_id, status, amount, arrival_date, created_at, method, destination_label, line_count]
+      properties:
+        id: { type: string, description: 'Stripe po_…; PayPal the withdrawal''s transaction id' }
+        provider: { type: string, enum: [stripe, paypal] }
+        account_id: { type: string, description: 'Stripe acct_…; PayPal merchant payer id (else the app client id)' }
+        status: { type: string, enum: [pending, in_transit, paid, failed, canceled] }
+        amount: { $ref: '#/components/schemas/Money', description: 'Negative for a debit (Stripe pulling money)' }
+        arrival_date: { type: [string, 'null'], format: date }
+        created_at: { type: string, format: date-time }
+        method: { type: [string, 'null'], description: 'standard | instant (Stripe); withdrawal or the T-code (PayPal)' }
+        destination_label: { type: [string, 'null'], examples: ['Bank ••6789'] }
+        line_count: { type: [integer, 'null'], description: 'May be null in the list; always set on GET /payouts/{provider}/{id}' }
+    PayoutLine:
+      type: object
+      required: [id, type, category, source_id, order_id, order_number, payment_reference, gross, fee, net, fee_details, created_at, available_on, description]
+      properties:
+        id: { type: string, description: 'Stripe txn_…; PayPal transaction id' }
+        type: { type: string, description: 'The processor''s own type (Stripe balance transaction type; PayPal T-code)' }
+        category: { type: string, enum: [charge, refund, dispute, dispute_reversal, fee, adjustment, reserve, transfer, other] }
+        source_id: { type: [string, 'null'], description: 'Stripe ch_/py_/re_/du_…; PayPal the transaction id' }
+        order_id: { type: [string, 'null'] }
+        order_number: { type: [string, 'null'], description: 'Without the store''s number prefix' }
+        payment_reference: { type: [string, 'null'], description: "The order's payment.reference (pi_…, PayPal capture id)" }
+        gross: { $ref: '#/components/schemas/Money' }
+        fee: { $ref: '#/components/schemas/Money', description: 'What the processor kept; negative when it gave a fee back' }
+        net: { $ref: '#/components/schemas/Money', description: 'gross - fee' }
+        fee_details:
+          type: array
+          items:
+            type: object
+            properties: { type: { type: string }, amount: { type: integer }, description: { type: [string, 'null'] } }
+        created_at: { type: string, format: date-time }
+        available_on: { type: [string, 'null'], format: date }
+        description: { type: [string, 'null'] }

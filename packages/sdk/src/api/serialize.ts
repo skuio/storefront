@@ -1,3 +1,4 @@
+import type { Payout, PayoutLine, PayoutLineCategory, PayoutStatus } from '../payments'
 import type { CategoryRecord, ProductRecord } from '../store/catalog'
 import type { Address, Fulfillment, Money, Order, QuoteStatus, StoreQuote } from '../types'
 
@@ -324,5 +325,69 @@ export function serializeCategory(c: CategoryRecord): ApiCategory {
     product_count: c.productCount,
     created_at: c.createdAt,
     updated_at: c.updatedAt,
+  }
+}
+
+export interface ApiPayout {
+  id: string
+  provider: string
+  account_id: string
+  status: PayoutStatus
+  amount: ApiMoney
+  arrival_date: string | null
+  created_at: string
+  method: string | null
+  destination_label: string | null
+  line_count: number | null
+}
+
+export interface ApiPayoutLine {
+  id: string
+  type: string
+  category: PayoutLineCategory
+  source_id: string | null
+  order_id: string | null
+  order_number: string | null
+  payment_reference: string | null
+  gross: ApiMoney
+  fee: ApiMoney
+  net: ApiMoney
+  fee_details: { type: string; amount: number; description: string | null }[]
+  created_at: string
+  available_on: string | null
+  description: string | null
+}
+
+export function serializePayout(p: Payout): ApiPayout {
+  return {
+    id: p.id,
+    provider: p.provider,
+    account_id: p.accountId,
+    status: p.status,
+    amount: p.amount,
+    arrival_date: p.arrivalDate,
+    created_at: p.createdAt,
+    method: p.method,
+    destination_label: p.destinationLabel,
+    line_count: p.lineCount,
+  }
+}
+
+export function serializePayoutLine(l: PayoutLine): ApiPayoutLine {
+  return {
+    id: l.id,
+    type: l.type,
+    category: l.category,
+    source_id: l.sourceId,
+    order_id: l.orderId,
+    order_number: l.orderNumber,
+    payment_reference: l.paymentReference,
+    gross: l.gross,
+    fee: l.fee,
+    net: l.net,
+    fee_details: l.feeDetails.map((f) => ({ type: f.type, amount: f.amount, description: f.description })),
+    created_at: l.createdAt,
+    available_on: l.availableOn,
+    description: l.description,
   }
 }

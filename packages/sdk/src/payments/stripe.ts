@@ -1,7 +1,13 @@
 import type Stripe from 'stripe'
 import type { CheckoutItem } from '../store/checkout'
 import type { Address, Order, PaymentSettlement } from '../types'
-import { PaymentWebhookError, type PaymentAdapter, type PaymentContext, type PaymentEvent, type PaymentStart } from './index'
+import { decodeKeysetCursor, encodeKeysetCursor } from '../store/cursor'
+import { invalid, notFound } from '../store/errors'
+import {
+  comparePayouts, isAfter, isoSeconds, PaymentWebhookError, ProcessorPermissionError,
+  type PaymentAdapter, type PaymentContext, type PaymentEvent, type PaymentPayouts, type PaymentStart, type Payout,
+  type PayoutLine, type PayoutLineCategory,
+} from './index'
 
 export interface StripePaymentOptions {
   /** A configured Stripe client (use `Stripe.createFetchHttpClient()` on Workers). */
@@ -123,6 +129,266 @@ export function stripePayments(options: StripePaymentOptions): PaymentAdapter {
       const intentId = order.payment.reference
       if (!intentId?.startsWith('pi_')) return null
       return settlementOf(await stripe.paymentIntents.retrieve(intentId, { expand: [...SETTLEMENT_EXPAND] }))
+    },
+
+    payouts: stripePayouts(stripe),
+  }
+}
+
+// ── Payouts ─────────────────────────────────────────────────────────────────────────────────
+//
+// A Stripe payout settles a set of balance transactions. `lines()` lists them
+// (`balance_transactions?payout=`), minus the payout's own `payout` row, keeping Stripe's signs:
+// gross = `amount`, fee = `fee`, net = `net` (refunds and disputes are negative; a dispute's fee is
+// positive, a won dispute's reversal gives it back as a negative fee). Their nets sum to the
+// payout's `amount`. A restricted key needs "Payouts: Read" and "Balance: Read".
+
+/** Most payouts one list request walks (Stripe pages are 100): about five years of daily payouts. */
+const MAX_PAYOUT_PAGES = 20
+
+/** Stripe `reporting_category` (preferred) or `type` → line category. */
+const STRIPE_CATEGORIES: Record<string, PayoutLineCategory> = {
+  charge: 'charge',
+  payment: 'charge',
+  charge_failure: 'charge',
+  refund: 'refund',
+  payment_refund: 'refund',
+  refund_failure: 'refund',
+  payment_failure_refund: 'refund',
+  dispute: 'dispute',
+  dispute_reversal: 'dispute_reversal',
+  fee: 'fee',
+  stripe_fee: 'fee',
+  tax: 'fee',
+  network_cost: 'fee',
+  risk_reserved_funds: 'reserve',
+  risk_reserve_released: 'reserve',
+  reserve_transaction: 'reserve',
+  reserved_funds: 'reserve',
+  adjustment: 'adjustment',
+  other_adjustment: 'adjustment',
+  transfer: 'transfer',
+  transfer_reversal: 'transfer',
+  topup: 'transfer',
+  topup_reversal: 'transfer',
+}
+
+/** Exported for tests. */
+export function stripeLineCategory(bt: { reporting_category?: string | null; type: string }): PayoutLineCategory {
+  return (bt.reporting_category && STRIPE_CATEGORIES[bt.reporting_category]) || STRIPE_CATEGORIES[bt.type] || 'other'
+}
+
+type StripeErrorLike = { type?: string; statusCode?: number; code?: string; message?: string }
+
+function permissionError(e: unknown, permission: string): ProcessorPermissionError | null {
+  const err = e as StripeErrorLike
+  if (err?.type === 'StripePermissionError' || err?.type === 'StripeAuthenticationError' || err?.statusCode === 401 || err?.statusCode === 403) {
+    return new ProcessorPermissionError(PROVIDER, permission, `Stripe refused the store's key: ${err.message ?? 'permission denied'}. Grant "${permission}" on the restricted key.`)
+  }
+  return null
+}
+
+async function guarded<T>(permission: string, call: () => Promise<T>): Promise<T> {
+  try {
+    return await call()
+  } catch (e) {
+    throw permissionError(e, permission) ?? e
+  }
+}
+
+const isMissing = (e: unknown) => (e as StripeErrorLike)?.code === 'resource_missing' || (e as StripeErrorLike)?.statusCode === 404
+
+function destinationLabel(destination: Stripe.Payout['destination']): string | null {
+  if (!destination || typeof destination === 'string') return null
+  const d = destination as { object?: string; bank_name?: string | null; brand?: string | null; last4?: string | null }
+  const name = d.object === 'card' ? d.brand : d.bank_name
+  if (!d.last4) return name ?? null
+  return `${name ? `${titleCase(name)} ` : ''}••${d.last4}`
+}
+
+/** "JPMORGAN CHASE" reads as "Jpmorgan Chase"; a mixed-case name is kept. */
+function titleCase(name: string): string {
+  return name === name.toUpperCase() ? name.toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase()) : name
+}
+
+const dateOf = (unix: number | null | undefined) => (typeof unix === 'number' ? isoSeconds(unix).slice(0, 10) : null)
+
+/**
+ * The payout capability for a Stripe client. `stripePayments` includes it; exported for stores that
+ * take payments some other way but want their Stripe payouts in the Store API.
+ */
+export function stripePayouts(stripe: Stripe): PaymentPayouts {
+  let account: Promise<string> | null = null
+  /** Whether the key may expand `destination` (needs more than "Payouts: Read" on some keys). */
+  let expandDestination = true
+
+  function accountId(): Promise<string> {
+    account ??= guarded('Account: Read', async () => (await stripe.accounts.retrieve()).id).catch((e) => {
+      account = null
+      throw e
+    })
+    return account
+  }
+
+  async function listPage(params: Stripe.PayoutListParams): Promise<Stripe.ApiList<Stripe.Payout>> {
+    if (expandDestination) {
+      try {
+        return await stripe.payouts.list({ ...params, expand: ['data.destination'] })
+      } catch (e) {
+        if (!permissionError(e, '')) throw e
+        // The key reads payouts but not the bank account: list without the label instead of failing.
+        expandDestination = false
+      }
+    }
+    return guarded('Payouts: Read', () => stripe.payouts.list(params))
+  }
+
+  async function retrieve(id: string): Promise<Stripe.Payout | null> {
+    try {
+      if (expandDestination) {
+        try {
+          return await stripe.payouts.retrieve(id, { expand: ['destination'] })
+        } catch (e) {
+          if (!permissionError(e, '')) throw e
+          expandDestination = false
+        }
+      }
+      return await guarded('Payouts: Read', () => stripe.payouts.retrieve(id))
+    } catch (e) {
+      if (isMissing(e)) return null
+      throw e
+    }
+  }
+
+  function toPayout(p: Stripe.Payout, accountId: string, lineCount: number | null): Payout {
+    return {
+      id: p.id,
+      provider: PROVIDER,
+      accountId,
+      status: p.status as Payout['status'],
+      amount: { amount: p.amount, currency: p.currency.toLowerCase() },
+      arrivalDate: dateOf(p.arrival_date),
+      createdAt: isoSeconds(p.created),
+      method: p.method ?? null,
+      destinationLabel: destinationLabel(p.destination),
+      lineCount,
+    }
+  }
+
+  /** Balance transactions of an automatic payout; a manual (Dashboard) payout has none to list. */
+  async function transactions(payout: string, params: { starting_after?: string; limit: number; expand?: string[] }): Promise<Stripe.ApiList<Stripe.BalanceTransaction>> {
+    try {
+      return await guarded('Balance: Read', () => stripe.balanceTransactions.list({ payout, ...params }))
+    } catch (e) {
+      if ((e as StripeErrorLike)?.type !== 'StripeInvalidRequestError') throw e
+      const p = await retrieve(payout)
+      if (!p) throw notFound(`Payout ${payout}`)
+      if (!p.automatic) return { object: 'list', data: [], has_more: false, url: '' }
+      throw e
+    }
+  }
+
+  async function countLines(p: Stripe.Payout): Promise<number> {
+    if (!p.automatic) return 0
+    let count = 0
+    let startingAfter: string | undefined
+    for (;;) {
+      const page = await transactions(p.id, { limit: 100, ...(startingAfter ? { starting_after: startingAfter } : {}) })
+      count += page.data.filter((bt) => bt.type !== 'payout').length
+      if (!page.has_more || !page.data.length) return count
+      startingAfter = page.data[page.data.length - 1]!.id
+    }
+  }
+
+  /** The charge behind a balance transaction's source: the charge itself, or the one a refund/dispute is for. */
+  async function chargeFor(source: Stripe.BalanceTransaction['source'], cache: Map<string, Promise<Stripe.Charge | null>>): Promise<Stripe.Charge | null> {
+    if (!source || typeof source === 'string') return null
+    const s = source as { object?: string; charge?: string | Stripe.Charge | null }
+    if (s.object === 'charge') return source as Stripe.Charge
+    const charge = s.charge
+    if (!charge) return null
+    if (typeof charge === 'object') return charge
+    if (!cache.has(charge)) {
+      cache.set(
+        charge,
+        stripe.charges.retrieve(charge).catch((e) => {
+          // The line still posts without its order; a key without Charges: Read only loses the link.
+          console.warn('stripe payouts: could not read charge', charge, e instanceof Error ? e.message : String(e))
+          return null
+        })
+      )
+    }
+    return cache.get(charge)!
+  }
+
+  async function toLine(bt: Stripe.BalanceTransaction, cache: Map<string, Promise<Stripe.Charge | null>>): Promise<PayoutLine> {
+    const currency = bt.currency.toLowerCase()
+    const charge = await chargeFor(bt.source, cache)
+    const sourceId = typeof bt.source === 'string' ? bt.source : bt.source?.id ?? null
+    const intent = charge?.payment_intent
+    return {
+      id: bt.id,
+      type: bt.type,
+      category: stripeLineCategory(bt),
+      sourceId,
+      orderId: charge?.metadata?.order_id || null,
+      orderNumber: charge?.metadata?.order_number || null,
+      paymentReference: typeof intent === 'string' ? intent : intent?.id ?? null,
+      gross: { amount: bt.amount, currency },
+      fee: { amount: bt.fee, currency },
+      net: { amount: bt.net, currency },
+      feeDetails: (bt.fee_details ?? []).map((f) => ({ type: f.type, amount: f.amount, description: f.description ?? null })),
+      createdAt: isoSeconds(bt.created),
+      availableOn: dateOf(bt.available_on),
+      description: bt.description ?? null,
+    }
+  }
+
+  return {
+    async list({ createdSince, after, limit }) {
+      const since = Math.floor(Date.parse(after && after.createdAt > createdSince ? after.createdAt : createdSince) / 1000)
+      // Stripe lists newest first; walk back to `since`, then serve oldest first.
+      const all: Stripe.Payout[] = []
+      let startingAfter: string | undefined
+      for (let page = 0; ; page++) {
+        if (page === MAX_PAYOUT_PAGES) throw invalid('Too many payouts in one range; use a later created_since', { created_since: `more than ${MAX_PAYOUT_PAGES * 100} payouts since it` })
+        const res = await listPage({ created: { gte: since }, limit: 100, ...(startingAfter ? { starting_after: startingAfter } : {}) })
+        all.push(...res.data)
+        if (!res.has_more || !res.data.length) break
+        startingAfter = res.data[res.data.length - 1]!.id
+      }
+      const id = all.length ? await accountId() : ''
+      const ordered = all
+        .map((p) => toPayout(p, id, null))
+        .filter((p) => isAfter(p, after))
+        .sort(comparePayouts)
+      return { payouts: ordered.slice(0, limit), hasMore: ordered.length > limit }
+    },
+
+    async get(id) {
+      const p = await retrieve(id)
+      if (!p) return null
+      return toPayout(p, await accountId(), await countLines(p))
+    },
+
+    async lines(payoutId, { cursor, limit }) {
+      let startingAfter: string | undefined
+      if (cursor) {
+        const parts = decodeKeysetCursor(cursor, 1)
+        if (!parts || typeof parts[0] !== 'string') throw invalid('Invalid query', { cursor: 'was not issued by this store' })
+        startingAfter = parts[0]
+      }
+      const page = await transactions(payoutId, { limit, expand: ['data.source'], ...(startingAfter ? { starting_after: startingAfter } : {}) })
+      if (!page.data.length && !startingAfter && !(await retrieve(payoutId))) throw notFound(`Payout ${payoutId}`)
+      // Charges already on this page answer their own refunds and disputes without another call.
+      const cache = new Map<string, Promise<Stripe.Charge | null>>()
+      for (const row of page.data) {
+        const source = row.source as { object?: string; id?: string } | string | null
+        if (source && typeof source === 'object' && source.object === 'charge' && source.id) cache.set(source.id, Promise.resolve(source as Stripe.Charge))
+      }
+      const lines = await Promise.all(page.data.filter((bt) => bt.type !== 'payout').map((bt) => toLine(bt, cache)))
+      const last = page.data[page.data.length - 1]
+      return { lines, nextCursor: page.has_more && last ? encodeKeysetCursor([last.id]) : null }
     },
   }
 }

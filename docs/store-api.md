@@ -29,6 +29,9 @@ is the first consumer; anything that can speak this contract can run the store.
 | GET | `/quotes` | Quote requests and offers changed since a watermark, oldest first, keyset-paged. |
 | GET | `/quotes/{id}` | One quote with its lines. |
 | PATCH | `/quotes/{id}` | Price it (`offer`), stamp `external_reference`, or withdraw it. |
+| GET | `/payouts` | The processors' payouts (Stripe payouts, PayPal withdrawals), oldest first, keyset-paged. |
+| GET | `/payouts/{provider}/{id}` | One payout, with its line count. |
+| GET | `/payouts/{provider}/{id}/lines` | What the payout is made of: charges, refunds, disputes, fees, … |
 
 ## Connecting from SKU.io
 
@@ -336,8 +339,132 @@ nodes. A slug is only suffixed (`<slug>-<id>`) when it is owned by a category un
 *different* parent, or when the batch itself claims the same slug twice. Products are always
 keyed by SKU and are unaffected by category re-keying. A second identical push changes nothing.
 
+## Payouts
+
+A payout is money a processor sent to (or pulled from) the merchant's bank. The store reads its
+processors with the keys it already holds and itemises each payout, so an operations system can
+post one accounting document per payout and match the bank deposit to the cent, without ever
+holding Stripe or PayPal credentials. Read with the `orders` scope (or the `STORE_API_KEY`
+secret). The `stripe` and `paypal` adapters serve payouts; `manual`, `bitcoin` and `btcpay` have
+none.
+
+| Method | Path | Returns |
+|---|---|---|
+| GET | `/payouts?provider=stripe&created_since=2026-10-01T00:00:00Z&cursor=…&limit=50` | `{ "data": [Payout…], "next_cursor": "…"\|null, "providers": ["paypal", "stripe"] }` |
+| GET | `/payouts/{provider}/{id}` | `{ "data": Payout }` |
+| GET | `/payouts/{provider}/{id}/lines?cursor=…&limit=100` | `{ "data": [PayoutLine…], "next_cursor": "…"\|null }` |
+
+**List.** Ordered by `created_at, provider, id` ascending. `provider` is optional: without it the
+list merges every payout-capable processor on the store (`providers` names them; empty when there
+are none). `created_since` is inclusive and defaults to 90 days ago. `limit` is 1–100 (default 50).
+The cursor is opaque: echo it back. Because the list can merge two processors, a consumer that
+records per-processor sync errors should page each provider separately (`?provider=stripe`, then
+`?provider=paypal`): a permission error on one fails the whole merged request. An unknown provider,
+or one without payouts, is `404 not_found`.
+
+**Payout:**
+```json
+{ "id": "po_1ExAmPlE0000000000Payout", "provider": "stripe", "account_id": "acct_1ExAmPlE00000000",
+  "status": "paid", "amount": { "amount": 49688, "currency": "usd" },
+  "arrival_date": "2026-11-03", "created_at": "2026-11-03T00:08:09Z",
+  "method": "standard", "destination_label": "Bank ••6789", "line_count": 2 }
+```
+
+| Field | Meaning |
+|---|---|
+| `account_id` | The processor account that paid out: Stripe `acct_…`; PayPal the merchant's payer id (from Log in with PayPal's userinfo, else Transaction Search's `account_number`, else the app's client id). Two stores on one processor account report the same id. |
+| `status` | `pending \| in_transit \| paid \| failed \| canceled`. Only `paid` payouts are final; `failed` and `canceled` never settle anything (Stripe puts their transactions in a later payout). |
+| `amount` | What reached the bank, integer minor units, **negative for a debit** (Stripe pulling money to cover a negative balance). PayPal: the withdrawal's absolute value. |
+| `arrival_date` | `YYYY-MM-DD` the bank receives it (Stripe) or the withdrawal date (PayPal). |
+| `created_at` | ISO 8601 UTC, second precision. |
+| `method` | Stripe `standard` / `instant`; PayPal `withdrawal` (T0400) or the withdrawal's T-code (`T0401` auto-sweep, …). |
+| `destination_label` | e.g. `Bank ••6789` when the key may read the bank account; else `null`. Always `null` for PayPal. |
+| `line_count` | How many lines `/lines` returns. **May be `null` in the list** (counting a Stripe payout costs extra calls; a PayPal withdrawal whose previous withdrawal is before `created_since`); `GET /payouts/{provider}/{id}` always fills it. A change in `line_count` means the lines changed. |
+
+**PayoutLine:**
+```json
+{ "id": "txn_1ExAmPlE000000000Charge1", "type": "charge", "category": "charge",
+  "source_id": "ch_1ExAmPlE00000000000Charge1", "order_id": "ord_example0000000000001", "order_number": "15000",
+  "payment_reference": "pi_…",
+  "gross": { "amount": 17078, "currency": "usd" }, "fee": { "amount": 525, "currency": "usd" },
+  "net": { "amount": 16553, "currency": "usd" },
+  "fee_details": [{ "type": "stripe_fee", "amount": 525, "description": "Stripe processing fees" }],
+  "created_at": "2026-10-27T12:53:15Z", "available_on": "2026-11-03", "description": "Example Store order EX15000" }
+```
+
+| Field | Meaning |
+|---|---|
+| `id` | Stripe balance transaction `txn_…`; PayPal transaction id. |
+| `type` | The processor's own type: Stripe balance transaction `type`, PayPal T-code. |
+| `category` | Normalised, table below. |
+| `source_id` | Stripe: the object behind it (`ch_…`, `py_…`, `re_…`, `du_…`, or `null` for a billing fee). PayPal: the transaction id. For a charge it equals the order's `payment.transaction_id`. |
+| `order_id`, `order_number` | The store order, from the charge's `metadata.order_id` / `order_number` (Stripe; a refund or dispute reads the charge it is for) or the transaction's `custom_field` (PayPal, set to the order id at checkout; a refund uses the payment it refunds). When only one of the two is known, the store fills the other from its own orders. `null` for lines no order owns (fees, conversions, test charges). `order_number` has no prefix (`"15000"`). |
+| `payment_reference` | The order's `payment.reference` when known: Stripe PaymentIntent `pi_…`; PayPal the capture (transaction) id, for a refund the one it refunds. Additive to SKU-8600's contract. |
+| `gross`, `fee`, `net` | Integer minor units **in the payout currency** (the processor has already converted a charge taken in another currency). Always `gross − fee = net`. |
+| `fee_details` | Stripe's breakdown (`stripe_fee`, `tax`, `application_fee`, …); PayPal one `paypal_fee` row when there is a fee. `amount` is integer minor units in the payout currency. |
+| `available_on` | `YYYY-MM-DD` the funds became available (Stripe); `null` for PayPal. |
+
+**Sign conventions.** The signs are the processor's balance: money in is positive, money out
+negative, and `fee` is what the processor kept (negative when it gave a fee back). So a refund is
+`gross −3000, fee 0, net −3000`; a lost dispute `gross −5000, fee 1500, net −6500`; its reversal when
+won `gross 5000, fee −1500, net 6500`; a standalone Stripe billing fee `gross −200, fee 0, net −200`.
+For PayPal, `gross` is the transaction amount and `fee` is the negated PayPal `fee_amount`.
+**The `net` of a payout's lines sums to its `amount`** (Stripe's own `payout` row is left out of the
+lines; the kit's tests assert this on a real payout).
+
+| Stripe `reporting_category` (else `type`) | PayPal T-code | `category` |
+|---|---|---|
+| `charge`, `payment`, `charge_failure` | T0000–T0013, T0700 | `charge` |
+| `refund`, `payment_refund`, `refund_failure`, `payment_failure_refund` | T1105, T1107 | `refund` |
+| `dispute` | T1106, T1201, T1202 | `dispute` |
+| `dispute_reversal` | T1108 | `dispute_reversal` |
+| `fee`, `stripe_fee`, `tax`, `network_cost` | T0100–T0199, T1300–T1399 | `fee` |
+| `risk_reserved_funds`, `risk_reserve_released`, `reserve_transaction`, `reserved_funds` | T1500–T1599 | `reserve` |
+| `adjustment`, `other_adjustment` | T0200–T0299 (currency conversion), T1900–T1999 | `adjustment` |
+| `transfer`, `transfer_reversal`, `topup`, `topup_reversal` | T0300–T0399 | `transfer` |
+| anything else | anything else | `other` |
+
+**Stripe.** A payout is a Stripe payout; its lines are `balance_transactions?payout=` (Stripe only
+itemises automatic payouts: a payout sent by hand from the Dashboard has `line_count: 0` and no
+lines). The list walks Stripe newest-first back to `created_since` and serves the result oldest
+first; a range with more than 2,000 payouts is refused with 422 (use a later `created_since`).
+
+**PayPal.** PayPal has no payout object: money stays in the PayPal balance until a withdrawal
+(T04xx) moves it to the bank. So a payout is a withdrawal read through Transaction Search, and its
+lines are the completed (`S`) transactions **in the withdrawal's currency** after the previous
+withdrawal, up to it. Transactions after the latest withdrawal belong to no payout yet. PayPal keeps
+one balance per currency, so a CAD sale converted to USD shows as a `T0200` adjustment in the USD
+payout. Known limits: a withdrawal of only part of the balance leaves the remainder in the next
+withdrawal's lines, so `Σ net = amount` holds when each withdrawal empties the balance (PayPal's
+"withdraw all" and auto-sweep do); Transaction Search lags real time by up to three hours and keeps
+three years; each request is cut into ≤ 31-day windows, so looking up an old payout costs one call
+per month back to it.
+
+### Processor permissions
+
+When the processor refuses the store's key (HTTP 401/403), the Store API answers **424**:
+```json
+{ "error": { "code": "processor_permission_missing",
+  "message": "Stripe refused the store's key: …. Grant \"Balance: Read\" on the restricted key.",
+  "details": { "provider": "stripe", "permission": "Balance: Read" } } }
+```
+`details.permission` is one of:
+
+| Provider | `permission` | How the merchant grants it |
+|---|---|---|
+| `stripe` | `Payouts: Read` | Stripe Dashboard → Developers → API keys → the store's restricted key → ⋯ → Edit → **Payouts: Read** → Update key. (A standard secret key already has it.) |
+| `stripe` | `Balance: Read` | Same screen → **Balance: Read** (needed for the lines). |
+| `stripe` | `Account: Read` | Rare: a restricted key that cannot read its own account (`GET /v1/account`); same screen → give the key read access to the account. |
+| `paypal` | `Transaction search` | developer.paypal.com → Apps & Credentials → **Live** → the store's app → Features → tick **Transaction search** → Save. PayPal can take a few hours to grant the new scope to the app. |
+
+Nothing is written on a 424, and a consumer should keep what it already has for that provider.
+Reading a refunded or disputed charge's order (Stripe, when the charge is not in the same page)
+needs **Charges: Read**; without it the line comes back with `order_id: null` instead of failing.
+
 ## Errors
 
 `401 unauthorized` (missing/wrong key) · `404 not_found` · `422 validation_failed` (with
 `details` per field) · `409 conflict` (e.g. cancelling a fulfilled order) · `400 invalid_grant` (code
-exchange) · `429 rate_limited` (repeated sign-in or exchange failures from one address).
+exchange) · `429 rate_limited` (repeated sign-in or exchange failures from one address) ·
+`424 processor_permission_missing` (payouts: the processor refused the store's key; `details`
+names the provider and permission).

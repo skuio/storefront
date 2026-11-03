@@ -1,6 +1,12 @@
 import type { Address, Money, Order, PaymentSettlement } from '../types'
 import type { Quote } from '../store/checkout'
-import { PaymentWebhookError, type PaymentAdapter, type PaymentContext, type PaymentEvent, type PaymentStart } from './index'
+import { decodeKeysetCursor, encodeKeysetCursor } from '../store/cursor'
+import { invalid, notFound } from '../store/errors'
+import {
+  comparePayouts, isAfter, isoSeconds, PaymentWebhookError, ProcessorPermissionError,
+  type PaymentAdapter, type PaymentContext, type PaymentEvent, type PaymentPayouts, type PaymentStart, type Payout,
+  type PayoutLine, type PayoutLineCategory,
+} from './index'
 
 export interface PayPalPaymentOptions {
   clientId: string
@@ -13,6 +19,8 @@ export interface PayPalPaymentOptions {
   brandName?: string
   /** Injected for tests; defaults to the global fetch. */
   fetch?: typeof fetch
+  /** Injected for tests; the clock payouts are listed up to. */
+  now?: () => Date
 }
 
 const PROVIDER = 'paypal'
@@ -236,6 +244,8 @@ export function paypalPayments(options: PayPalPaymentOptions): PaymentAdapter {
       if (!captureId) return null
       return settlementOf(await api<PayPalCapture>('GET', `/v2/payments/captures/${encodeURIComponent(captureId)}`))
     },
+
+    payouts: paypalPayouts({ clientId: options.clientId, api, now: options.now }),
   }
 }
 
@@ -465,4 +475,303 @@ function expressItems(q: Quote) {
     unit_amount: { currency_code: c, value: decimal(l.unitAmount, q.currency) },
     category: 'PHYSICAL_GOODS',
   }))
+}
+
+
+// ── Payouts ─────────────────────────────────────────────────────────────────────────────────
+//
+// PayPal has no payout object: money sits in the PayPal balance until a withdrawal (T04xx) moves it
+// to the bank. So a payout here IS a withdrawal, read through Transaction Search, and its lines are
+// the balance-affecting transactions in its currency after the previous withdrawal, up to it.
+// Transactions after the latest withdrawal belong to no payout yet. The app needs the
+// "Transaction search" feature (scope https://uri.paypal.com/services/reporting/search/read).
+
+/** Transaction Search accepts at most 31 days per request and three years of history. */
+const WINDOW_MS = 31 * 86_400_000 - 1000
+const HISTORY_MS = 3 * 365 * 86_400_000
+const MAX_WINDOWS = 37
+const PERMISSION = 'Transaction search'
+
+interface PayPalTransaction {
+  transaction_info: {
+    transaction_id: string
+    transaction_event_code: string
+    transaction_initiation_date: string
+    transaction_updated_date?: string
+    transaction_amount: PayPalMoney
+    fee_amount?: PayPalMoney
+    transaction_status?: string
+    custom_field?: string
+    invoice_id?: string
+    paypal_reference_id?: string
+    transaction_subject?: string
+    transaction_note?: string
+  }
+}
+
+interface PayPalSearchPage {
+  transaction_details?: PayPalTransaction[]
+  account_number?: string
+  page?: number
+  total_pages?: number
+}
+
+/** PayPal T-code → line category. Exported for tests. */
+export function paypalLineCategory(code: string): PayPalLineCategoryOrPayout {
+  const n = Number(code.replace(/^T/, ''))
+  if (!Number.isFinite(n)) return 'other'
+  if (n >= 400 && n <= 499) return 'payout'
+  if ((n >= 0 && n <= 13) || n === 700) return 'charge'
+  if (n === 1105 || n === 1107) return 'refund'
+  if (n === 1106 || n === 1201 || n === 1202) return 'dispute'
+  if (n === 1108) return 'dispute_reversal'
+  if ((n >= 100 && n <= 199) || (n >= 1300 && n <= 1399)) return 'fee'
+  if (n >= 1500 && n <= 1599) return 'reserve'
+  if ((n >= 200 && n <= 299) || (n >= 1900 && n <= 1999)) return 'adjustment'
+  if (n >= 300 && n <= 399) return 'transfer'
+  return 'other'
+}
+export type PayPalLineCategoryOrPayout = PayoutLineCategory | 'payout'
+
+/** `2026-10-27T12:53:15+0000` → `2026-10-27T12:53:15Z`. */
+function paypalTime(value: string): string {
+  const t = Date.parse(value.replace(/([+-]\d{2})(\d{2})$/, '$1:$2'))
+  return Number.isNaN(t) ? value : isoSeconds(new Date(t))
+}
+
+const isWithdrawal = (t: PayPalTransaction) => paypalLineCategory(t.transaction_info.transaction_event_code) === 'payout'
+/** A withdrawal that took money out of the balance (completed or still on its way). */
+const isBoundary = (t: PayPalTransaction) => isWithdrawal(t) && ['S', 'P'].includes(t.transaction_info.transaction_status ?? 'S')
+const currencyOf = (t: PayPalTransaction) => t.transaction_info.transaction_amount.currency_code.toLowerCase()
+
+function withdrawalStatus(status: string | undefined): Payout['status'] {
+  switch (status) {
+    case 'P':
+      return 'in_transit'
+    case 'V':
+      return 'canceled'
+    case 'D':
+    case 'F':
+      return 'failed'
+    default:
+      return 'paid'
+  }
+}
+
+/**
+ * The payout capability over PayPal Transaction Search. `paypalPayments` includes it; `api` is that
+ * adapter's authenticated request function.
+ */
+export function paypalPayouts(deps: {
+  clientId: string
+  api: <T>(method: string, path: string) => Promise<T>
+  now?: () => Date
+}): PaymentPayouts {
+  const now = () => deps.now?.() ?? new Date()
+  let account: string | null = null
+  /** The `account_number` Transaction Search reports: the merchant's payer id. */
+  let searchAccount: string | null = null
+
+  async function search(start: number, end: number, extra: Record<string, string> = {}): Promise<PayPalTransaction[]> {
+    const out: PayPalTransaction[] = []
+    for (let page = 1; ; page++) {
+      const q = new URLSearchParams({
+        start_date: isoSeconds(new Date(start)),
+        end_date: isoSeconds(new Date(end)),
+        fields: 'all',
+        page_size: '500',
+        page: String(page),
+        ...extra,
+      })
+      let res: PayPalSearchPage
+      try {
+        res = await deps.api<PayPalSearchPage>('GET', `/v1/reporting/transactions?${q}`)
+      } catch (e) {
+        if (e instanceof PayPalError && (e.status === 401 || e.status === 403)) {
+          throw new ProcessorPermissionError(PROVIDER, PERMISSION, `PayPal refused Transaction Search (${e.status}${/NOT_AUTHORIZED/.test(e.body) ? ' NOT_AUTHORIZED' : ''}): enable "Transaction search" on the app.`)
+        }
+        throw e
+      }
+      if (res.account_number) searchAccount ??= res.account_number
+      out.push(...(res.transaction_details ?? []))
+      if (!res.total_pages || page >= res.total_pages) return out
+    }
+  }
+
+  /** Every transaction in [start, end], oldest first, in ≤31-day windows. */
+  async function range(start: number, end: number): Promise<PayPalTransaction[]> {
+    const out: PayPalTransaction[] = []
+    for (let from = start; from < end; from += WINDOW_MS + 1000) out.push(...(await search(from, Math.min(from + WINDOW_MS, end))))
+    return chronological(out)
+  }
+
+  function chronological(list: PayPalTransaction[]): PayPalTransaction[] {
+    const seen = new Set<string>()
+    return list
+      .filter((t) => (seen.has(t.transaction_info.transaction_id) ? false : (seen.add(t.transaction_info.transaction_id), true)))
+      .map((t, i) => ({ t, i, at: Date.parse(paypalTime(t.transaction_info.transaction_initiation_date)) }))
+      .sort((a, b) => a.at - b.at || a.i - b.i)
+      .map((x) => x.t)
+  }
+
+  async function accountId(): Promise<string> {
+    if (account) return account
+    try {
+      const me = await deps.api<{ payer_id?: string }>('GET', '/v1/identity/oauth2/userinfo?schema=paypalv1.1')
+      if (me.payer_id) return (account = me.payer_id)
+    } catch (e) {
+      // An app without "Log in with PayPal" may not read its own identity; the client id still names it.
+      if (!(e instanceof PayPalError && (e.status === 401 || e.status === 403 || e.status === 404))) throw e
+    }
+    // Same payer id, as Transaction Search reports it; the client id when nothing names the account.
+    return (account = searchAccount ?? deps.clientId)
+  }
+
+  /**
+   * The lines of the withdrawal at `index` in `txns`: same-currency, completed, non-withdrawal
+   * transactions after the previous boundary. Null when the previous boundary is not in `txns`
+   * (and `txns` does not reach back far enough to know).
+   */
+  function linesOf(txns: PayPalTransaction[], index: number, complete: boolean): PayPalTransaction[] | null {
+    const w = txns[index]!
+    const currency = currencyOf(w)
+    let from = -1
+    for (let i = index - 1; i >= 0; i--) {
+      if (isBoundary(txns[i]!) && currencyOf(txns[i]!) === currency) {
+        from = i
+        break
+      }
+    }
+    if (from === -1 && !complete) return null
+    return txns.slice(from + 1, index).filter((t) => !isWithdrawal(t) && currencyOf(t) === currency && (t.transaction_info.transaction_status ?? 'S') === 'S')
+  }
+
+  function toPayout(w: PayPalTransaction, accountId: string, lineCount: number | null): Payout {
+    const info = w.transaction_info
+    const currency = currencyOf(w)
+    const createdAt = paypalTime(info.transaction_initiation_date)
+    const status = withdrawalStatus(info.transaction_status)
+    return {
+      id: info.transaction_id,
+      provider: PROVIDER,
+      accountId,
+      status,
+      amount: { amount: Math.abs(minor(info.transaction_amount.value, currency)), currency },
+      arrivalDate: createdAt.slice(0, 10),
+      createdAt,
+      method: info.transaction_event_code === 'T0400' ? 'withdrawal' : info.transaction_event_code,
+      destinationLabel: null,
+      lineCount: status === 'failed' || status === 'canceled' ? 0 : lineCount,
+    }
+  }
+
+  function toLine(t: PayPalTransaction, orders: Map<string, string>): PayoutLine {
+    const info = t.transaction_info
+    const currency = currencyOf(t)
+    const gross = minor(info.transaction_amount.value, currency)
+    // PayPal reports the fee as a balance movement (negative); the line reports what PayPal kept.
+    const fee = info.fee_amount ? -minor(info.fee_amount.value, currency) : 0
+    const category = paypalLineCategory(info.transaction_event_code) as PayoutLineCategory
+    const original = category === 'charge' ? info.transaction_id : info.paypal_reference_id ?? null
+    const createdAt = paypalTime(info.transaction_initiation_date)
+    return {
+      id: info.transaction_id,
+      type: info.transaction_event_code,
+      category,
+      sourceId: info.transaction_id,
+      orderId: info.custom_field || (original ? orders.get(original) ?? null : null),
+      orderNumber: null,
+      paymentReference: original,
+      gross: { amount: gross, currency },
+      fee: { amount: fee, currency },
+      net: { amount: gross - fee, currency },
+      feeDetails: fee ? [{ type: 'paypal_fee', amount: fee, description: 'PayPal fee' }] : [],
+      createdAt,
+      availableOn: null,
+      description: info.transaction_subject || info.transaction_note || info.invoice_id || null,
+    }
+  }
+
+  /** Find a withdrawal by id, newest window first. */
+  async function findWithdrawal(id: string): Promise<PayPalTransaction | null> {
+    const end = now().getTime()
+    for (let w = 0; w < MAX_WINDOWS; w++) {
+      const to = end - w * (WINDOW_MS + 1000)
+      if (to <= end - HISTORY_MS) break
+      const found = (await search(Math.max(to - WINDOW_MS, end - HISTORY_MS), to, { transaction_id: id })).find((t) => t.transaction_info.transaction_id === id)
+      if (found) return isWithdrawal(found) ? found : null
+    }
+    return null
+  }
+
+  /** The withdrawal and every transaction back to (and including) the previous boundary in its currency. */
+  async function context(id: string): Promise<{ txns: PayPalTransaction[]; index: number } | null> {
+    const w = await findWithdrawal(id)
+    if (!w) return null
+    const at = Date.parse(paypalTime(w.transaction_info.transaction_initiation_date))
+    const floor = now().getTime() - HISTORY_MS
+    let start = Math.max(at - WINDOW_MS, floor)
+    let txns = await range(start, at + 1000)
+    for (let n = 1; n < MAX_WINDOWS && start > floor; n++) {
+      const index = txns.findIndex((t) => t.transaction_info.transaction_id === id)
+      if (index !== -1 && linesOf(txns, index, false)) break
+      const earlier = Math.max(start - WINDOW_MS - 1000, floor)
+      txns = chronological([...(await range(earlier, start)), ...txns])
+      start = earlier
+    }
+    const index = txns.findIndex((t) => t.transaction_info.transaction_id === id)
+    if (index === -1) txns = chronological([...txns, w])
+    return { txns, index: txns.findIndex((t) => t.transaction_info.transaction_id === id) }
+  }
+
+  function orderMap(txns: PayPalTransaction[]): Map<string, string> {
+    const map = new Map<string, string>()
+    for (const t of txns) if (t.transaction_info.custom_field) map.set(t.transaction_info.transaction_id, t.transaction_info.custom_field)
+    return map
+  }
+
+  return {
+    async list({ createdSince, after, limit }) {
+      const end = now().getTime()
+      const start = Math.max(Date.parse(after && after.createdAt > createdSince ? after.createdAt : createdSince), end - HISTORY_MS + 86_400_000)
+      if (start >= end) return { payouts: [], hasMore: false }
+      const txns = await range(start, end)
+      const id = await accountId()
+      const ordered = txns
+        .map((t, i) => ({ t, i }))
+        .filter(({ t }) => isWithdrawal(t))
+        .map(({ t, i }) => {
+          const lines = linesOf(txns, i, false)
+          return toPayout(t, id, lines ? lines.length : null)
+        })
+        .filter((p) => p.createdAt >= createdSince && isAfter(p, after))
+        .sort(comparePayouts)
+      return { payouts: ordered.slice(0, limit), hasMore: ordered.length > limit }
+    },
+
+    async get(id) {
+      const ctx = await context(id)
+      if (!ctx) return null
+      const w = ctx.txns[ctx.index]!
+      const status = withdrawalStatus(w.transaction_info.transaction_status)
+      const lines = status === 'paid' || status === 'in_transit' ? linesOf(ctx.txns, ctx.index, true)! : []
+      return toPayout(w, await accountId(), lines.length)
+    },
+
+    async lines(payoutId, { cursor, limit }) {
+      let offset = 0
+      if (cursor) {
+        const parts = decodeKeysetCursor(cursor, 1)
+        if (!parts || typeof parts[0] !== 'number' || !Number.isInteger(parts[0]) || parts[0] < 0) throw invalid('Invalid query', { cursor: 'was not issued by this store' })
+        offset = parts[0]
+      }
+      const ctx = await context(payoutId)
+      if (!ctx) throw notFound(`Payout ${payoutId}`)
+      const status = withdrawalStatus(ctx.txns[ctx.index]!.transaction_info.transaction_status)
+      const all = status === 'paid' || status === 'in_transit' ? linesOf(ctx.txns, ctx.index, true)! : []
+      const orders = orderMap(ctx.txns)
+      const page = all.slice(offset, offset + limit).map((t) => toLine(t, orders))
+      return { lines: page, nextCursor: offset + limit < all.length ? encodeKeysetCursor([offset + limit]) : null }
+    },
+  }
 }
