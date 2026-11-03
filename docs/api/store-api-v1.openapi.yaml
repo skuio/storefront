@@ -266,7 +266,7 @@ paths:
   /payouts/{provider}/{id}:
     get:
       operationId: getPayout
-      description: One payout; line_count is always filled.
+      description: One payout; line_count is filled except for a Stripe payout of more than 1,000 lines (null). Page the lines to exhaustion.
       parameters:
         - { name: provider, in: path, required: true, schema: { type: string, enum: [stripe, paypal] } }
         - { name: id, in: path, required: true, schema: { type: string } }
@@ -611,7 +611,7 @@ components:
         created_at: { type: string, format: date-time }
         method: { type: [string, 'null'], description: 'standard | instant (Stripe); withdrawal or the T-code (PayPal)' }
         destination_label: { type: [string, 'null'], examples: ['Bank ••6789'] }
-        line_count: { type: [integer, 'null'], description: 'May be null in the list; always set on GET /payouts/{provider}/{id}' }
+        line_count: { type: [integer, 'null'], description: 'May be null in the list, and on GET /payouts/{provider}/{id} for a Stripe payout of more than 1,000 lines; page the lines to exhaustion' }
     PayoutLine:
       type: object
       required: [id, type, category, source_id, order_id, order_number, payment_reference, gross, fee, net, fee_details, created_at, available_on, description]

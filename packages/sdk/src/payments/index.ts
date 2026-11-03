@@ -106,7 +106,11 @@ export interface Payout {
   method: string | null
   /** A human label for the destination, e.g. `Bank ••6789`, when the processor says. */
   destinationLabel: string | null
-  /** How many lines `lines()` returns. Null in a list when counting would cost extra processor calls; `get()` always fills it. */
+  /**
+   * How many lines `lines()` returns. Null in a list when counting would cost extra processor calls,
+   * and from `get()` when counting would take more than a bounded number of calls (Stripe: over
+   * 1,000 lines). Consumers page the lines to exhaustion either way.
+   */
   lineCount: number | null
 }
 
@@ -157,6 +161,23 @@ export interface PayoutListParams {
   /** Strictly after this position (keyset paging); null for the first page. */
   after: PayoutPosition | null
   limit: number
+  /**
+   * ISO 8601 UTC; when set, only payouts created at or before it. The merged list passes one
+   * completeness cutoff to every provider (and keeps it for every page) so a processor that reports
+   * late is never skipped by a cursor another processor moved past.
+   */
+  until?: string | null
+}
+
+/**
+ * How far behind real time the merged payout list stops: the slowest processor's reporting lag
+ * (PayPal Transaction Search, up to three hours).
+ */
+export const PAYOUT_COMPLETENESS_LAG_MS = 3 * 3_600_000
+
+/** True when `p` is at or before `until` (no bound when null). */
+export function isWithin(p: { createdAt: string }, until: string | null | undefined): boolean {
+  return !until || p.createdAt <= until
 }
 
 export interface PayoutListResult {

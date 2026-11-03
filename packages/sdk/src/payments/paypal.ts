@@ -3,7 +3,7 @@ import type { Quote } from '../store/checkout'
 import { decodeKeysetCursor, encodeKeysetCursor } from '../store/cursor'
 import { invalid, notFound } from '../store/errors'
 import {
-  comparePayouts, isAfter, isoSeconds, PaymentWebhookError, ProcessorPermissionError,
+  comparePayouts, isAfter, isoSeconds, isWithin, PAYOUT_COMPLETENESS_LAG_MS, PaymentWebhookError, ProcessorPermissionError,
   type PaymentAdapter, type PaymentContext, type PaymentEvent, type PaymentPayouts, type PaymentStart, type Payout,
   type PayoutLine, type PayoutLineCategory,
 } from './index'
@@ -515,7 +515,7 @@ const PERMISSION = 'Transaction search'
 /** The client id and secret themselves were refused (OAuth 401/403). */
 const CREDENTIALS_PERMISSION = 'API credentials'
 /** PayPal: Transaction Search can lag real time by up to three hours. Payouts read only older data. */
-export const PAYPAL_REPORTING_LAG_MS = 3 * 3_600_000
+export const PAYPAL_REPORTING_LAG_MS = PAYOUT_COMPLETENESS_LAG_MS
 /** The smallest window a too-large result set is split down to. */
 const MIN_SPLIT_MS = 3_600_000
 
@@ -568,11 +568,20 @@ export function isPayPalBalanceMovement(code: string): boolean {
   return !(n >= 1300 && n <= 1399)
 }
 
-/** `2026-10-27T12:53:15+0000` → `2026-10-27T12:53:15Z`. */
+/** PayPal's timestamp (`2026-10-27T12:53:15+0000`, fractional seconds allowed) at full precision, in ms. */
+function paypalInstant(value: string): number {
+  return Date.parse(value.replace(/([+-]\d{2})(\d{2})$/, '$1:$2'))
+}
+
+/** `2026-10-27T12:53:15+0000` → `2026-10-27T12:53:15Z` (what the API shows; grouping uses `paypalInstant`). */
 function paypalTime(value: string): string {
-  const t = Date.parse(value.replace(/([+-]\d{2})(\d{2})$/, '$1:$2'))
+  const t = paypalInstant(value)
   return Number.isNaN(t) ? value : isoSeconds(new Date(t))
 }
+
+const instantOf = (t: PayPalTransaction) => paypalInstant(t.transaction_info.transaction_initiation_date)
+const byId = (a: PayPalTransaction, b: PayPalTransaction) =>
+  a.transaction_info.transaction_id < b.transaction_info.transaction_id ? -1 : a.transaction_info.transaction_id > b.transaction_info.transaction_id ? 1 : 0
 
 /** Transaction statuses whose amount moved the balance: success, and success later reversed. */
 const MOVED_BALANCE = new Set(['S', 'V'])
@@ -580,6 +589,8 @@ const isWithdrawal = (t: PayPalTransaction) => paypalLineCategory(t.transaction_
 /** A withdrawal that took money out of the balance (completed or still on its way). */
 const isBoundary = (t: PayPalTransaction) => isWithdrawal(t) && ['S', 'P'].includes(t.transaction_info.transaction_status ?? 'S')
 const currencyOf = (t: PayPalTransaction) => t.transaction_info.transaction_amount.currency_code.toLowerCase()
+/** T1101: PayPal reversing a withdrawal (the bank returned it). */
+const WITHDRAWAL_REVERSAL = 'T1101'
 
 function withdrawalStatus(status: string | undefined): Payout['status'] {
   switch (status) {
@@ -625,9 +636,10 @@ export function paypalPayouts(deps: {
   }
 
   /**
-   * Every transaction in [start, end] (second precision, both ends inclusive), capped at the settled
-   * watermark. A window PayPal refuses as RESULTSET_TOO_LARGE is halved (down to an hour) into
-   * [start, mid] and [mid + 1s, end], so no second is searched twice or skipped.
+   * Every transaction in [start, end] (both ends inclusive), capped at the settled watermark. A window
+   * PayPal refuses as RESULTSET_TOO_LARGE is halved (down to an hour) into [start, mid] and [mid, end]:
+   * the halves overlap at `mid`, so a transaction there (or a fraction of a second after it) is never
+   * lost, and `chronological` drops the duplicate by transaction id.
    */
   async function search(start: number, end: number, extra: Record<string, string> = {}): Promise<PayPalTransaction[]> {
     end = Math.min(end, settled())
@@ -637,7 +649,7 @@ export function paypalPayouts(deps: {
     } catch (e) {
       if (!(e instanceof PayPalError && /RESULTSET_TOO_LARGE/.test(e.body)) || end - start <= MIN_SPLIT_MS) throw e
       const mid = start + Math.floor((end - start) / 2000) * 1000
-      return [...(await search(start, mid, extra)), ...(await search(mid + 1000, end, extra))]
+      return [...(await search(start, mid, extra)), ...(await search(mid, end, extra))]
     }
   }
 
@@ -667,20 +679,28 @@ export function paypalPayouts(deps: {
     }
   }
 
-  /** Every transaction in [start, end], oldest first, in ≤31-day windows. */
+  /**
+   * Every transaction in [start, end], in settlement order, in ≤31-day windows. Each window starts
+   * where the previous one ended (inclusive, overlapping by that instant): PayPal's timestamps can
+   * carry fractions of a second, and the query is to the second.
+   */
   async function range(start: number, end: number): Promise<PayPalTransaction[]> {
     const out: PayPalTransaction[] = []
-    for (let from = start; from < end; from += WINDOW_MS + 1000) out.push(...(await search(from, Math.min(from + WINDOW_MS, end))))
+    for (let from = start; from < end; from += WINDOW_MS) out.push(...(await search(from, Math.min(from + WINDOW_MS, end))))
     return chronological(out)
   }
 
+  /**
+   * Deduplicated by transaction id, in settlement order: by time (full precision), a withdrawal after
+   * every other movement of the same instant (a payment in the same second as a withdrawal is in
+   * that withdrawal), then id only to make the order stable.
+   */
   function chronological(list: PayPalTransaction[]): PayPalTransaction[] {
     const seen = new Set<string>()
     return list
       .filter((t) => (seen.has(t.transaction_info.transaction_id) ? false : (seen.add(t.transaction_info.transaction_id), true)))
-      .map((t) => ({ t, id: t.transaction_info.transaction_id, at: Date.parse(paypalTime(t.transaction_info.transaction_initiation_date)) }))
-      // Deterministic whatever order PayPal answered in: by time, then transaction id.
-      .sort((a, b) => a.at - b.at || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+      .map((t) => ({ t, at: instantOf(t), last: isWithdrawal(t) ? 1 : 0 }))
+      .sort((a, b) => a.at - b.at || a.last - b.last || byId(a.t, b.t))
       .map((x) => x.t)
   }
 
@@ -715,9 +735,20 @@ export function paypalPayouts(deps: {
       }
     }
     if (from === -1 && !complete) return null
+    // A reversed withdrawal (V) is no boundary; it and its reversal cancel out, so neither is a line.
+    const withdrawals = new Set(txns.filter(isWithdrawal).map((t) => t.transaction_info.transaction_id))
+    const reversesWithdrawal = (t: PayPalTransaction) =>
+      t.transaction_info.transaction_event_code === WITHDRAWAL_REVERSAL || withdrawals.has(t.transaction_info.paypal_reference_id ?? '')
     return txns
       .slice(from + 1, index)
-      .filter((t) => !isWithdrawal(t) && currencyOf(t) === currency && isPayPalBalanceMovement(t.transaction_info.transaction_event_code) && MOVED_BALANCE.has(t.transaction_info.transaction_status ?? 'S'))
+      .filter(
+        (t) =>
+          !isWithdrawal(t) &&
+          !reversesWithdrawal(t) &&
+          currencyOf(t) === currency &&
+          isPayPalBalanceMovement(t.transaction_info.transaction_event_code) &&
+          MOVED_BALANCE.has(t.transaction_info.transaction_status ?? 'S')
+      )
   }
 
   function toPayout(w: PayPalTransaction, accountId: string, lineCount: number | null): Payout {
@@ -770,7 +801,7 @@ export function paypalPayouts(deps: {
   async function findWithdrawal(id: string): Promise<PayPalTransaction | null> {
     const end = settled()
     for (let w = 0; w < MAX_WINDOWS; w++) {
-      const to = end - w * (WINDOW_MS + 1000)
+      const to = end - w * WINDOW_MS
       if (to <= end - HISTORY_MS) break
       const found = (await search(Math.max(to - WINDOW_MS, end - HISTORY_MS), to, { transaction_id: id })).find((t) => t.transaction_info.transaction_id === id)
       if (found) return isWithdrawal(found) ? found : null
@@ -782,14 +813,14 @@ export function paypalPayouts(deps: {
   async function context(id: string): Promise<{ txns: PayPalTransaction[]; index: number } | null> {
     const w = await findWithdrawal(id)
     if (!w) return null
-    const at = Date.parse(paypalTime(w.transaction_info.transaction_initiation_date))
+    const at = instantOf(w)
     const floor = now().getTime() - HISTORY_MS
     let start = Math.max(at - WINDOW_MS, floor)
     let txns = await range(start, at + 1000)
     for (let n = 1; n < MAX_WINDOWS && start > floor; n++) {
       const index = txns.findIndex((t) => t.transaction_info.transaction_id === id)
       if (index !== -1 && linesOf(txns, index, false)) break
-      const earlier = Math.max(start - WINDOW_MS - 1000, floor)
+      const earlier = Math.max(start - WINDOW_MS, floor)
       txns = chronological([...(await range(earlier, start)), ...txns])
       start = earlier
     }
@@ -805,8 +836,8 @@ export function paypalPayouts(deps: {
   }
 
   return {
-    async list({ createdSince, after, limit }) {
-      const end = settled()
+    async list({ createdSince, after, limit, until }) {
+      const end = until ? Math.min(settled(), Date.parse(until) + 999) : settled()
       const start = Math.max(Date.parse(after && after.createdAt > createdSince ? after.createdAt : createdSince), now().getTime() - HISTORY_MS + 86_400_000)
       if (start >= end) return { payouts: [], hasMore: false }
       const txns = await range(start, end)
@@ -818,7 +849,7 @@ export function paypalPayouts(deps: {
           const lines = linesOf(txns, i, false)
           return toPayout(t, id, lines ? lines.length : null)
         })
-        .filter((p) => p.createdAt >= createdSince && isAfter(p, after))
+        .filter((p) => p.createdAt >= createdSince && isAfter(p, after) && isWithin(p, until))
         .sort(comparePayouts)
       return { payouts: ordered.slice(0, limit), hasMore: ordered.length > limit }
     },
@@ -842,7 +873,8 @@ export function paypalPayouts(deps: {
       const ctx = await context(payoutId)
       if (!ctx) throw notFound(`Payout ${payoutId}`)
       const status = withdrawalStatus(ctx.txns[ctx.index]!.transaction_info.transaction_status)
-      const all = status === 'paid' || status === 'in_transit' ? linesOf(ctx.txns, ctx.index, true)! : []
+      // Grouped in settlement order; shown by date, then transaction id.
+      const all = (status === 'paid' || status === 'in_transit' ? linesOf(ctx.txns, ctx.index, true)! : []).sort((a, b) => instantOf(a) - instantOf(b) || byId(a, b))
       const orders = orderMap(ctx.txns)
       const page = all.slice(offset, offset + limit).map((t) => toLine(t, orders))
       return { lines: page, nextCursor: offset + limit < all.length ? encodeKeysetCursor([offset + limit]) : null }

@@ -1,4 +1,4 @@
-import { isAfter, ProcessorPermissionError, type PaymentAdapter, type PaymentPayouts, type Payout, type PayoutLine, type PayoutPosition } from '../payments'
+import { isAfter, isoSeconds, isWithin, PAYOUT_COMPLETENESS_LAG_MS, ProcessorPermissionError, type PaymentAdapter, type PaymentPayouts, type Payout, type PayoutLine, type PayoutPosition } from '../payments'
 import type { Connection, Store } from '../store'
 import type { Order } from '../types'
 import { API_KEY_PREFIX, type ConnectScope } from '../store/connections'
@@ -374,13 +374,18 @@ async function payoutsRoute(segments: string[], url: URL, store: Store, payments
     const createdSince = since ? new Date(since).toISOString().replace(/\.\d{3}Z$/, 'Z') : new Date(Date.now() - DEFAULT_PAYOUT_LOOKBACK_MS).toISOString().replace(/\.\d{3}Z$/, 'Z')
     const limit = limitParam(url, 50, 100)
     const cursorRaw = url.searchParams.get('cursor')
-    let cursor: { createdAt: string; provider: string; id: string } | null = null
+    let cursor: { createdAt: string; provider: string; id: string; until: string } | null = null
     if (cursorRaw) {
-      const parts = decodeKeysetCursor(cursorRaw, 3)
+      const parts = decodeKeysetCursor(cursorRaw, 4)
       if (!parts || !parts.every((p) => typeof p === 'string')) throw new ValidationError('Invalid query', { cursor: 'was not issued by this store' })
-      cursor = { createdAt: parts[0] as string, provider: parts[1] as string, id: parts[2] as string }
+      cursor = { createdAt: parts[0] as string, provider: parts[1] as string, id: parts[2] as string, until: parts[3] as string }
     }
     const chosen = provider ? [adapterFor(provider)] : adapters
+    // A merged list stops at one completeness cutoff for every provider, fixed by the first page and
+    // carried in the cursor: otherwise a processor that reports late (PayPal, up to three hours) could
+    // have a withdrawal appear behind a cursor another processor already moved past. A single-provider
+    // list keeps the adapter's own horizon ('' in the cursor).
+    const until = cursor ? cursor.until : provider ? '' : isoSeconds(new Date(Date.now() - PAYOUT_COMPLETENESS_LAG_MS))
 
     const pages = await Promise.all(
       chosen.map(async (a) => {
@@ -391,8 +396,8 @@ async function payoutsRoute(segments: string[], url: URL, store: Store, payments
           else if (a.id > cursor.provider) after = { createdAt: cursor.createdAt, id: '' }
           else after = { createdAt: cursor.createdAt, id: '\uffff' }
         }
-        const page = await a.payouts.list({ createdSince, after, limit })
-        return { ...page, payouts: page.payouts.filter((p) => isAfter(p, after)) }
+        const page = await a.payouts.list({ createdSince, after, limit, until: until || null })
+        return { ...page, payouts: page.payouts.filter((p) => isAfter(p, after) && isWithin(p, until)) }
       })
     )
     // The same (created_at, provider, id) order the cursor filter above assumes; any other order skips or repeats.
@@ -402,7 +407,7 @@ async function payoutsRoute(segments: string[], url: URL, store: Store, payments
     const last = page[page.length - 1]
     return json({
       data: page.map(serializePayout),
-      next_cursor: more && last ? encodeKeysetCursor([last.createdAt, last.provider, last.id]) : null,
+      next_cursor: more && last ? encodeKeysetCursor([last.createdAt, last.provider, last.id, until]) : null,
       providers,
     })
   }
@@ -425,26 +430,24 @@ async function payoutsRoute(segments: string[], url: URL, store: Store, payments
 
 /**
  * Fill a line's order from the store's own records when the processor did not carry it (a PayPal
- * refund of a capture outside the searched range) or carried only the id.
+ * refund of a capture outside the searched range) or carried only the id. One bulk read of just
+ * id, number and payment reference for the whole page; a database failure fails the request (a 200
+ * with order links silently missing would post an unlinked refund), a missing order stays null.
  */
 async function withOrders(store: Store, provider: string, lines: PayoutLine[]): Promise<PayoutLine[]> {
-  const cache = new Map<string, Promise<Order | null>>()
-  const once = (key: string, load: () => Promise<Order | null>) => {
-    if (!cache.has(key)) cache.set(key, load().catch(() => null))
-    return cache.get(key)!
-  }
-  return Promise.all(
-    lines.map(async (line) => {
-      if (line.orderId && line.orderNumber) return line
-      const order = line.orderId
-        ? await once(`id:${line.orderId}`, () => store.orders.get(line.orderId!))
-        : line.paymentReference
-          ? await once(`ref:${line.paymentReference}`, () => store.orders.byPaymentReference(provider, line.paymentReference!))
-          : null
-      if (!order) return line
-      return { ...line, orderId: order.id, orderNumber: line.orderNumber ?? order.number }
-    })
-  )
+  const pending = lines.filter((l) => !(l.orderId && l.orderNumber))
+  const ids = pending.flatMap((l) => (l.orderId ? [l.orderId] : []))
+  const references = pending.flatMap((l) => (!l.orderId && l.paymentReference ? [l.paymentReference] : []))
+  if (!ids.length && !references.length) return lines
+  const found = await store.orders.paymentLinks(provider, ids, references)
+  const byId = new Map(found.map((o) => [o.id, o]))
+  const byReference = new Map(found.flatMap((o) => (o.reference ? [[o.reference, o] as const] : [])))
+  return lines.map((line) => {
+    if (line.orderId && line.orderNumber) return line
+    const order = line.orderId ? byId.get(line.orderId) : line.paymentReference ? byReference.get(line.paymentReference) : undefined
+    if (!order) return line
+    return { ...line, orderId: order.id, orderNumber: line.orderNumber ?? order.number }
+  })
 }
 
 export type { Payout, PayoutLine }

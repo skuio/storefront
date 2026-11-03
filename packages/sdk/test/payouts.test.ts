@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type Stripe from 'stripe'
 import { handleStoreApi } from '../src/api'
 import { manualPayments } from '../src/payments/manual'
@@ -387,6 +387,30 @@ describe('stripe payouts', () => {
     expect(res.body.error.message).toContain('Grant "Balance transaction sources: Read"')
   })
 
+  it('counts at most 1,000 lines for GET; a bigger payout has line_count null but all its lines', async () => {
+    const rows = (id: string, n: number): Txn[] => [
+      bt(`txn_${id}`, 'payout', -n * 100, 0, '2026-10-30T00:00:00Z', id, 'payout'),
+      ...Array.from({ length: n }, (_, i) => bt(`txn_${id}_${String(i).padStart(4, '0')}`, 'charge', 100, 0, '2026-10-29T00:00:00Z', null)),
+    ]
+    const { api, fake } = stripeRig({
+      payouts: [synthPayout('po_ok', 999 * 100, '2026-10-30T00:00:00Z'), synthPayout('po_big', 1000 * 100, '2026-10-30T00:00:00Z')],
+      txns: { po_ok: rows('po_ok', 999), po_big: rows('po_big', 1000) },
+    })
+    expect((await api('/payouts/stripe/po_ok')).body.data.line_count).toBe(999)
+    fake.raw.balanceTransactions.list.mockClear()
+    expect((await api('/payouts/stripe/po_big')).body.data.line_count).toBeNull()
+    expect(fake.raw.balanceTransactions.list).toHaveBeenCalledTimes(10)
+
+    let count = 0
+    let cursor: string | null = null
+    do {
+      const res: any = await api(`/payouts/stripe/po_big/lines?limit=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`)
+      count += res.body.data.length
+      cursor = res.body.next_cursor
+    } while (cursor)
+    expect(count).toBe(1000)
+  })
+
   it('caches the account id and falls back to no destination label when the key cannot expand it', async () => {
     const data = stripeData()
     const { api, fake } = stripeRig(data)
@@ -643,6 +667,60 @@ describe('paypal payouts', () => {
     expect((await live.api('/payouts/paypal/WNEW/lines')).body.data.map((l: any) => l.id)).toEqual(['PAYNEW'])
   })
 
+  it('puts a payment in the same second as a withdrawal in that withdrawal, whatever the ids', async () => {
+    const { api } = await paypalRig({
+      txns: [
+        pp('W0', 'T0400', '2026-10-01T09:00:00Z', '-1.00'),
+        pp('ZPAY', 'T0006', '2026-10-05T09:00:00Z', '100.00'),
+        pp('AW', 'T0400', '2026-10-05T09:00:00Z', '-100.00'),
+      ],
+    })
+    const lines = (await api('/payouts/paypal/AW/lines')).body.data
+    expect(lines.map((l: any) => l.id)).toEqual(['ZPAY'])
+    expect(sumNet(lines)).toBe(10000)
+  })
+
+  it('a transaction a fraction of a second after a 31-day window boundary is still found', async () => {
+    // created_since + (31 days − 1 s) is where the first window ends and the second starts.
+    const { api } = await paypalRig({ txns: [pp('WFRAC', 'T0400', '2026-10-01T23:59:59.500Z', '-5.00')] })
+    const res = await api('/payouts?provider=paypal&created_since=2026-09-01T00:00:00Z')
+    expect(res.body.data.map((p: any) => [p.id, p.created_at])).toEqual([['WFRAC', '2026-10-01T23:59:59Z']])
+  })
+
+  it('a reversed withdrawal and its reversal cancel out: the next withdrawal carries the money once', async () => {
+    const { api } = await paypalRig({
+      txns: [
+        pp('W0', 'T0400', '2026-10-01T09:00:00Z', '-1.00'),
+        pp('PAY', 'T0006', '2026-10-02T09:00:00Z', '100.00'),
+        pp('WREV', 'T0400', '2026-10-03T09:00:00Z', '-100.00', { status: 'V' }),
+        pp('BACK', 'T1101', '2026-10-04T09:00:00Z', '100.00', { ref: 'WREV' }),
+        pp('W2', 'T0400', '2026-10-05T09:00:00Z', '-100.00'),
+      ],
+    })
+    const lines = (await api('/payouts/paypal/W2/lines')).body.data
+    expect(lines.map((l: any) => l.id)).toEqual(['PAY'])
+    expect(sumNet(lines)).toBe(10000)
+    expect((await api('/payouts/paypal/WREV')).body.data).toMatchObject({ status: 'canceled', line_count: 0 })
+    expect((await api('/payouts/paypal/WREV/lines')).body.data).toEqual([])
+  })
+
+  it('fills order links with one bulk lookup, and fails the request when that lookup fails', async () => {
+    const { api, store, order } = await paypalRig()
+    const links = vi.spyOn(store.orders, 'paymentLinks')
+    const get = vi.spyOn(store.orders, 'get')
+    const byRef = vi.spyOn(store.orders, 'byPaymentReference')
+    const ok = await api('/payouts/paypal/W2/lines')
+    expect(ok.body.data.find((l: any) => l.id === 'REF1')).toMatchObject({ order_id: order.id, order_number: order.number })
+    expect(links).toHaveBeenCalledTimes(1)
+    expect(get).not.toHaveBeenCalled()
+    expect(byRef).not.toHaveBeenCalled()
+
+    links.mockRejectedValueOnce(new Error('D1_ERROR: too many queries'))
+    const failed = await api('/payouts/paypal/W2/lines')
+    expect(failed.status).toBe(500)
+    expect(failed.body.error.code).toBe('internal_error')
+  })
+
   it('halves a window PayPal finds too large, covering every second exactly once', async () => {
     const plain = await paypalRig()
     const split = await paypalRig({ maxResults: 2 })
@@ -653,12 +731,13 @@ describe('paypal payouts', () => {
     expect(res.status).toBe(200)
     expect(res.body).toEqual(expected)
 
-    // The answered windows tile [created_since, now − lag] with no gap and no overlap.
+    // The answered windows cover [created_since, now − lag] with no gap.
     const windows = [...split.fake.windows].sort((a, b) => a[0] - b[0])
     expect(windows.length).toBeGreaterThan(2) // more than the two 31-day windows: some were halved
     expect(windows[0]![0]).toBe(Date.parse(since))
     expect(windows[windows.length - 1]![1]).toBe(Date.parse(PAYPAL_NOW) - 3 * 3_600_000)
-    for (let i = 1; i < windows.length; i++) expect(windows[i]![0]).toBe(windows[i - 1]![1] + 1000)
+    // Adjacent windows overlap at their shared instant, so nothing between two whole seconds falls out.
+    for (let i = 1; i < windows.length; i++) expect(windows[i]![0]).toBe(windows[i - 1]![1])
 
     const lines = (await split.api('/payouts/paypal/W2/lines')).body.data
     expect(lines.map((l: any) => l.id)).toEqual(['PAY2', 'FX-USD', 'REF1'])
@@ -669,7 +748,16 @@ describe('paypal payouts', () => {
 // ── Both ───────────────────────────────────────────────────────────────────────────────────
 
 describe('payouts across processors', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+  const clock = (iso: string) => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(iso))
+  }
+
   it('merges stripe and paypal oldest first and pages without gaps or repeats', async () => {
+    clock('2026-11-04T00:00:00Z')
     const { store, adapter: paypal } = await paypalRig()
     const stripe = stripePayments({ stripe: fakeStripe(stripeData()).stripe, webhookSecret: 'whsec' })
     const api = client(store, [stripe, paypal, manualPayments()])
@@ -690,6 +778,7 @@ describe('payouts across processors', () => {
   })
 
   it('pages same-second payouts of two processors one at a time without skipping or repeating', async () => {
+    clock('2026-11-02T12:00:00Z')
     const at = '2026-10-15T00:00:00Z'
     const { store, adapter: paypal } = await paypalRig({ txns: [pp('z', 'T0400', at, '-10.00')] })
     const stripe = stripePayments({ stripe: fakeStripe({ payouts: [synthPayout('po_A', 1000, at)], txns: {} }).stripe, webhookSecret: 'whsec' })
@@ -704,6 +793,43 @@ describe('payouts across processors', () => {
     } while (cursor)
     // (created_at, provider, id): paypal before stripe at the same second, though "po_A" < "z".
     expect(ids).toEqual(['paypal:z', 'stripe:po_A'])
+  })
+
+  it('a merged list stops every processor at one cutoff, kept by its cursor, so a late PayPal withdrawal is never skipped', async () => {
+    clock('2026-11-02T12:00:00Z')
+    const { store, adapter: paypal } = await paypalRig({
+      txns: [pp('W0', 'T0400', '2026-11-02T06:00:00Z', '-1.00'), pp('WLATE', 'T0400', '2026-11-02T09:00:01Z', '-2.00')],
+      adapter: { now: () => new Date() },
+    })
+    const stripe = stripePayments({
+      stripe: fakeStripe({
+        payouts: [synthPayout('po_7', 700, '2026-11-02T07:00:00Z'), synthPayout('po_8', 800, '2026-11-02T08:00:00Z'), synthPayout('po_11', 1100, '2026-11-02T11:00:00Z')],
+        txns: {},
+      }).stripe,
+      webhookSecret: 'whsec',
+    })
+    const api = client(store, [stripe, paypal])
+    const ids = (res: any) => res.body.data.map((p: any) => `${p.provider}:${p.id}`)
+    const since = '2026-11-01T00:00:00Z'
+
+    // 12:00:00 — cutoff 09:00:00 for both processors: the 11:00 Stripe payout is not served yet.
+    const first = await api(`/payouts?created_since=${since}&limit=2`)
+    expect(ids(first)).toEqual(['paypal:W0', 'stripe:po_7'])
+    vi.setSystemTime(new Date('2026-11-02T12:00:02Z'))
+    // Two seconds later the next page keeps the first page's cutoff.
+    const second = await api(`/payouts?created_since=${since}&limit=2&cursor=${encodeURIComponent(first.body.next_cursor)}`)
+    expect(ids(second)).toEqual(['stripe:po_8'])
+    expect(second.body.next_cursor).toBeNull()
+
+    // The next run, from where the consumer stopped, finds the PayPal withdrawal before any later payout.
+    const next = await api(`/payouts?created_since=2026-11-02T08:00:00Z`)
+    expect(ids(next)).toEqual(['stripe:po_8', 'paypal:WLATE'])
+    vi.setSystemTime(new Date('2026-11-02T14:00:01Z'))
+    expect(ids(await api(`/payouts?created_since=2026-11-02T08:00:00Z`))).toEqual(['stripe:po_8', 'paypal:WLATE', 'stripe:po_11'])
+
+    // A Stripe-only list is not held back.
+    vi.setSystemTime(new Date('2026-11-02T12:00:00Z'))
+    expect(ids(await api(`/payouts?provider=stripe&created_since=${since}`))).toEqual(['stripe:po_7', 'stripe:po_8', 'stripe:po_11'])
   })
 
   it('answers 404 for an unknown or payout-less provider and an empty list when there are none', async () => {

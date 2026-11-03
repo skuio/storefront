@@ -4,7 +4,7 @@ import type { Address, Order, PaymentSettlement } from '../types'
 import { decodeKeysetCursor, encodeKeysetCursor } from '../store/cursor'
 import { invalid, notFound } from '../store/errors'
 import {
-  comparePayouts, isAfter, isoSeconds, PaymentWebhookError, ProcessorPermissionError,
+  comparePayouts, isAfter, isoSeconds, isWithin, PaymentWebhookError, ProcessorPermissionError,
   type PaymentAdapter, type PaymentContext, type PaymentEvent, type PaymentPayouts, type PaymentStart, type Payout,
   type PayoutLine, type PayoutLineCategory,
 } from './index'
@@ -146,6 +146,8 @@ export function stripePayments(options: StripePaymentOptions): PaymentAdapter {
 
 /** Most payouts one list request walks (Stripe pages are 100): about five years of daily payouts. */
 const MAX_PAYOUT_PAGES = 20
+/** Most balance-transaction pages `get()` reads to count a payout's lines (1,000 lines); beyond it `line_count` is null. */
+const MAX_COUNT_PAGES = 10
 
 /** Stripe `reporting_category` (preferred) or `type` → line category. */
 const STRIPE_CATEGORIES: Record<string, PayoutLineCategory> = {
@@ -294,11 +296,13 @@ export function stripePayouts(stripe: Stripe): PaymentPayouts {
     }
   }
 
-  async function countLines(p: Stripe.Payout): Promise<number> {
+  /** The line count, or null when counting would take more than `MAX_COUNT_PAGES` Stripe calls. */
+  async function countLines(p: Stripe.Payout): Promise<number | null> {
     if (!p.automatic) return 0
     let count = 0
     let startingAfter: string | undefined
-    for (;;) {
+    for (let pages = 0; ; pages++) {
+      if (pages === MAX_COUNT_PAGES) return null
       const page = await transactions(p.id, { limit: 100, ...(startingAfter ? { starting_after: startingAfter } : {}) })
       count += page.data.filter((bt) => bt.type !== 'payout').length
       if (!page.has_more || !page.data.length) return count
@@ -357,14 +361,15 @@ export function stripePayouts(stripe: Stripe): PaymentPayouts {
   }
 
   return {
-    async list({ createdSince, after, limit }) {
+    async list({ createdSince, after, limit, until }) {
       const since = Math.floor(Date.parse(after && after.createdAt > createdSince ? after.createdAt : createdSince) / 1000)
+      const created = until ? { gte: since, lte: Math.floor(Date.parse(until) / 1000) } : { gte: since }
       // Stripe lists newest first; walk back to `since`, then serve oldest first.
       const all: Stripe.Payout[] = []
       let startingAfter: string | undefined
       for (let page = 0; ; page++) {
         if (page === MAX_PAYOUT_PAGES) throw invalid('Too many payouts in one range; use a later created_since', { created_since: `more than ${MAX_PAYOUT_PAGES * 100} payouts since it` })
-        const res = await listPage({ created: { gte: since }, limit: 100, ...(startingAfter ? { starting_after: startingAfter } : {}) })
+        const res = await listPage({ created, limit: 100, ...(startingAfter ? { starting_after: startingAfter } : {}) })
         all.push(...res.data)
         if (!res.has_more || !res.data.length) break
         startingAfter = res.data[res.data.length - 1]!.id
@@ -372,7 +377,7 @@ export function stripePayouts(stripe: Stripe): PaymentPayouts {
       const id = all.length ? await accountId() : ''
       const ordered = all
         .map((p) => toPayout(p, id, null))
-        .filter((p) => isAfter(p, after))
+        .filter((p) => isAfter(p, after) && isWithin(p, until))
         .sort(comparePayouts)
       return { payouts: ordered.slice(0, limit), hasMore: ordered.length > limit }
     },

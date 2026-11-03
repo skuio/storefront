@@ -357,7 +357,11 @@ none.
 **List.** Ordered by `created_at, provider, id` ascending. `provider` is optional: without it the
 list merges every payout-capable processor on the store (`providers` names them; empty when there
 are none). `created_since` is inclusive and defaults to 90 days ago. `limit` is 1–100 (default 50).
-The cursor is opaque: echo it back. Because the list can merge two processors, a consumer that
+The cursor is opaque: echo it back. **A merged list (no `provider`) stops three hours before now
+for every processor**, PayPal's reporting lag, so a late-reported PayPal withdrawal can never land
+behind a cursor that a Stripe payout already moved past; that cutoff is fixed by the first page
+and carried in the cursor, so every page of one run uses it. A single-provider list keeps that
+processor's own horizon (Stripe: up to now; PayPal: three hours back). Because the list can merge two processors, a consumer that
 records per-processor sync errors should page each provider separately (`?provider=stripe`, then
 `?provider=paypal`): a permission error on one fails the whole merged request. An unknown provider,
 or one without payouts, is `404 not_found`.
@@ -379,7 +383,7 @@ or one without payouts, is `404 not_found`.
 | `created_at` | ISO 8601 UTC, second precision. |
 | `method` | Stripe `standard` / `instant`; PayPal `withdrawal` (T0400) or the withdrawal's T-code (`T0401` auto-sweep, …). |
 | `destination_label` | e.g. `Bank ••6789` when the key may read the bank account; else `null`. Always `null` for PayPal. |
-| `line_count` | How many lines `/lines` returns. **May be `null` in the list** (counting a Stripe payout costs extra calls; a PayPal withdrawal whose previous withdrawal is before `created_since`); `GET /payouts/{provider}/{id}` always fills it. A change in `line_count` means the lines changed. |
+| `line_count` | How many lines `/lines` returns. **May be `null` in the list** (counting a Stripe payout costs extra calls; a PayPal withdrawal whose previous withdrawal is before `created_since`). `GET /payouts/{provider}/{id}` fills it, except for a Stripe payout of more than 1,000 lines (counting it would take more than ten Stripe calls), where it is `null`. **Page `/lines` to exhaustion rather than trusting `line_count`** (SKU.io does). A change in `line_count` means the lines changed. |
 
 **PayoutLine:**
 ```json
@@ -437,8 +441,12 @@ first; a range with more than 2,000 payouts is refused with 422 (use a later `cr
 lines are the balance movements **in the withdrawal's currency** after the previous withdrawal, up
 to it: transactions with status `S` (completed) or `V` (completed, then reversed: the original did
 move the balance, and its refund or reversal is a line of its own, in whichever payout it falls).
-Pending (`P`) and denied (`D`) transactions never moved the balance and are not lines. Lines are
-ordered by transaction date, then transaction id. Transactions after the latest withdrawal belong
+Pending (`P`) and denied (`D`) transactions never moved the balance and are not lines. A
+transaction in the same second as a withdrawal belongs to that withdrawal. A withdrawal PayPal
+reversed (status `V`, the bank returned it) is no payout boundary, and neither it nor its reversal
+(`T1101`, or the transaction whose reference is that withdrawal) is a line: the money stays in the
+balance and goes out with the next withdrawal. Lines are shown by transaction date, then
+transaction id. Transactions after the latest withdrawal belong
 to no payout yet. PayPal keeps one balance per currency, so a CAD sale converted to USD shows as a
 `T0200` adjustment in the USD payout.
 
@@ -458,6 +466,11 @@ whose lines do not sum to its `amount` instead of posting it:
   (Receive 100, withdraw 40, receive 20, withdraw 80: the first payout's lines sum to 100, the
   second's to 20.) `Σ net = amount` holds when each withdrawal empties the balance (PayPal's
   "withdraw all" and auto-sweep do).
+- **Very high-volume PayPal accounts.** A payout read walks every transaction since the previous
+  withdrawal, one Transaction Search call per 500 transactions (plus one per month of history). An
+  account with tens of thousands of transactions between withdrawals can need more than the 50
+  outbound requests a Cloudflare Workers Free request allows; such a store needs the Workers Paid
+  plan (1,000) or a Node host.
 - **Payments that complete later.** A line is grouped by its **initiation** date. An eCheck or
   other pending payment initiated before a withdrawal but completed after a later one is grouped
   with the withdrawal that follows its initiation once it completes (that earlier payout's lines,
