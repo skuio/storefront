@@ -597,6 +597,7 @@ describe('paypal payouts', () => {
     expect(paypalLineCategory('T1501')).toBe('reserve')
     expect(paypalLineCategory('T0200')).toBe('adjustment')
     expect(paypalLineCategory('T0300')).toBe('transfer')
+    expect(paypalLineCategory('T1101')).toBe('transfer') // withdrawal reversed
     expect(paypalLineCategory('T0400')).toBe('payout')
     expect(paypalLineCategory('T9900')).toBe('other')
   })
@@ -687,7 +688,7 @@ describe('paypal payouts', () => {
     expect(res.body.data.map((p: any) => [p.id, p.created_at])).toEqual([['WFRAC', '2026-10-01T23:59:59Z']])
   })
 
-  it('a reversed withdrawal and its reversal cancel out: the next withdrawal carries the money once', async () => {
+  it('a reversed withdrawal and its reversal in one interval are both transfer lines that cancel out', async () => {
     const { api } = await paypalRig({
       txns: [
         pp('W0', 'T0400', '2026-10-01T09:00:00Z', '-1.00'),
@@ -698,10 +699,44 @@ describe('paypal payouts', () => {
       ],
     })
     const lines = (await api('/payouts/paypal/W2/lines')).body.data
-    expect(lines.map((l: any) => l.id)).toEqual(['PAY'])
+    expect(lines.map((l: any) => [l.id, l.category, l.net.amount])).toEqual([['PAY', 'charge', 10000], ['WREV', 'transfer', -10000], ['BACK', 'transfer', 10000]])
     expect(sumNet(lines)).toBe(10000)
     expect((await api('/payouts/paypal/WREV')).body.data).toMatchObject({ status: 'canceled', line_count: 0 })
     expect((await api('/payouts/paypal/WREV/lines')).body.data).toEqual([])
+  })
+
+  it('a reversed withdrawal and its reversal in different intervals each balance their own payout', async () => {
+    const { api } = await paypalRig({
+      txns: [
+        pp('W0', 'T0400', '2026-10-01T09:00:00Z', '-1.00'),
+        pp('PAY1', 'T0006', '2026-10-02T09:00:00Z', '100.00'),
+        pp('WV', 'T0400', '2026-10-03T09:00:00Z', '-100.00', { status: 'V' }),
+        pp('PAY2', 'T0006', '2026-10-04T09:00:00Z', '50.00'),
+        pp('W50', 'T0400', '2026-10-05T09:00:00Z', '-50.00'),
+        pp('BACK', 'T1101', '2026-10-06T09:00:00Z', '100.00', { ref: 'WV' }),
+        pp('W100', 'T0400', '2026-10-07T09:00:00Z', '-100.00'),
+      ],
+    })
+    const w50 = (await api('/payouts/paypal/W50/lines')).body.data
+    expect(w50.map((l: any) => l.id)).toEqual(['PAY1', 'WV', 'PAY2'])
+    expect(sumNet(w50)).toBe(5000)
+    const w100 = (await api('/payouts/paypal/W100/lines')).body.data
+    expect(w100.map((l: any) => [l.id, l.category])).toEqual([['BACK', 'transfer']])
+    expect(sumNet(w100)).toBe(10000)
+  })
+
+  it('a withdrawal fee (T0102) that references its withdrawal is an ordinary line', async () => {
+    const { api } = await paypalRig({
+      txns: [
+        pp('W0', 'T0400', '2026-10-01T09:00:00Z', '-1.00'),
+        pp('PAY', 'T0006', '2026-10-02T09:00:00Z', '100.00'),
+        pp('WFEE', 'T0102', '2026-10-03T08:59:59Z', '-2.00', { ref: 'W98' }),
+        pp('W98', 'T0400', '2026-10-03T09:00:00Z', '-98.00'),
+      ],
+    })
+    const lines = (await api('/payouts/paypal/W98/lines')).body.data
+    expect(lines.map((l: any) => [l.id, l.category])).toEqual([['PAY', 'charge'], ['WFEE', 'fee']])
+    expect(sumNet(lines)).toBe(9800)
   })
 
   it('fills order links with one bulk lookup, and fails the request when that lookup fails', async () => {
@@ -830,6 +865,45 @@ describe('payouts across processors', () => {
     // A Stripe-only list is not held back.
     vi.setSystemTime(new Date('2026-11-02T12:00:00Z'))
     expect(ids(await api(`/payouts?provider=stripe&created_since=${since}`))).toEqual(['stripe:po_7', 'stripe:po_8', 'stripe:po_11'])
+  })
+
+  it('the cursor freezes the default lower bound: a later page does not recompute "90 days ago"', async () => {
+    clock('2026-11-02T12:00:00Z')
+    const edge = new Date(Date.parse('2026-11-02T12:00:00Z') - 90 * 86_400_000 + 1000).toISOString().replace('.000Z', 'Z')
+    const { store } = rig()
+    const stripe = stripePayments({ stripe: fakeStripe({ payouts: [synthPayout('po_a', 100, edge), synthPayout('po_b', 200, edge)], txns: {} }).stripe, webhookSecret: 'whsec' })
+    const api = client(store, [stripe])
+    for (const path of ['/payouts?limit=1', '/payouts?provider=stripe&limit=1']) {
+      vi.setSystemTime(new Date('2026-11-02T12:00:00Z'))
+      const first = await api(path)
+      expect(first.body.data.map((p: any) => p.id)).toEqual(['po_a'])
+      vi.setSystemTime(new Date('2026-11-02T12:00:02Z'))
+      const second = await api(`${path}&cursor=${encodeURIComponent(first.body.next_cursor)}`)
+      expect(second.body.data.map((p: any) => p.id)).toEqual(['po_b'])
+    }
+  })
+
+  it('a merged cutoff follows the configured PayPal lag (6 h), so its withdrawal is not skipped', async () => {
+    clock('2026-11-02T12:00:00Z')
+    const { store, adapter: paypal } = await paypalRig({
+      txns: [pp('W7', 'T0400', '2026-11-02T07:00:00Z', '-7.00')],
+      adapter: { now: () => new Date(), reportingLagMs: 6 * 3_600_000 },
+    })
+    const stripe = stripePayments({
+      stripe: fakeStripe({
+        payouts: [synthPayout('po_5', 500, '2026-11-02T05:00:00Z'), synthPayout('po_8', 800, '2026-11-02T08:00:00Z'), synthPayout('po_9', 900, '2026-11-02T09:00:00Z')],
+        txns: {},
+      }).stripe,
+      webhookSecret: 'whsec',
+    })
+    const api = client(store, [stripe, paypal])
+    const ids = (res: any) => res.body.data.map((p: any) => `${p.provider}:${p.id}`)
+    // Cutoff 06:00 for both: Stripe does not run ahead to 08:00 / 09:00.
+    expect(ids(await api('/payouts?created_since=2026-11-02T00:00:00Z'))).toEqual(['stripe:po_5'])
+    vi.setSystemTime(new Date('2026-11-02T13:00:01Z'))
+    expect(ids(await api('/payouts?created_since=2026-11-02T05:00:00Z'))).toEqual(['stripe:po_5', 'paypal:W7'])
+    vi.setSystemTime(new Date('2026-11-02T15:00:00Z'))
+    expect(ids(await api('/payouts?created_since=2026-11-02T05:00:00Z'))).toEqual(['stripe:po_5', 'paypal:W7', 'stripe:po_8', 'stripe:po_9'])
   })
 
   it('answers 404 for an unknown or payout-less provider and an empty list when there are none', async () => {

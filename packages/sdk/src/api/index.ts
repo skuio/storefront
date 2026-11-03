@@ -1,4 +1,4 @@
-import { isAfter, isoSeconds, isWithin, PAYOUT_COMPLETENESS_LAG_MS, ProcessorPermissionError, type PaymentAdapter, type PaymentPayouts, type Payout, type PayoutLine, type PayoutPosition } from '../payments'
+import { isAfter, isoSeconds, isWithin, ProcessorPermissionError, type PaymentAdapter, type PaymentPayouts, type Payout, type PayoutLine, type PayoutPosition } from '../payments'
 import type { Connection, Store } from '../store'
 import type { Order } from '../types'
 import { API_KEY_PREFIX, type ConnectScope } from '../store/connections'
@@ -371,21 +371,25 @@ async function payoutsRoute(segments: string[], url: URL, store: Store, payments
     const provider = url.searchParams.get('provider')
     const since = url.searchParams.get('created_since')
     if (since && Number.isNaN(Date.parse(since))) throw new ValidationError('Invalid query', { created_since: 'must be an ISO-8601 timestamp' })
-    const createdSince = since ? new Date(since).toISOString().replace(/\.\d{3}Z$/, 'Z') : new Date(Date.now() - DEFAULT_PAYOUT_LOOKBACK_MS).toISOString().replace(/\.\d{3}Z$/, 'Z')
+    const requestedSince = since ? new Date(since).toISOString().replace(/\.\d{3}Z$/, 'Z') : new Date(Date.now() - DEFAULT_PAYOUT_LOOKBACK_MS).toISOString().replace(/\.\d{3}Z$/, 'Z')
     const limit = limitParam(url, 50, 100)
     const cursorRaw = url.searchParams.get('cursor')
-    let cursor: { createdAt: string; provider: string; id: string; until: string } | null = null
+    let cursor: { createdAt: string; provider: string; id: string; until: string; since: string } | null = null
     if (cursorRaw) {
-      const parts = decodeKeysetCursor(cursorRaw, 4)
-      if (!parts || !parts.every((p) => typeof p === 'string')) throw new ValidationError('Invalid query', { cursor: 'was not issued by this store' })
-      cursor = { createdAt: parts[0] as string, provider: parts[1] as string, id: parts[2] as string, until: parts[3] as string }
+      const parts = decodeKeysetCursor(cursorRaw, 5)
+      if (!parts || !parts.every((p) => typeof p === 'string') || !parts[4]) throw new ValidationError('Invalid query', { cursor: 'was not issued by this store' })
+      cursor = { createdAt: parts[0] as string, provider: parts[1] as string, id: parts[2] as string, until: parts[3] as string, since: parts[4] as string }
     }
     const chosen = provider ? [adapterFor(provider)] : adapters
-    // A merged list stops at one completeness cutoff for every provider, fixed by the first page and
-    // carried in the cursor: otherwise a processor that reports late (PayPal, up to three hours) could
-    // have a withdrawal appear behind a cursor another processor already moved past. A single-provider
-    // list keeps the adapter's own horizon ('' in the cursor).
-    const until = cursor ? cursor.until : provider ? '' : isoSeconds(new Date(Date.now() - PAYOUT_COMPLETENESS_LAG_MS))
+    // Both bounds are fixed by the first page and carried in the cursor, so later pages never
+    // recompute them from the clock. The lower one is created_since (or 90 days before the first page).
+    // The upper one, for a merged list only: now minus the largest reporting lag among the merged
+    // processors (PayPal's configured lag, Stripe none), so a processor that reports late never has
+    // a payout appear behind a cursor another processor already moved past. A single-provider list
+    // keeps the adapter's own horizon ('' in the cursor).
+    const lag = Math.max(0, ...chosen.map((a) => a.payouts.reportingLagMs ?? 0))
+    const until = cursor ? cursor.until : provider ? '' : isoSeconds(new Date(Date.now() - lag))
+    const createdSince = cursor ? cursor.since : requestedSince
 
     const pages = await Promise.all(
       chosen.map(async (a) => {
@@ -407,7 +411,7 @@ async function payoutsRoute(segments: string[], url: URL, store: Store, payments
     const last = page[page.length - 1]
     return json({
       data: page.map(serializePayout),
-      next_cursor: more && last ? encodeKeysetCursor([last.createdAt, last.provider, last.id, until]) : null,
+      next_cursor: more && last ? encodeKeysetCursor([last.createdAt, last.provider, last.id, until, createdSince]) : null,
       providers,
     })
   }

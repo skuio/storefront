@@ -357,11 +357,13 @@ none.
 **List.** Ordered by `created_at, provider, id` ascending. `provider` is optional: without it the
 list merges every payout-capable processor on the store (`providers` names them; empty when there
 are none). `created_since` is inclusive and defaults to 90 days ago. `limit` is 1–100 (default 50).
-The cursor is opaque: echo it back. **A merged list (no `provider`) stops three hours before now
-for every processor**, PayPal's reporting lag, so a late-reported PayPal withdrawal can never land
-behind a cursor that a Stripe payout already moved past; that cutoff is fixed by the first page
-and carried in the cursor, so every page of one run uses it. A single-provider list keeps that
-processor's own horizon (Stripe: up to now; PayPal: three hours back). Because the list can merge two processors, a consumer that
+The cursor is opaque: echo it back. It freezes the run's lower bound (`created_since`, or 90 days
+before the first page), so later pages never recompute it from the clock. **A merged list (no
+`provider`) stops at now minus the largest reporting lag among the merged processors** (PayPal's,
+three hours unless the store configured another `reportingLagMs`; Stripe none) for every
+processor, so a late-reported PayPal withdrawal can never land behind a cursor that a Stripe payout
+already moved past; that cutoff is also fixed by the first page and carried in the cursor. A
+single-provider list keeps that processor's own horizon (Stripe: up to now; PayPal: its lag back). Because the list can merge two processors, a consumer that
 records per-processor sync errors should page each provider separately (`?provider=stripe`, then
 `?provider=paypal`): a permission error on one fails the whole merged request. An unknown provider,
 or one without payouts, is `404 not_found`.
@@ -425,7 +427,7 @@ lines; the kit's tests assert this on a real payout).
 | `fee`, `stripe_fee`, `tax`, `network_cost` | T0100–T0199, T1108 (fee reversal), T1109 (fee refund) — a fee given back is positive, as PayPal reports it | `fee` |
 | `risk_reserved_funds`, `risk_reserve_released`, `reserve_transaction`, `reserved_funds` | T1105 (release of a general account hold), T1500–T1599 (holds) | `reserve` |
 | `adjustment`, `other_adjustment` | T0200–T0299 (currency conversion), T1900–T1999 | `adjustment` |
-| `transfer`, `transfer_reversal`, `topup`, `topup_reversal` | T0300–T0399 | `transfer` |
+| `transfer`, `transfer_reversal`, `topup`, `topup_reversal` | T0300–T0399, T1101 (withdrawal reversed), a reversed (`V`) withdrawal | `transfer` |
 | anything else | anything else | `other` |
 
 PayPal T1300–T1399 (authorize, reauthorize, void an authorization) never move the balance and are
@@ -443,9 +445,11 @@ to it: transactions with status `S` (completed) or `V` (completed, then reversed
 move the balance, and its refund or reversal is a line of its own, in whichever payout it falls).
 Pending (`P`) and denied (`D`) transactions never moved the balance and are not lines. A
 transaction in the same second as a withdrawal belongs to that withdrawal. A withdrawal PayPal
-reversed (status `V`, the bank returned it) is no payout boundary, and neither it nor its reversal
-(`T1101`, or the transaction whose reference is that withdrawal) is a line: the money stays in the
-balance and goes out with the next withdrawal. Lines are shown by transaction date, then
+reversed (status `V`, the bank returned it) is no payout boundary, but the money did leave and
+come back: the reversed withdrawal is a negative `transfer` line in the payout whose interval it
+falls in, and its reversal (`T1101`) a positive `transfer` line in the payout whose interval that
+falls in, so each payout still sums to its amount. Anything else that references a withdrawal (a
+`T0102` withdrawal fee) is an ordinary line. Lines are shown by transaction date, then
 transaction id. Transactions after the latest withdrawal belong
 to no payout yet. PayPal keeps one balance per currency, so a CAD sale converted to USD shows as a
 `T0200` adjustment in the USD payout.

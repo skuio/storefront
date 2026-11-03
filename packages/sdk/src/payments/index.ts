@@ -169,10 +169,7 @@ export interface PayoutListParams {
   until?: string | null
 }
 
-/**
- * How far behind real time the merged payout list stops: the slowest processor's reporting lag
- * (PayPal Transaction Search, up to three hours).
- */
+/** PayPal Transaction Search's documented reporting lag (up to three hours): its default `reportingLagMs`. */
 export const PAYOUT_COMPLETENESS_LAG_MS = 3 * 3_600_000
 
 /** True when `p` is at or before `until` (no bound when null). */
@@ -194,6 +191,12 @@ export interface PayoutLinePage {
 
 /** The payout capability of a `PaymentAdapter`. Throw `ProcessorPermissionError` when the processor refuses. */
 export interface PaymentPayouts {
+  /**
+   * How far behind real time this processor's payout data may be, in ms (PayPal Transaction Search:
+   * three hours by default, `reportingLagMs` when configured). Omitted means none (Stripe). A merged
+   * list stops at now minus the largest lag among the providers it merges.
+   */
+  readonly reportingLagMs?: number
   list(params: PayoutListParams): Promise<PayoutListResult>
   /** One payout with `lineCount` filled; null when the processor has no such payout. */
   get(id: string): Promise<Payout | null>

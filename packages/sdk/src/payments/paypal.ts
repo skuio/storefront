@@ -557,7 +557,8 @@ export function paypalLineCategory(code: string): PayPalLineCategoryOrPayout {
   // T1105 releases a general account hold; T15xx are holds.
   if (n === 1105 || (n >= 1500 && n <= 1599)) return 'reserve'
   if ((n >= 200 && n <= 299) || (n >= 1900 && n <= 1999)) return 'adjustment'
-  if (n >= 300 && n <= 399) return 'transfer'
+  // T1101: PayPal reversing a withdrawal (the bank returned it) — money back from the bank.
+  if ((n >= 300 && n <= 399) || n === 1101) return 'transfer'
   return 'other'
 }
 export type PayPalLineCategoryOrPayout = PayoutLineCategory | 'payout'
@@ -589,8 +590,6 @@ const isWithdrawal = (t: PayPalTransaction) => paypalLineCategory(t.transaction_
 /** A withdrawal that took money out of the balance (completed or still on its way). */
 const isBoundary = (t: PayPalTransaction) => isWithdrawal(t) && ['S', 'P'].includes(t.transaction_info.transaction_status ?? 'S')
 const currencyOf = (t: PayPalTransaction) => t.transaction_info.transaction_amount.currency_code.toLowerCase()
-/** T1101: PayPal reversing a withdrawal (the bank returned it). */
-const WITHDRAWAL_REVERSAL = 'T1101'
 
 function withdrawalStatus(status: string | undefined): Payout['status'] {
   switch (status) {
@@ -735,16 +734,14 @@ export function paypalPayouts(deps: {
       }
     }
     if (from === -1 && !complete) return null
-    // A reversed withdrawal (V) is no boundary; it and its reversal cancel out, so neither is a line.
-    const withdrawals = new Set(txns.filter(isWithdrawal).map((t) => t.transaction_info.transaction_id))
-    const reversesWithdrawal = (t: PayPalTransaction) =>
-      t.transaction_info.transaction_event_code === WITHDRAWAL_REVERSAL || withdrawals.has(t.transaction_info.paypal_reference_id ?? '')
+    // A reversed withdrawal (V) is no boundary but did take the money out: its debit is a `transfer`
+    // line where it happened, and its reversal (T1101) the matching credit where that happened, so
+    // each interval balances even when the two fall in different payouts.
     return txns
       .slice(from + 1, index)
       .filter(
         (t) =>
-          !isWithdrawal(t) &&
-          !reversesWithdrawal(t) &&
+          (!isWithdrawal(t) || t.transaction_info.transaction_status === 'V') &&
           currencyOf(t) === currency &&
           isPayPalBalanceMovement(t.transaction_info.transaction_event_code) &&
           MOVED_BALANCE.has(t.transaction_info.transaction_status ?? 'S')
@@ -776,7 +773,9 @@ export function paypalPayouts(deps: {
     const gross = minor(info.transaction_amount.value, currency)
     // PayPal reports the fee as a balance movement (negative); the line reports what PayPal kept.
     const fee = info.fee_amount ? -minor(info.fee_amount.value, currency) : 0
-    const category = paypalLineCategory(info.transaction_event_code) as PayoutLineCategory
+    // A withdrawal is a line only when PayPal reversed it: money that left for the bank and came back.
+    const code = paypalLineCategory(info.transaction_event_code)
+    const category: PayoutLineCategory = code === 'payout' ? 'transfer' : code
     const original = category === 'charge' ? info.transaction_id : info.paypal_reference_id ?? null
     const createdAt = paypalTime(info.transaction_initiation_date)
     return {
@@ -836,6 +835,8 @@ export function paypalPayouts(deps: {
   }
 
   return {
+    reportingLagMs: deps.reportingLagMs ?? PAYPAL_REPORTING_LAG_MS,
+
     async list({ createdSince, after, limit, until }) {
       const end = until ? Math.min(settled(), Date.parse(until) + 999) : settled()
       const start = Math.max(Date.parse(after && after.createdAt > createdSince ? after.createdAt : createdSince), now().getTime() - HISTORY_MS + 86_400_000)
