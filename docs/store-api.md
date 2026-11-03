@@ -368,7 +368,13 @@ before the first page), so later pages never recompute it from the clock. **A me
 three hours unless the store configured another `reportingLagMs`; Stripe none) for every
 processor, so a late-reported PayPal withdrawal can never land behind a cursor that a Stripe payout
 already moved past; that cutoff is also fixed by the first page and carried in the cursor. A
-single-provider list keeps that processor's own horizon (Stripe: up to now; PayPal: its lag back). Because the list can merge two processors, a consumer that
+single-provider list keeps that processor's own horizon (Stripe: up to now; PayPal: its lag back).
+**Every list run reads as of its first page:** the cursor also carries that page's clock, so each
+later page reads every processor's data as of the same moment (minus its lag) and reports the same
+statuses — a payout that became visible, or a day that became final, after the first page waits
+for the next run. **A `pending` payout is no watermark:** start the next run at or before the
+`created_at` of the earliest pending payout the last run saw (a pending PayPal balance day can still
+gain a currency). Because the list can merge two processors, a consumer that
 records per-processor sync errors should page each provider separately (`?provider=stripe`, then
 `?provider=paypal`): a permission error on one fails the whole merged request. An unknown provider,
 or one without payouts, is `404 not_found`.
@@ -463,8 +469,9 @@ system picks per store with `paypal_mode`:
 - **`balance`**: PayPal is a bank account in the merchant's books. A payout is one **UTC day × currency**
   that had balance movements: id `day-YYYY-MM-DD-CUR` (`day-2026-11-02-USD`), `created_at` the day's
   last second, `arrival_date` the day, `method: "balance"`, `destination_label: "PayPal balance"`,
-  `amount` the Σ `net` of its lines (so it always balances), `status` `paid` once the end of the day
-  is older than the reporting lag, else `pending`. Its lines are every movement settled that day
+  `amount` the Σ `net` of its lines (so it always balances), `status` `paid` only when the read
+  behind this response covered the whole day (to 23:59:59.999, already the reporting lag behind its
+  clock), else `pending`; the list and `GET` apply the same rule to their own read. Its lines are every movement settled that day
   **except withdrawals** (any status) **and withdrawal reversals** (`T1101`): those are transfers the
   merchant books between PayPal and the bank, not payout lines. A withdrawal fee (`T0102`) is a line.
   Withdrawal mode never lists balance days and balance mode never lists withdrawals; `GET` and
@@ -524,7 +531,9 @@ of these must hold:
    instant bank transfer completes at once; an eCheck takes 3–5 business days);
 4. no other transaction references it (`paypal_reference_id`): a refund or dispute may itself be what
    moved `transaction_updated_date`, so a referenced payment keeps its initiation date. To see such a
-   refund, a read that holds a delayed payment also reads the 14 days after the payout.
+   refund, a read also reads up to 14 days past the payout — only when it holds a delayed payment
+   that started or cleared **inside** the payout(s) being read, and only as far as 14 days after that
+   payment started, so an unrelated eCheck costs no extra Transaction Search call.
 
 Everything else keeps its initiation date. So an eCheck started before a withdrawal and cleared
 after it is a line of the **next** withdrawal (or of the balance day it cleared), where its money
@@ -533,13 +542,24 @@ withdrawal, a balance day, or `created_since`) to find delayed payments started 
 list, a withdrawal's `line_count` is `null` when its previous withdrawal is less than 14 days after
 where the read starts.
 
+**A paid payout's lines never change.** The rule above reads `transaction_updated_date`, which PayPal
+also moves when it later changes a transaction (a refund of a cleared eCheck), so the store records
+which payout each transaction is in (table `payout_line_assignments`, migration
+`0010_payout_line_assignments.sql`) the first time it serves that payout as `paid` through
+`GET /payouts/paypal/{id}` or its `/lines` — a withdrawal with status `S`, a balance day whose whole
+day was read. Every later read honours the record: a recorded transaction stays in its payout, a
+recorded payout lists exactly its recorded transactions, and a later refund or reversal is a movement
+of its own in its own payout. Withdrawal mode and balance mode keep separate records. A pending or
+in-transit payout is not recorded (its lines may still change), and the list never records.
+
 **PayPal payouts appear about three hours after the withdrawal.** Transaction Search lags real time
 by up to three hours, so the store reads only transactions older than that: a withdrawal (and any
 transaction) newer than three hours is not listed, not found by `GET /payouts/paypal/{id}` (404),
 and not in any lines yet; a balance day stays `pending` until three hours after it ends. Poll again
 later. Transaction Search keeps three years; each request is cut into ≤ 31-day windows (a window
 PayPal finds too large is halved, down to an hour), so looking up an old payout costs one call per
-month back to it.
+month back to it. Every `start_date` / `end_date` is sent with milliseconds, so a window that ends
+at 23:59:59.999 also returns a 23:59:59.500 transaction.
 
 **Known limits (PayPal).** The operations system should hold a payout whose lines do not sum to its
 `amount` instead of posting it:
@@ -551,9 +571,12 @@ month back to it.
 - **Delayed payments outside the rule.** A payment that cleared late but matches none of the funding
   signals above (PayPal reports no eCheck or `BANK` instrument for it), or took longer than 14 days,
   is grouped by its initiation date; in withdrawal mode its payout then does not reconcile and gets no
-  carry lines. `transaction_updated_date` is when PayPal last changed a transaction, so a later change
-  to a cleared eCheck (a refund or dispute more than 14 days on) can move it back to its initiation
-  date, changing an earlier payout's lines and `line_count`.
+  carry lines. Before a payout is first served as paid, a later change to a cleared eCheck can still
+  regroup it (afterwards the record holds it in place).
+- **Reported into a recorded payout.** A transaction PayPal reports more than the reporting lag late,
+  into a payout already recorded as paid, is a line of no payout (the recorded payout does not change).
+  Its money did move, so in withdrawal mode that payout's lines and PayPal's balances disagree (no
+  carry lines, Σ net ≠ `amount`) and the consumer holds it; in balance mode the day keeps its total.
 - **Very high-volume PayPal accounts.** A payout read walks every transaction since the previous
   withdrawal (plus 14 days), one Transaction Search call per 500 transactions (plus one per month of
   history). An account with tens of thousands of transactions between withdrawals can need more than

@@ -1009,6 +1009,139 @@ describe('paypal delayed settlement (eCheck)', () => {
   })
 })
 
+describe('paypal payout membership, horizon and finality (Codex follow-up)', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+  const lineIds = async (api: any, id: string) => (await api(`/payouts/paypal/${id}/lines`)).body.data.map((l: any) => l.id)
+
+  it('a paid payout\'s lines never change: an eCheck refunded after it was served stays in W2 and its day', async () => {
+    const txns = [
+      pp('W0', 'T0400', '2026-10-01T09:00:00Z', '-1.00'),
+      pp('ECHK', 'T0006', '2026-10-02T10:00:00Z', '50.00', { fee: '-1.50', updated: '2026-10-06T10:00:00Z', instrument: 'BANK', subInstrument: 'ECHECK' }),
+      pp('PAY', 'T0006', '2026-10-03T10:00:00Z', '20.00'),
+      pp('W1', 'T0400', '2026-10-04T09:00:00Z', '-20.00'),
+      pp('W2', 'T0400', '2026-10-08T09:00:00Z', '-48.50'),
+    ]
+    const { api, store } = await paypalRig({ txns })
+    expect(await lineIds(api, 'W1')).toEqual(['PAY'])
+    expect(await lineIds(api, 'W2')).toEqual(['ECHK'])
+    expect(await lineIds(api, 'day-2026-10-06-USD')).toEqual(['ECHK'])
+    expect(await lineIds(api, 'day-2026-10-03-USD')).toEqual(['PAY'])
+    const span = ['2026-09-01T00:00:00.000Z', '2026-10-31T00:00:00.000Z'] as const
+    const recorded = await store.payoutAssignments.inRange('paypal', 'withdrawal', ...span)
+    expect(recorded.get('ECHK')).toBe('W2')
+    expect(recorded.get('W2')).toBe('W2')
+    // Each mode keeps its own record of the same transaction.
+    expect((await store.payoutAssignments.inRange('paypal', 'balance', ...span)).get('ECHK')).toBe('day-2026-10-06-USD')
+
+    // PayPal moves transaction_updated_date when the eCheck is refunded: by its own rule it now groups by initiation.
+    txns.push(pp('REFE', 'T1107', '2026-10-09T10:00:00Z', '-10.00', { ref: 'ECHK' }))
+    expect(await lineIds(api, 'W1')).toEqual(['PAY'])
+    expect(await lineIds(api, 'W2')).toEqual(['ECHK'])
+    expect(sumNet((await api('/payouts/paypal/W2/lines')).body.data)).toBe(4850)
+    expect((await api('/payouts/paypal/W2')).body.data.line_count).toBe(1)
+    expect((await api('/payouts?provider=paypal&created_since=2026-10-01T00:00:00Z')).body.data.map((p: any) => [p.id, p.line_count]))
+      .toEqual([['W0', null], ['W1', 1], ['W2', 1]])
+    // The refund is a movement of its own, in its own payout.
+    expect((await api('/payouts?provider=paypal&paypal_mode=balance&created_since=2026-10-01T00:00:00Z')).body.data.map((p: any) => [p.id, p.amount.amount]))
+      .toEqual([['day-2026-10-03-USD', 2000], ['day-2026-10-06-USD', 4850], ['day-2026-10-09-USD', -1000]])
+    expect((await api('/payouts/paypal/day-2026-10-02-USD')).status).toBe(404)
+
+    // Without the record (a fresh store), the same PayPal data would regroup the eCheck.
+    const fresh = await paypalRig({ txns })
+    expect(await lineIds(fresh.api, 'W1')).toEqual(['ECHK', 'PAY'])
+  })
+
+  it('a pending withdrawal (in transit) is not recorded; it is once it is served paid', async () => {
+    const txns = [pp('W0', 'T0400', '2026-10-01T09:00:00Z', '-1.00'), pp('PAY', 'T0006', '2026-10-02T10:00:00Z', '20.00'), pp('WP', 'T0400', '2026-10-03T09:00:00Z', '-20.00', { status: 'P' })]
+    const { api, store } = await paypalRig({ txns })
+    expect(await lineIds(api, 'WP')).toEqual(['PAY'])
+    expect((await store.payoutAssignments.inRange('paypal', 'withdrawal', '2026-09-01T00:00:00.000Z', '2026-10-31T00:00:00.000Z')).size).toBe(0)
+  })
+
+  it('a single-provider balance run reads as of its first page: no currency appears or turns paid mid-run', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-11-02T12:00:00Z'))
+    const { api } = await paypalRig({
+      txns: [
+        pp('USD1', 'T0006', '2026-11-02T08:00:00Z', '10.00'),
+        pp('ZAR1', 'T0006', '2026-11-02T08:30:00Z', '30.00', { currency: 'ZAR' }),
+        // Reported only after 12:30 (three hours' lag): not part of a run that started at 12:00.
+        pp('EUR1', 'T0006', '2026-11-02T09:30:00Z', '20.00', { currency: 'EUR' }),
+      ],
+      adapter: { now: () => new Date() },
+    })
+    const base = '/payouts?provider=paypal&paypal_mode=balance&created_since=2026-11-02T00:00:00Z'
+    const first = await api(`${base}&limit=1`)
+    expect(first.body.data.map((p: any) => [p.id, p.status])).toEqual([['day-2026-11-02-USD', 'pending']])
+    // The day ends and its lag passes before the next page: the run still reads as of 12:00.
+    vi.setSystemTime(new Date('2026-11-03T04:00:00Z'))
+    const second = await api(`${base}&limit=1&cursor=${encodeURIComponent(first.body.next_cursor)}`)
+    expect(second.body.data.map((p: any) => [p.id, p.status])).toEqual([['day-2026-11-02-ZAR', 'pending']])
+    expect(second.body.next_cursor).toBeNull()
+    // A pending payout is no watermark: the next run from that day sees every currency, now final.
+    const next = await api(base)
+    expect(next.body.data.map((p: any) => [p.id, p.status])).toEqual([
+      ['day-2026-11-02-EUR', 'paid'], ['day-2026-11-02-USD', 'paid'], ['day-2026-11-02-ZAR', 'paid'],
+    ])
+  })
+
+  it('a day is paid only once the read covered all of it; a 23:59:59.500 transaction is never dropped; list and GET agree', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-11-03T02:59:59.900Z'))
+    const { store, adapter: paypal } = await paypalRig({
+      txns: [pp('PAY1', 'T0006', '2026-11-02T12:00:00Z', '10.00'), pp('PAY2', 'T0006', '2026-11-02T23:59:59.500Z', '20.00')],
+      adapter: { now: () => new Date() },
+    })
+    const stripe = stripePayments({ stripe: fakeStripe({ payouts: [], txns: {} }).stripe, webhookSecret: 'whsec' })
+    const api = client(store, [stripe, paypal])
+    // Merged cutoff 23:59:59Z, but the clock minus the lag is 23:59:59.900: the day's last 99 ms are unread.
+    const early = await api('/payouts?paypal_mode=balance&created_since=2026-11-02T00:00:00Z')
+    expect(early.body.data.map((p: any) => [p.id, p.status, p.amount.amount, p.line_count])).toEqual([['day-2026-11-02-USD', 'pending', 3000, 2]])
+    expect((await api('/payouts/paypal/day-2026-11-02-USD')).body.data).toMatchObject({ status: 'pending', amount: { amount: 3000 }, line_count: 2 })
+    expect(await lineIds(api, 'day-2026-11-02-USD')).toEqual(['PAY1', 'PAY2'])
+
+    vi.setSystemTime(new Date('2026-11-03T04:00:00Z'))
+    const later = await api('/payouts?paypal_mode=balance&created_since=2026-11-02T00:00:00Z')
+    expect(later.body.data.map((p: any) => [p.id, p.status, p.amount.amount, p.line_count])).toEqual([['day-2026-11-02-USD', 'paid', 3000, 2]])
+    expect((await api('/payouts/paypal/day-2026-11-02-USD')).body.data).toMatchObject({ status: 'paid', amount: { amount: 3000 }, line_count: 2 })
+  })
+
+  it('every query bound is sent with milliseconds', async () => {
+    const { api, fake } = await paypalRig()
+    await api('/payouts?provider=paypal&created_since=2026-10-01T00:00:00Z')
+    for (const call of fake.calls.filter((c) => c.startsWith('/v1/reporting/transactions'))) {
+      const q = new URLSearchParams(call.split('?')[1])
+      expect(q.get('start_date')).toMatch(/\.\d{3}Z$/)
+      expect(q.get('end_date')).toMatch(/\.\d{3}Z$/)
+    }
+  })
+
+  it('an eCheck that cannot fall in the payout does not make the read look ahead', async () => {
+    const base = [
+      pp('W0', 'T0400', '2026-10-01T09:00:00Z', '-1.00'),
+      pp('W1', 'T0400', '2026-10-04T09:00:00Z', '-1.00'),
+      pp('PAY', 'T0006', '2026-10-05T10:00:00Z', '20.00'),
+      pp('W2', 'T0400', '2026-10-08T09:00:00Z', '-20.00'),
+    ]
+    // Started and cleared before W1 (W2's previous withdrawal): it can be in neither W2 nor its interval.
+    const unrelated = pp('ECHK', 'T0006', '2026-10-02T10:00:00Z', '5.00', { updated: '2026-10-03T12:00:00Z', instrument: 'BANK', subInstrument: 'ECHECK' })
+    const searches = (calls: string[]) => calls.filter((c) => c.startsWith('/v1/reporting/transactions')).length
+    const plain = await paypalRig({ txns: base })
+    expect(await lineIds(plain.api, 'W2')).toEqual(['PAY'])
+    const withECheck = await paypalRig({ txns: [...base, unrelated] })
+    expect(await lineIds(withECheck.api, 'W2')).toEqual(['PAY'])
+    expect(searches(withECheck.fake.calls)).toBe(searches(plain.fake.calls))
+
+    // One that could be in W2 (cleared inside its interval) still looks ahead, once.
+    const relevant = pp('ECHK2', 'T0006', '2026-10-04T10:00:00Z', '5.00', { updated: '2026-10-07T12:00:00Z', instrument: 'BANK', subInstrument: 'ECHECK' })
+    const looking = await paypalRig({ txns: [...base, relevant] })
+    expect(await lineIds(looking.api, 'W2')).toEqual(['PAY', 'ECHK2'])
+    expect(searches(looking.fake.calls)).toBe(searches(plain.fake.calls) + 1)
+  })
+})
+
 describe('payout accounts on the list', () => {
   it('names every payout-capable provider\'s account; one that cannot be read is left out', async () => {
     const { store, adapter: paypal } = await paypalRig()

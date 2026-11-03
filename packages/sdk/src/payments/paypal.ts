@@ -5,7 +5,7 @@ import { invalid, notFound } from '../store/errors'
 import {
   comparePayouts, isAfter, isoSeconds, isWithin, PAYOUT_COMPLETENESS_LAG_MS, PaymentWebhookError, ProcessorPermissionError,
   type PaymentAdapter, type PaymentContext, type PaymentEvent, type PaymentPayouts, type PaymentStart, type Payout,
-  type PayoutLine, type PayoutLineCategory,
+  type PayoutAssignments, type PayoutLine, type PayoutLineCategory,
 } from './index'
 
 export interface PayPalPaymentOptions {
@@ -629,6 +629,10 @@ function paypalTime(value: string): string {
 }
 
 const instantOf = (t: PayPalTransaction) => paypalInstant(t.transaction_info.transaction_initiation_date)
+/** `transaction_updated_date` in ms; NaN when PayPal sent none. */
+const updatedOf = (t: PayPalTransaction) => (t.transaction_info.transaction_updated_date ? paypalInstant(t.transaction_info.transaction_updated_date) : NaN)
+/** What the store records for a transaction fixed to a payout: its id and initiation time with ms. */
+const assignmentRow = (t: PayPalTransaction) => ({ transactionId: t.transaction_info.transaction_id, occurredAt: new Date(instantOf(t)).toISOString() })
 const idOf = (t: PayPalTransaction) => t.transaction_info.transaction_id
 const byId = (a: PayPalTransaction, b: PayPalTransaction) => (idOf(a) < idOf(b) ? -1 : idOf(a) > idOf(b) ? 1 : 0)
 
@@ -747,8 +751,9 @@ export function paypalPayouts(deps: {
     const out: PayPalTransaction[] = []
     for (let page = 1; ; page++) {
       const q = new URLSearchParams({
-        start_date: isoSeconds(new Date(start)),
-        end_date: isoSeconds(new Date(end)),
+        // Millisecond bounds: a window ending at 23:59:59.999 must not drop a 23:59:59.500 transaction.
+        start_date: new Date(start).toISOString(),
+        end_date: new Date(end).toISOString(),
         fields: 'all',
         page_size: '500',
         page: String(page),
@@ -803,15 +808,26 @@ export function paypalPayouts(deps: {
   }
 
   /**
-   * `txns` read up to `to`, plus what happened in the next `PAYPAL_SETTLEMENT_DELAY_MAX_MS` when it
-   * holds a delayed payment, so a refund or dispute of it shortly after `to` is seen (and the payment
-   * keeps its initiation date, however `list` and `get` read it). Costs nothing without one.
+   * `txns` read up to `readEnd`, plus what happened after it, up to `cap`, when a delayed payment that
+   * could fall inside the payout(s) being read (`relevant`: started or settled inside them) may still
+   * be referenced by a refund or dispute that `txns` does not reach — so the payment keeps its
+   * initiation date however far the read went. A reference can only matter within
+   * `PAYPAL_SETTLEMENT_DELAY_MAX_MS` of the payment's start (later, the delay rule no longer holds), so
+   * the extra read stops there. No relevant delayed payment, or none that reaches past `readEnd`: no
+   * extra call.
    */
-  async function withReferences(txns: PayPalTransaction[], to: number): Promise<PayPalTransaction[]> {
-    if (!txns.some(isPayPalDelayedSettlement)) return txns
-    const until = Math.min(to + PAYPAL_SETTLEMENT_DELAY_MAX_MS, settled())
-    if (until <= to) return txns
-    return chronological([...txns, ...(await range(to, until))])
+  async function withReferences(txns: PayPalTransaction[], readEnd: number, cap: number, relevant: (t: PayPalTransaction) => boolean): Promise<PayPalTransaction[]> {
+    const candidates = txns.filter((t) => isPayPalDelayedSettlement(t) && relevant(t))
+    if (!candidates.length) return txns
+    const until = Math.min(Math.max(...candidates.map(instantOf)) + PAYPAL_SETTLEMENT_DELAY_MAX_MS, cap, settled())
+    if (until <= readEnd) return txns
+    return chronological([...txns, ...(await range(readEnd, until))])
+  }
+
+  /** The recorded payout of each transaction that occurred in [from, to], in this mode's record (each mode groups independently). */
+  async function assignmentsIn(assignments: PayoutAssignments | undefined, from: number, to: number, balance: boolean): Promise<Map<string, string>> {
+    if (!assignments) return new Map()
+    return assignments.inRange(balance ? 'balance' : 'withdrawal', new Date(from).toISOString(), new Date(to).toISOString())
   }
 
   /** The merchant's payer id when it can be read: cached, Log in with PayPal's userinfo, or what a search reported. */
@@ -982,10 +998,10 @@ export function paypalPayouts(deps: {
 
   /**
    * The withdrawal and every transaction back to the previous boundary in its currency and a
-   * settlement delay before it (so a delayed payment that settled after that boundary is there), plus
-   * the references `withReferences` reads after it.
+   * settlement delay before it (so a delayed payment that settled after that boundary is there).
+   * `start` and `end` are the range read.
    */
-  async function context(id: string): Promise<{ txns: PayPalTransaction[]; index: number } | null> {
+  async function context(id: string): Promise<{ txns: PayPalTransaction[]; index: number; start: number; end: number } | null> {
     const w = await findWithdrawal(id)
     if (!w) return null
     const at = instantOf(w)
@@ -1001,8 +1017,20 @@ export function paypalPayouts(deps: {
     }
     // The range copy (it carries ending_balance; a search by id does not) wins over the lookup's.
     if (!txns.some((t) => idOf(t) === id)) txns = chronological([...txns, w])
-    txns = await withReferences(txns, at + 1000)
-    return { txns, index: txns.findIndex((t) => idOf(t) === id) }
+    return { txns, index: txns.findIndex((t) => idOf(t) === id), start, end: Math.min(at + 1000, settled()) }
+  }
+
+  /**
+   * The movement lines of the withdrawal at `index`, honouring the store's record: a withdrawal already
+   * served as paid (its own id is recorded as its) has exactly its recorded transactions; any other has
+   * `linesOf`'s, less the transactions recorded for another payout. Null when `linesOf` cannot know.
+   */
+  function membersOf(txns: PayPalTransaction[], index: number, recorded: Map<string, string>, coveredFrom: number | null): PayPalTransaction[] | null {
+    const w = txns[index]!
+    const slice = linesOf(txns, index, coveredFrom)
+    if (!slice) return null
+    if (recorded.get(idOf(w)) === idOf(w)) return txns.filter((t) => t !== w && recorded.get(idOf(t)) === idOf(w))
+    return slice.filter((t) => !recorded.has(idOf(t)))
   }
 
   function orderMap(txns: PayPalTransaction[]): Map<string, string> {
@@ -1011,16 +1039,33 @@ export function paypalPayouts(deps: {
     return map
   }
 
-  /** A withdrawal and its lines in display order: carry_in, movements by settlement time then id, carry_out. */
-  async function withdrawal(id: string): Promise<{ w: PayPalTransaction; lines: PayoutLine[] } | null> {
+  /**
+   * A withdrawal and its lines in display order: carry_in, movements by settlement time then id,
+   * carry_out. A paid withdrawal served for the first time is recorded (itself and its movements), so
+   * its lines never change afterwards.
+   */
+  async function withdrawal(id: string, assignments: PayoutAssignments | undefined): Promise<{ w: PayPalTransaction; lines: PayoutLine[] } | null> {
     const ctx = await context(id)
     if (!ctx) return null
-    const w = ctx.txns[ctx.index]!
+    let txns = ctx.txns
+    let index = ctx.index
+    const w = txns[index]!
     const status = withdrawalStatus(w.transaction_info.transaction_status)
     if (status !== 'paid' && status !== 'in_transit') return { w, lines: [] }
-    const moves = linesOf(ctx.txns, ctx.index, null)!
-    const carry = carryOf(ctx.txns, ctx.index, moves)
-    const orders = orderMap(ctx.txns)
+    const recorded = await assignmentsIn(assignments, ctx.start, ctx.end, false)
+    const fixed = recorded.get(id) === id
+    if (!fixed) {
+      const from = previousBoundary(txns, index)
+      const after = from === -1 ? -Infinity : settledAt(txns[from]!)
+      const at = settledAt(w)
+      const inside = (x: number) => x > after && x <= at
+      txns = await withReferences(txns, ctx.end, settled(), (t) => inside(instantOf(t)) || inside(updatedOf(t)))
+      index = txns.findIndex((t) => idOf(t) === id)
+    }
+    const moves = membersOf(txns, index, recorded, null)!
+    if (status === 'paid' && !fixed && assignments) await assignments.assign('withdrawal', id, [w, ...moves].map(assignmentRow))
+    const carry = carryOf(txns, index, moves)
+    const orders = orderMap(txns)
     const currency = currencyOf(w)
     const lines = [
       ...(carry?.carryIn ? [carryLine('carry_in', carry.carryIn.amount, carry.carryIn.source, currency)] : []),
@@ -1032,33 +1077,48 @@ export function paypalPayouts(deps: {
 
   // ── balance mode ──
 
-  /** The day ids in `txns` with their lines: settled in [from, to], at most the watermark. */
-  function balanceDays(txns: PayPalTransaction[], from: number, to: number, only?: { day: number; currency: string }): Map<string, PayPalTransaction[]> {
+  /**
+   * The balance days of `txns` with their lines, for days in [from, to]. A recorded transaction is in
+   * its recorded day; an unrecorded one in the day it settled (if that is in [from, to]) unless that
+   * day is already recorded (served as paid), whose lines never change.
+   */
+  function balanceDays(txns: PayPalTransaction[], from: number, to: number, recorded: Map<string, string>): Map<string, PayPalTransaction[]> {
+    const fixedDays = new Set(recorded.values())
+    const firstDay = utcDay(from)
     const days = new Map<string, PayPalTransaction[]>()
     for (const t of txns) {
       if (!isBalanceDayLine(t)) continue
-      const at = settledAt(t)
-      if (at < from || at > to) continue
-      const day = utcDay(at)
-      const currency = currencyOf(t)
-      if (only && (only.day !== day || only.currency !== currency)) continue
-      const id = `day-${dateOf(day)}-${currency.toUpperCase()}`
+      let id = recorded.get(idOf(t))
+      if (id) {
+        const day = Date.parse(`${DAY_ID.exec(id)![1]}T00:00:00Z`)
+        if (day < firstDay || day > to) continue
+      } else {
+        const at = settledAt(t)
+        if (at < from || at > to) continue
+        id = `day-${dateOf(utcDay(at))}-${currencyOf(t).toUpperCase()}`
+        if (fixedDays.has(id)) continue
+      }
       const list = days.get(id)
       if (list) list.push(t)
       else days.set(id, [t])
     }
+    for (const list of days.values()) list.sort((a, b) => settledAt(a) - settledAt(b) || byId(a, b))
     return days
   }
 
-  function toDayPayout(id: string, lines: PayPalTransaction[], accountId: string): Payout {
+  /**
+   * A balance day as a payout. `covered` is the last instant (ms, inclusive) the read behind it
+   * reached, already at least the reporting lag behind its clock: the day is `paid` only when that
+   * read covered the whole day, so a day is never final on a read that stopped inside it.
+   */
+  function toDayPayout(id: string, lines: PayPalTransaction[], accountId: string, covered: number): Payout {
     const [, date, currencyCode] = DAY_ID.exec(id)!
     const day = Date.parse(`${date}T00:00:00Z`)
     return {
       id,
       provider: PROVIDER,
       accountId,
-      // Final once the whole day is older than the reporting lag.
-      status: day + DAY_MS < settled() ? 'paid' : 'pending',
+      status: day + DAY_MS - 1 <= covered ? 'paid' : 'pending',
       amount: { amount: lines.reduce((s, t) => s + netOf(t), 0), currency: currencyCode!.toLowerCase() },
       arrivalDate: date!,
       createdAt: `${date}T23:59:59Z`,
@@ -1068,17 +1128,31 @@ export function paypalPayouts(deps: {
     }
   }
 
-  /** One balance day's movements (and everything read, for order links), or null when the id names no day with any. */
-  async function balanceDay(id: string): Promise<{ lines: PayPalTransaction[]; txns: PayPalTransaction[] } | null> {
+  /**
+   * One balance day: its movements, everything read (for order links) and the payout, or null when the
+   * id names no day with any. A paid day served for the first time is recorded, so its lines never
+   * change afterwards.
+   */
+  async function balanceDay(id: string, assignments: PayoutAssignments | undefined): Promise<{ lines: PayPalTransaction[]; txns: PayPalTransaction[]; payout: Payout } | null> {
     const m = DAY_ID.exec(id)
     if (!m) return null
     const day = Date.parse(`${m[1]}T00:00:00Z`)
     if (Number.isNaN(day) || dateOf(day) !== m[1]) return null
-    const end = Math.min(day + DAY_MS, settled())
-    if (day + DAY_MS <= historyFloor() || day > end) return null
-    const txns = await withReferences(await range(Math.max(day - PAYPAL_SETTLEMENT_DELAY_MAX_MS, historyFloor()), end), end)
-    const lines = balanceDays(txns, day, Math.min(day + DAY_MS - 1, settled()), { day, currency: m[2]!.toLowerCase() }).get(id)
-    return lines?.length ? { lines: lines.sort((a, b) => settledAt(a) - settledAt(b) || byId(a, b)), txns } : null
+    const covered = Math.min(day + DAY_MS - 1, settled())
+    if (day + DAY_MS <= historyFloor() || day > covered) return null
+    const start = Math.max(day - PAYPAL_SETTLEMENT_DELAY_MAX_MS, historyFloor())
+    let txns = await range(start, covered)
+    const recorded = await assignmentsIn(assignments, start, covered, true)
+    const fixed = [...recorded.values()].includes(id)
+    if (!fixed) {
+      const inDay = (x: number) => x >= day && x < day + DAY_MS
+      txns = await withReferences(txns, covered, settled(), (t) => inDay(instantOf(t)) || inDay(updatedOf(t)))
+    }
+    const lines = balanceDays(txns, day, covered, recorded).get(id)
+    if (!lines?.length) return null
+    const payout = toDayPayout(id, lines, await accountId(), covered)
+    if (payout.status === 'paid' && !fixed && assignments) await assignments.assign('balance', id, lines.map(assignmentRow))
+    return { lines, txns, payout }
   }
 
   return {
@@ -1092,24 +1166,29 @@ export function paypalPayouts(deps: {
       }
     },
 
-    async list({ createdSince, after, limit, until, mode }) {
+    async list({ createdSince, after, limit, until, mode, asOf, assignments }) {
       const balance = payoutMode(mode) === 'balance'
-      const end = until ? Math.min(settled(), Date.parse(until) + 999) : settled()
+      // Everything this list reads and reports is as of `asOf` (fixed for a whole paged run).
+      const horizon = Math.min(asOf ?? now().getTime(), now().getTime()) - (deps.reportingLagMs ?? PAYPAL_REPORTING_LAG_MS)
+      const end = until ? Math.min(horizon, Date.parse(until) + 999) : horizon
       const lower = Date.parse(after && after.createdAt > createdSince ? after.createdAt : createdSince)
       // A balance day is created at its last second, so the first day that can qualify starts at midnight.
       const first = Math.max(balance ? utcDay(lower) : lower, historyFloor())
       if (first >= end) return { payouts: [], hasMore: false }
       // Read a settlement delay earlier: a delayed payment started before `first` may settle after it.
       const start = Math.max(first - PAYPAL_SETTLEMENT_DELAY_MAX_MS, historyFloor())
-      const txns = await withReferences(await range(start, end), end)
+      let txns = await range(start, end)
+      const recorded = await assignmentsIn(assignments, start, end, balance)
+      const inside = (x: number) => x >= first && x <= end
+      txns = await withReferences(txns, end, horizon, (t) => inside(instantOf(t)) || inside(updatedOf(t)))
       const id = await accountId()
       const candidates = balance
-        ? [...balanceDays(txns, first, end)].map(([dayId, lines]) => toDayPayout(dayId, lines, id))
+        ? [...balanceDays(txns, first, end, recorded)].map(([dayId, lines]) => toDayPayout(dayId, lines, id, end))
         : txns
             .map((t, i) => ({ t, i }))
             .filter(({ t }) => isWithdrawal(t) && instantOf(t) <= end)
             .map(({ t, i }) => {
-              const lines = linesOf(txns, i, start)
+              const lines = membersOf(txns, i, recorded, start)
               return toPayout(t, id, lines ? lines.length + carryCount(carryOf(txns, i, lines)) : null)
             })
       const ordered = candidates.filter((p) => p.createdAt >= createdSince && isAfter(p, after) && isWithin(p, until)).sort(comparePayouts)
@@ -1118,15 +1197,12 @@ export function paypalPayouts(deps: {
 
     async get(id, options) {
       payoutMode(options?.mode)
-      if (DAY_ID.test(id)) {
-        const day = await balanceDay(id)
-        return day ? toDayPayout(id, day.lines, await accountId()) : null
-      }
-      const found = await withdrawal(id)
+      if (DAY_ID.test(id)) return (await balanceDay(id, options?.assignments))?.payout ?? null
+      const found = await withdrawal(id, options?.assignments)
       return found ? toPayout(found.w, await accountId(), found.lines.length) : null
     },
 
-    async lines(payoutId, { cursor, limit, mode }) {
+    async lines(payoutId, { cursor, limit, mode, assignments }) {
       payoutMode(mode)
       let offset = 0
       if (cursor) {
@@ -1136,12 +1212,12 @@ export function paypalPayouts(deps: {
       }
       let all: PayoutLine[]
       if (DAY_ID.test(payoutId)) {
-        const day = await balanceDay(payoutId)
+        const day = await balanceDay(payoutId, assignments)
         if (!day) throw notFound(`Payout ${payoutId}`)
         const orders = orderMap(day.txns)
         all = day.lines.map((t) => toLine(t, orders))
       } else {
-        const found = await withdrawal(payoutId)
+        const found = await withdrawal(payoutId, assignments)
         if (!found) throw notFound(`Payout ${payoutId}`)
         all = found.lines
       }

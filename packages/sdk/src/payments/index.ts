@@ -177,11 +177,41 @@ export interface PayoutListParams {
    * ignores it; one with modes throws `invalid` for a value it does not know.
    */
   mode?: string | null
+  /**
+   * The clock the list is read as of, epoch ms. The Store API fixes it on the first page and carries
+   * it in the cursor, so every page of one run reads the same processor data (a processor that lags
+   * reads up to `asOf` minus its lag) and reports the same statuses. Omitted: now.
+   */
+  asOf?: number | null
+  /** The store's record of which payout each transaction was fixed to (see `PayoutAssignments`). */
+  assignments?: PayoutAssignments
 }
 
 /** Options `get()` and `lines()` accept beside the id: the same `mode` as the list (ids are self-describing, so it is only validated). */
 export interface PayoutLookupOptions {
   mode?: string | null
+  assignments?: PayoutAssignments
+}
+
+/** A transaction fixed to a payout: its processor id and when it happened (ISO 8601 UTC with ms). */
+export interface PayoutAssignmentRow {
+  transactionId: string
+  occurredAt: string
+}
+
+/**
+ * Which payout each processor transaction belongs to, persisted by the store for one provider. An
+ * adapter whose grouping can move a transaction later (PayPal: an eCheck's settlement time) records a
+ * payout's transactions the first time it serves that payout as `paid`, and afterwards honours the
+ * record, so a paid payout's lines never change. Stripe does not need it (Stripe fixes membership).
+ * `scope` separates independent groupings of the same transactions (PayPal: `withdrawal` and
+ * `balance` mode); a transaction is in at most one payout per scope.
+ */
+export interface PayoutAssignments {
+  /** Transaction id → payout id, for every recorded transaction of `scope` that occurred in [from, to] (ISO, inclusive). */
+  inRange(scope: string, from: string, to: string): Promise<Map<string, string>>
+  /** Record these transactions as `payoutId`'s in `scope`, atomically; a transaction already recorded there keeps its payout. */
+  assign(scope: string, payoutId: string, rows: PayoutAssignmentRow[]): Promise<void>
 }
 
 /** PayPal Transaction Search's documented reporting lag (up to three hours): its default `reportingLagMs`. */

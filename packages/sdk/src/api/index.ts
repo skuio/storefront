@@ -397,11 +397,15 @@ async function payoutsRoute(segments: string[], url: URL, store: Store, payments
     const requestedSince = since ? new Date(since).toISOString().replace(/\.\d{3}Z$/, 'Z') : new Date(Date.now() - DEFAULT_PAYOUT_LOOKBACK_MS).toISOString().replace(/\.\d{3}Z$/, 'Z')
     const limit = limitParam(url, 50, 100)
     const cursorRaw = url.searchParams.get('cursor')
-    let cursor: { createdAt: string; provider: string; id: string; until: string; since: string } | null = null
+    let cursor: { createdAt: string; provider: string; id: string; until: string; since: string; asOf: number } | null = null
     if (cursorRaw) {
-      const parts = decodeKeysetCursor(cursorRaw, 5)
-      if (!parts || !parts.every((p) => typeof p === 'string') || !parts[4]) throw new ValidationError('Invalid query', { cursor: 'was not issued by this store' })
-      cursor = { createdAt: parts[0] as string, provider: parts[1] as string, id: parts[2] as string, until: parts[3] as string, since: parts[4] as string }
+      // Six parts since 0.11 (the run's clock last); a five-part 0.10 cursor reads as of now.
+      const parts = decodeKeysetCursor(cursorRaw, 6) ?? decodeKeysetCursor(cursorRaw, 5)
+      const asOf = parts?.length === 6 ? parts[5] : Date.now()
+      if (!parts || !parts.slice(0, 5).every((p) => typeof p === 'string') || !parts[4] || typeof asOf !== 'number' || !Number.isFinite(asOf)) {
+        throw new ValidationError('Invalid query', { cursor: 'was not issued by this store' })
+      }
+      cursor = { createdAt: parts[0] as string, provider: parts[1] as string, id: parts[2] as string, until: parts[3] as string, since: parts[4] as string, asOf }
     }
     const chosen = provider ? [adapterFor(provider)] : adapters
     // Both bounds are fixed by the first page and carried in the cursor, so later pages never
@@ -410,8 +414,12 @@ async function payoutsRoute(segments: string[], url: URL, store: Store, payments
     // processors (PayPal's configured lag, Stripe none), so a processor that reports late never has
     // a payout appear behind a cursor another processor already moved past. A single-provider list
     // keeps the adapter's own horizon ('' in the cursor).
+    // The run's clock, also fixed by the first page: every page reads each processor as of it (minus its
+    // lag), so a single-provider run cannot skip a payout that became visible between two pages, and a
+    // payout's status cannot change from one page to the next.
+    const asOf = cursor ? cursor.asOf : Date.now()
     const lag = Math.max(0, ...chosen.map((a) => a.payouts.reportingLagMs ?? 0))
-    const until = cursor ? cursor.until : provider ? '' : isoSeconds(new Date(Date.now() - lag))
+    const until = cursor ? cursor.until : provider ? '' : isoSeconds(new Date(asOf - lag))
     const createdSince = cursor ? cursor.since : requestedSince
 
     const pages = await Promise.all(
@@ -423,7 +431,9 @@ async function payoutsRoute(segments: string[], url: URL, store: Store, payments
           else if (a.id > cursor.provider) after = { createdAt: cursor.createdAt, id: '' }
           else after = { createdAt: cursor.createdAt, id: '\uffff' }
         }
-        const page = await a.payouts.list({ createdSince, after, limit, until: until || null, mode: modeParam(url, a.id) })
+        const page = await a.payouts.list({
+          createdSince, after, limit, until: until || null, mode: modeParam(url, a.id), asOf, assignments: store.payoutAssignments.forProvider(a.id),
+        })
         return { ...page, payouts: page.payouts.filter((p) => isAfter(p, after) && isWithin(p, until)) }
       })
     )
@@ -436,7 +446,7 @@ async function payoutsRoute(segments: string[], url: URL, store: Store, payments
     const accounts = await payoutAccounts(adapters)
     return json({
       data: page.map(serializePayout),
-      next_cursor: more && last ? encodeKeysetCursor([last.createdAt, last.provider, last.id, until, createdSince]) : null,
+      next_cursor: more && last ? encodeKeysetCursor([last.createdAt, last.provider, last.id, until, createdSince, asOf]) : null,
       providers,
       accounts,
     })
@@ -445,13 +455,15 @@ async function payoutsRoute(segments: string[], url: URL, store: Store, payments
   const provider = decodeURIComponent(segments[1] ?? '')
   const id = decodeURIComponent(segments[2] ?? '')
   if (provider && id && segments.length === 3) {
-    const payout = await adapterFor(provider).payouts.get(id, { mode: modeParam(url, provider) })
+    const payout = await adapterFor(provider).payouts.get(id, { mode: modeParam(url, provider), assignments: store.payoutAssignments.forProvider(provider) })
     if (!payout) throw new StoreError('not_found', `Payout ${id} not found`)
     return json({ data: serializePayout(payout) })
   }
   if (provider && id && segments.length === 4 && segments[3] === 'lines') {
     const adapter = adapterFor(provider)
-    const page = await adapter.payouts.lines(id, { cursor: url.searchParams.get('cursor'), limit: limitParam(url, 100, 100), mode: modeParam(url, provider) })
+    const page = await adapter.payouts.lines(id, { cursor: url.searchParams.get('cursor'), limit: limitParam(url, 100, 100), mode: modeParam(url, provider),
+      assignments: store.payoutAssignments.forProvider(provider),
+    })
     const lines = await withOrders(store, provider, page.lines)
     return json({ data: lines.map(serializePayoutLine), next_cursor: page.nextCursor })
   }

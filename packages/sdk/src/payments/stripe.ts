@@ -361,9 +361,11 @@ export function stripePayouts(stripe: Stripe): PaymentPayouts {
   }
 
   return {
-    async list({ createdSince, after, limit, until }) {
+    async list({ createdSince, after, limit, until, asOf }) {
       const since = Math.floor(Date.parse(after && after.createdAt > createdSince ? after.createdAt : createdSince) / 1000)
-      const created = until ? { gte: since, lte: Math.floor(Date.parse(until) / 1000) } : { gte: since }
+      // The run's clock (fixed across its pages) bounds it too: a payout made after page one waits for the next run.
+      const upper = Math.min(until ? Date.parse(until) : Infinity, asOf ?? Infinity)
+      const created = Number.isFinite(upper) ? { gte: since, lte: Math.floor(upper / 1000) } : { gte: since }
       // Stripe lists newest first; walk back to `since`, then serve oldest first.
       const all: Stripe.Payout[] = []
       let startingAfter: string | undefined
@@ -377,7 +379,7 @@ export function stripePayouts(stripe: Stripe): PaymentPayouts {
       const id = all.length ? await accountId() : ''
       const ordered = all
         .map((p) => toPayout(p, id, null))
-        .filter((p) => isAfter(p, after) && isWithin(p, until))
+        .filter((p) => isAfter(p, after) && isWithin(p, until) && isWithin(p, asOf ? isoSeconds(new Date(asOf)) : null))
         .sort(comparePayouts)
       return { payouts: ordered.slice(0, limit), hasMore: ordered.length > limit }
     },
