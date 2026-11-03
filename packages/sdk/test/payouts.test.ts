@@ -725,6 +725,24 @@ describe('paypal payouts', () => {
     expect(sumNet(w100)).toBe(10000)
   })
 
+  it.each([['ZV', 'A50'], ['AV', 'Z50']])('a reversed withdrawal at the same instant as a withdrawal belongs to it (%s vs %s)', async (reversed, boundary) => {
+    const { api } = await paypalRig({
+      txns: [
+        pp('W0', 'T0400', '2026-10-01T09:00:00Z', '-1.00'),
+        pp('PAY1', 'T0006', '2026-10-02T09:00:00Z', '100.00'),
+        pp('PAY2', 'T0006', '2026-10-03T09:00:00Z', '50.00'),
+        pp(reversed, 'T0400', '2026-10-04T09:00:00Z', '-100.00', { status: 'V' }),
+        pp(boundary, 'T0400', '2026-10-04T09:00:00Z', '-50.00'),
+        pp('BACK', 'T1101', '2026-10-05T09:00:00Z', '100.00', { ref: reversed }),
+        pp('W100', 'T0400', '2026-10-06T09:00:00Z', '-100.00'),
+      ],
+    })
+    const first = (await api(`/payouts/paypal/${boundary}/lines`)).body.data
+    expect(first.map((l: any) => l.id)).toContain(reversed)
+    expect(sumNet(first)).toBe(5000)
+    expect(sumNet((await api('/payouts/paypal/W100/lines')).body.data)).toBe(10000)
+  })
+
   it('a withdrawal fee (T0102) that references its withdrawal is an ordinary line', async () => {
     const { api } = await paypalRig({
       txns: [

@@ -690,15 +690,16 @@ export function paypalPayouts(deps: {
   }
 
   /**
-   * Deduplicated by transaction id, in settlement order: by time (full precision), a withdrawal after
-   * every other movement of the same instant (a payment in the same second as a withdrawal is in
-   * that withdrawal), then id only to make the order stable.
+   * Deduplicated by transaction id, in settlement order: by time (full precision), a payout boundary
+   * (a completed or pending withdrawal) after every other movement of the same instant — a payment, or
+   * a reversed withdrawal, in the same second as a withdrawal is in that withdrawal — then id only to
+   * make the order stable.
    */
   function chronological(list: PayPalTransaction[]): PayPalTransaction[] {
     const seen = new Set<string>()
     return list
       .filter((t) => (seen.has(t.transaction_info.transaction_id) ? false : (seen.add(t.transaction_info.transaction_id), true)))
-      .map((t) => ({ t, at: instantOf(t), last: isWithdrawal(t) ? 1 : 0 }))
+      .map((t) => ({ t, at: instantOf(t), last: isBoundary(t) ? 1 : 0 }))
       .sort((a, b) => a.at - b.at || a.last - b.last || byId(a.t, b.t))
       .map((x) => x.t)
   }
