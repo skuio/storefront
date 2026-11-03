@@ -82,14 +82,10 @@ export interface PaymentAdapter {
 
 export type PayoutStatus = 'pending' | 'in_transit' | 'paid' | 'failed' | 'canceled'
 
-/**
- * What a payout line is, normalised across processors. `type` keeps the processor's own word.
- * `balance` is money that stayed in (or came from) the processor balance across a payout boundary:
- * PayPal's `carry_in` / `carry_out` lines for a partial withdrawal.
- */
-export type PayoutLineCategory = 'charge' | 'refund' | 'dispute' | 'dispute_reversal' | 'fee' | 'adjustment' | 'reserve' | 'transfer' | 'balance' | 'other'
+/** What a payout line is, normalised across processors. `type` keeps the processor's own word. */
+export type PayoutLineCategory = 'charge' | 'refund' | 'dispute' | 'dispute_reversal' | 'fee' | 'adjustment' | 'reserve' | 'transfer' | 'other'
 
-export const PAYOUT_LINE_CATEGORIES: readonly PayoutLineCategory[] = ['charge', 'refund', 'dispute', 'dispute_reversal', 'fee', 'adjustment', 'reserve', 'transfer', 'balance', 'other']
+export const PAYOUT_LINE_CATEGORIES: readonly PayoutLineCategory[] = ['charge', 'refund', 'dispute', 'dispute_reversal', 'fee', 'adjustment', 'reserve', 'transfer', 'other']
 
 /**
  * One payout. `amount` is what reached (positive) or left (negative: a debit for a negative balance)
@@ -98,15 +94,15 @@ export const PAYOUT_LINE_CATEGORIES: readonly PayoutLineCategory[] = ['charge', 
 export interface Payout {
   id: string
   provider: string
-  /** The processor account that paid out (`acct_…`, PayPal payer id), so two stores sharing one account can be told apart. */
+  /** The processor account that paid out (Stripe `acct_…`), so two stores sharing one account can be told apart. */
   accountId: string
   status: PayoutStatus
   amount: Money
-  /** `YYYY-MM-DD`, when the bank receives it (Stripe), the withdrawal date or the balance day (PayPal). */
+  /** `YYYY-MM-DD`, when the bank receives it. */
   arrivalDate: string | null
   /** ISO 8601 UTC, second precision (`2026-11-03T00:08:09Z`). The list is ordered by it. */
   createdAt: string
-  /** `standard` / `instant` (Stripe), `withdrawal` (PayPal T0400), `balance` (a PayPal balance day) or the processor's code. */
+  /** `standard` / `instant` (Stripe), or the processor's own word. */
   method: string | null
   /** A human label for the destination, e.g. `Bank ••6789`, when the processor says. */
   destinationLabel: string | null
@@ -126,15 +122,15 @@ export interface Payout {
  */
 export interface PayoutLine {
   id: string
-  /** The processor's own type (Stripe `type`, PayPal T-code). */
+  /** The processor's own type (Stripe balance transaction `type`). */
   type: string
   category: PayoutLineCategory
-  /** The processor object behind the line: `ch_…` / `re_…` / `du_…` (Stripe), the transaction id (PayPal). */
+  /** The processor object behind the line: `ch_…` / `re_…` / `du_…` (Stripe). */
   sourceId: string | null
-  /** The store order the money belongs to, when the processor carries it (charge metadata / PayPal custom id). */
+  /** The store order the money belongs to, when the processor carries it (Stripe charge metadata). */
   orderId: string | null
   orderNumber: string | null
-  /** The store's `payment.reference` of that order (`pi_…`, PayPal capture id), when known. */
+  /** The store's `payment.reference` of that order (`pi_…`), when known. */
   paymentReference: string | null
   gross: Money
   fee: Money
@@ -172,73 +168,13 @@ export interface PayoutListParams {
    */
   until?: string | null
   /**
-   * The processor-specific payout mode the caller asked for (`<provider>_mode` on the Store API,
-   * e.g. `paypal_mode=balance`); null or omitted for the adapter's default. An adapter without modes
-   * ignores it; one with modes throws `invalid` for a value it does not know.
-   */
-  mode?: string | null
-  /**
    * The clock the list is read as of, epoch ms. The Store API fixes it on the first page and carries
-   * it in the cursor, so every page of one run reads the same processor data (a processor that lags
-   * reads up to `asOf` minus its lag) and reports the same statuses. Omitted: now.
+   * it in the cursor, so every page of one run reads the processor as of the same moment (a processor
+   * that lags reads up to `asOf` minus its lag): a payout made after the first page waits for the next
+   * run. Omitted: now.
    */
   asOf?: number | null
-  /** The store's record of which payout each transaction was fixed to (see `PayoutAssignments`). */
-  assignments?: PayoutAssignments
 }
-
-/** Options `get()` and `lines()` accept beside the id: the same `mode` as the list (ids are self-describing, so it is only validated). */
-export interface PayoutLookupOptions {
-  mode?: string | null
-  assignments?: PayoutAssignments
-}
-
-/** One line of a recorded payout, in its served position: the transaction it is (null for a computed line such as a carry line) and the line as served. */
-export interface PayoutRecordLine {
-  transactionId: string | null
-  /** When the transaction happened (ISO 8601 UTC with ms); null for a computed line. */
-  occurredAt: string | null
-  line: PayoutLine
-}
-
-/** A payout as the store recorded it when it was first served `paid`: the payout and its lines, in served order. */
-export interface RecordedPayout {
-  payout: Payout
-  lines: PayoutLine[]
-}
-
-/**
- * The store's record of payouts served as `paid`, for one provider. An adapter whose grouping can move
- * a transaction later (PayPal: an eCheck's settlement time) records a payout — a finalization marker
- * plus every line in served order — the first time it serves it as `paid`, and afterwards serves the
- * record, so a paid payout's lines (and their order) never change. Stripe does not need it (Stripe
- * fixes membership). Everything is keyed by `scope` (independent groupings of the same transactions:
- * PayPal `withdrawal` / `balance` mode) and the processor `accountId`, so an account switch never
- * collides with the old account's records. A transaction is in at most one recorded payout per scope
- * and account.
- */
-export interface PayoutAssignments {
-  /** The recorded payout, or null. */
-  recorded(scope: string, accountId: string, payoutId: string): Promise<RecordedPayout | null>
-  /** The recorded payouts among `payoutIds` (their marker), by id. */
-  recordedAmong(scope: string, accountId: string, payoutIds: string[]): Promise<Map<string, Payout>>
-  /** The recorded payouts whose id is in [fromId, toId] (string order), by id. */
-  recordedBetween(scope: string, accountId: string, fromId: string, toId: string): Promise<Map<string, Payout>>
-  /** Transaction id → payout id, for every recorded transaction that occurred in [from, to] (ISO, inclusive). */
-  inRange(scope: string, accountId: string, from: string, to: string): Promise<Map<string, string>>
-  /**
-   * Record `payout` with `lines` (in served order) unless it is recorded already, atomically: the
-   * marker is inserted first and only the request that inserted it writes the lines, in the same
-   * transaction. Returns what is recorded afterwards — this request's payout, or the one a concurrent
-   * request recorded first — and the caller serves that.
-   */
-  finalize(scope: string, accountId: string, payout: Payout, lines: PayoutRecordLine[]): Promise<RecordedPayout>
-  /** Forget a recorded payout (its processor cancelled it): its transactions are free for another payout. */
-  release(scope: string, accountId: string, payoutId: string): Promise<void>
-}
-
-/** PayPal Transaction Search's documented reporting lag (up to three hours): its default `reportingLagMs`. */
-export const PAYOUT_COMPLETENESS_LAG_MS = 3 * 3_600_000
 
 /** True when `p` is at or before `until` (no bound when null). */
 export function isWithin(p: { createdAt: string }, until: string | null | undefined): boolean {
@@ -260,36 +196,30 @@ export interface PayoutLinePage {
 /** The payout capability of a `PaymentAdapter`. Throw `ProcessorPermissionError` when the processor refuses. */
 export interface PaymentPayouts {
   /**
-   * How far behind real time this processor's payout data may be, in ms (PayPal Transaction Search:
-   * three hours by default, `reportingLagMs` when configured). Omitted means none (Stripe). A merged
-   * list stops at now minus the largest lag among the providers it merges.
+   * How far behind real time this processor's payout data may be, in ms. Omitted means none (Stripe).
+   * A merged list stops at now minus the largest lag among the providers it merges.
    */
   readonly reportingLagMs?: number
   list(params: PayoutListParams): Promise<PayoutListResult>
   /** One payout with `lineCount` filled; null when the processor has no such payout. */
-  get(id: string, options?: PayoutLookupOptions): Promise<Payout | null>
+  get(id: string): Promise<Payout | null>
   /** Throw `notFound` (StoreError) when the payout does not exist. */
-  lines(payoutId: string, params: { cursor: string | null; limit: number } & PayoutLookupOptions): Promise<PayoutLinePage>
+  lines(payoutId: string, params: { cursor: string | null; limit: number }): Promise<PayoutLinePage>
   /**
    * Optional: the processor account this adapter pays out from (the same id its payouts carry), when
-   * it can be read cheaply (a cached id, or one already learned this request); null when it cannot.
+   * it can be read cheaply (a cached id after one account read); null when it cannot.
    * The list response reports it as `accounts`, so a consumer notices an account switch even when
    * there are no new payouts. Must not throw for a missing permission: return null.
    */
   account?(): Promise<string | null>
 }
 
-/**
- * What the built-in adapters name in a 424: Stripe restricted-key permissions, PayPal's app feature,
- * or PayPal's client id and secret themselves.
- */
+/** What the built-in Stripe adapter names in a 424: the restricted-key permission to grant. */
 export type ProcessorPermission =
   | 'Payouts: Read'
   | 'Balance: Read'
   | 'Balance transaction sources: Read'
   | 'Account: Read'
-  | 'Transaction search'
-  | 'API credentials'
 
 /**
  * The processor answered 401/403: the store's key may not read what was asked. The Store API turns

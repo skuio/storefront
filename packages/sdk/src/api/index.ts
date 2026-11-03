@@ -353,11 +353,6 @@ function limitParam(url: URL, fallback: number, max: number): number {
   return limit
 }
 
-/** `<provider>_mode` (e.g. `paypal_mode=balance`): passed to that provider's adapter only, which validates it. */
-function modeParam(url: URL, provider: string): string | null {
-  return url.searchParams.get(`${provider}_mode`)
-}
-
 /**
  * Every payout-capable provider's account, for `accounts` on the list: a provider that cannot name
  * its account cheaply (no method, null, or an error) is left out rather than failing the list.
@@ -399,9 +394,8 @@ async function payoutsRoute(segments: string[], url: URL, store: Store, payments
     const cursorRaw = url.searchParams.get('cursor')
     let cursor: { createdAt: string; provider: string; id: string; until: string; since: string; asOf: number } | null = null
     if (cursorRaw) {
-      // Six parts since 0.11 (the run's clock last); a five-part 0.10 cursor reads as of now.
-      const parts = decodeKeysetCursor(cursorRaw, 6) ?? decodeKeysetCursor(cursorRaw, 5)
-      const asOf = parts?.length === 6 ? parts[5] : Date.now()
+      const parts = decodeKeysetCursor(cursorRaw, 6)
+      const asOf = parts?.[5]
       if (!parts || !parts.slice(0, 5).every((p) => typeof p === 'string') || !parts[4] || typeof asOf !== 'number' || !Number.isFinite(asOf)) {
         throw new ValidationError('Invalid query', { cursor: 'was not issued by this store' })
       }
@@ -411,12 +405,11 @@ async function payoutsRoute(segments: string[], url: URL, store: Store, payments
     // Both bounds are fixed by the first page and carried in the cursor, so later pages never
     // recompute them from the clock. The lower one is created_since (or 90 days before the first page).
     // The upper one, for a merged list only: now minus the largest reporting lag among the merged
-    // processors (PayPal's configured lag, Stripe none), so a processor that reports late never has
+    // processors (Stripe has none; a custom adapter may declare one), so a processor that reports late never has
     // a payout appear behind a cursor another processor already moved past. A single-provider list
     // keeps the adapter's own horizon ('' in the cursor).
     // The run's clock, also fixed by the first page: every page reads each processor as of it (minus its
-    // lag), so a single-provider run cannot skip a payout that became visible between two pages, and a
-    // payout's status cannot change from one page to the next.
+    // lag), so a payout made after the first page waits for the next run instead of landing behind the cursor.
     const asOf = cursor ? cursor.asOf : Date.now()
     const lag = Math.max(0, ...chosen.map((a) => a.payouts.reportingLagMs ?? 0))
     const until = cursor ? cursor.until : provider ? '' : isoSeconds(new Date(asOf - lag))
@@ -432,7 +425,7 @@ async function payoutsRoute(segments: string[], url: URL, store: Store, payments
           else after = { createdAt: cursor.createdAt, id: '\uffff' }
         }
         const page = await a.payouts.list({
-          createdSince, after, limit, until: until || null, mode: modeParam(url, a.id), asOf, assignments: store.payoutAssignments.forProvider(a.id),
+          createdSince, after, limit, until: until || null, asOf,
         })
         return { ...page, payouts: page.payouts.filter((p) => isAfter(p, after) && isWithin(p, until)) }
       })
@@ -442,7 +435,7 @@ async function payoutsRoute(segments: string[], url: URL, store: Store, payments
     const page = merged.slice(0, limit)
     const more = merged.length > limit || pages.some((p) => p.hasMore)
     const last = page[page.length - 1]
-    // After the pages: an adapter may have learned its account id while listing (PayPal's search).
+    // After the pages: an adapter may have learned its account id while listing.
     const accounts = await payoutAccounts(adapters)
     return json({
       data: page.map(serializePayout),
@@ -455,15 +448,13 @@ async function payoutsRoute(segments: string[], url: URL, store: Store, payments
   const provider = decodeURIComponent(segments[1] ?? '')
   const id = decodeURIComponent(segments[2] ?? '')
   if (provider && id && segments.length === 3) {
-    const payout = await adapterFor(provider).payouts.get(id, { mode: modeParam(url, provider), assignments: store.payoutAssignments.forProvider(provider) })
+    const payout = await adapterFor(provider).payouts.get(id)
     if (!payout) throw new StoreError('not_found', `Payout ${id} not found`)
     return json({ data: serializePayout(payout) })
   }
   if (provider && id && segments.length === 4 && segments[3] === 'lines') {
     const adapter = adapterFor(provider)
-    const page = await adapter.payouts.lines(id, { cursor: url.searchParams.get('cursor'), limit: limitParam(url, 100, 100), mode: modeParam(url, provider),
-      assignments: store.payoutAssignments.forProvider(provider),
-    })
+    const page = await adapter.payouts.lines(id, { cursor: url.searchParams.get('cursor'), limit: limitParam(url, 100, 100) })
     const lines = await withOrders(store, provider, page.lines)
     return json({ data: lines.map(serializePayoutLine), next_cursor: page.nextCursor })
   }
@@ -471,8 +462,8 @@ async function payoutsRoute(segments: string[], url: URL, store: Store, payments
 }
 
 /**
- * Fill a line's order from the store's own records when the processor did not carry it (a PayPal
- * refund of a capture outside the searched range) or carried only the id. One bulk read of just
+ * Fill a line's order from the store's own records when the processor did not carry it (a Stripe
+ * refund whose charge was not expanded) or carried only the id. One bulk read of just
  * id, number and payment reference for the whole page; a database failure fails the request (a 200
  * with order links silently missing would post an unlinked refund), a missing order stays null.
  */
