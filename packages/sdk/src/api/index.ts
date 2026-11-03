@@ -353,6 +353,29 @@ function limitParam(url: URL, fallback: number, max: number): number {
   return limit
 }
 
+/** `<provider>_mode` (e.g. `paypal_mode=balance`): passed to that provider's adapter only, which validates it. */
+function modeParam(url: URL, provider: string): string | null {
+  return url.searchParams.get(`${provider}_mode`)
+}
+
+/**
+ * Every payout-capable provider's account, for `accounts` on the list: a provider that cannot name
+ * its account cheaply (no method, null, or an error) is left out rather than failing the list.
+ */
+async function payoutAccounts(adapters: { id: string; payouts: PaymentPayouts }[]): Promise<{ provider: string; account_id: string }[]> {
+  const found = await Promise.all(
+    adapters.map(async (a) => {
+      try {
+        const id = a.payouts.account ? await a.payouts.account() : null
+        return id ? [{ provider: a.id, account_id: id }] : []
+      } catch {
+        return []
+      }
+    })
+  )
+  return found.flat()
+}
+
 /**
  * `GET /payouts`, `/payouts/{provider}/{id}`, `/payouts/{provider}/{id}/lines`. The list merges every
  * payout-capable adapter (or the one `provider` names), ascending by `(created_at, provider, id)`;
@@ -400,7 +423,7 @@ async function payoutsRoute(segments: string[], url: URL, store: Store, payments
           else if (a.id > cursor.provider) after = { createdAt: cursor.createdAt, id: '' }
           else after = { createdAt: cursor.createdAt, id: '\uffff' }
         }
-        const page = await a.payouts.list({ createdSince, after, limit, until: until || null })
+        const page = await a.payouts.list({ createdSince, after, limit, until: until || null, mode: modeParam(url, a.id) })
         return { ...page, payouts: page.payouts.filter((p) => isAfter(p, after) && isWithin(p, until)) }
       })
     )
@@ -409,23 +432,26 @@ async function payoutsRoute(segments: string[], url: URL, store: Store, payments
     const page = merged.slice(0, limit)
     const more = merged.length > limit || pages.some((p) => p.hasMore)
     const last = page[page.length - 1]
+    // After the pages: an adapter may have learned its account id while listing (PayPal's search).
+    const accounts = await payoutAccounts(adapters)
     return json({
       data: page.map(serializePayout),
       next_cursor: more && last ? encodeKeysetCursor([last.createdAt, last.provider, last.id, until, createdSince]) : null,
       providers,
+      accounts,
     })
   }
 
   const provider = decodeURIComponent(segments[1] ?? '')
   const id = decodeURIComponent(segments[2] ?? '')
   if (provider && id && segments.length === 3) {
-    const payout = await adapterFor(provider).payouts.get(id)
+    const payout = await adapterFor(provider).payouts.get(id, { mode: modeParam(url, provider) })
     if (!payout) throw new StoreError('not_found', `Payout ${id} not found`)
     return json({ data: serializePayout(payout) })
   }
   if (provider && id && segments.length === 4 && segments[3] === 'lines') {
     const adapter = adapterFor(provider)
-    const page = await adapter.payouts.lines(id, { cursor: url.searchParams.get('cursor'), limit: limitParam(url, 100, 100) })
+    const page = await adapter.payouts.lines(id, { cursor: url.searchParams.get('cursor'), limit: limitParam(url, 100, 100), mode: modeParam(url, provider) })
     const lines = await withOrders(store, provider, page.lines)
     return json({ data: lines.map(serializePayoutLine), next_cursor: page.nextCursor })
   }

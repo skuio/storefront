@@ -242,10 +242,12 @@ paths:
     get:
       operationId: listPayouts
       description: >-
-        The processors' payouts (Stripe payouts, PayPal withdrawals), ordered by created_at, provider, id ascending.
-        Without provider, every payout-capable processor on the store is merged. Needs the orders scope.
+        The processors' payouts (Stripe payouts; PayPal withdrawals, or PayPal balance days with paypal_mode=balance),
+        ordered by created_at, provider, id ascending. Without provider, every payout-capable processor on the store
+        is merged. Needs the orders scope.
       parameters:
         - { name: provider, in: query, schema: { type: string, enum: [stripe, paypal] } }
+        - $ref: '#/components/parameters/PayPalMode'
         - { name: created_since, in: query, schema: { type: string, format: date-time }, description: 'Inclusive; defaults to 90 days ago' }
         - { name: cursor, in: query, schema: { type: string }, description: 'Opaque; echo next_cursor' }
         - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
@@ -260,6 +262,12 @@ paths:
                   data: { type: array, items: { $ref: '#/components/schemas/Payout' } }
                   next_cursor: { type: [string, 'null'] }
                   providers: { type: array, items: { type: string }, description: 'Payout-capable processors on this store' }
+                  accounts:
+                    type: array
+                    description: >-
+                      The processor account of every payout-capable provider on the store (the id its payouts carry in
+                      account_id), ordered by provider. A provider whose account cannot be read cheaply is left out.
+                    items: { $ref: '#/components/schemas/PayoutAccount' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/Unprocessable' }
         '424': { $ref: '#/components/responses/ProcessorPermissionMissing' }
@@ -270,6 +278,7 @@ paths:
       parameters:
         - { name: provider, in: path, required: true, schema: { type: string, enum: [stripe, paypal] } }
         - { name: id, in: path, required: true, schema: { type: string } }
+        - $ref: '#/components/parameters/PayPalMode'
       responses:
         '200':
           description: OK
@@ -286,10 +295,12 @@ paths:
       operationId: listPayoutLines
       description: >-
         What the payout is made of, in the payout currency. gross - fee = net on every line, and the net of a payout's
-        lines sums to its amount (Stripe's own payout row is excluded).
+        lines sums to its amount (Stripe's own payout row is excluded; a PayPal partial withdrawal has carry_in /
+        carry_out balance lines when PayPal reports ending_balance, else none and it does not balance).
       parameters:
         - { name: provider, in: path, required: true, schema: { type: string, enum: [stripe, paypal] } }
         - { name: id, in: path, required: true, schema: { type: string } }
+        - $ref: '#/components/parameters/PayPalMode'
         - { name: cursor, in: query, schema: { type: string }, description: 'Opaque; echo next_cursor' }
         - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 100 } }
       responses:
@@ -308,6 +319,16 @@ paths:
 components:
   securitySchemes:
     bearer: { type: http, scheme: bearer }
+  parameters:
+    PayPalMode:
+      name: paypal_mode
+      in: query
+      description: >-
+        What a PayPal payout is: withdrawal (a PayPal withdrawal to the bank, the default) or balance (one payout per
+        UTC day and currency of PayPal balance movements, withdrawals excluded). Ignored for Stripe; any other value
+        is 422. On GET /payouts/paypal/{id} and /lines it is only validated: the id says its mode (day-YYYY-MM-DD-CUR
+        is a balance day).
+      schema: { type: string, enum: [withdrawal, balance], default: withdrawal }
   responses:
     NotFound: { description: Not found, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
     Conflict: { description: Conflict, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
@@ -598,28 +619,34 @@ components:
         description_html: { type: [string, 'null'] }
         image: { type: [object, 'null'], properties: { url: { type: string }, alt: { type: [string, 'null'] } } }
         position: { type: integer }
+    PayoutAccount:
+      type: object
+      required: [provider, account_id]
+      properties:
+        provider: { type: string, enum: [stripe, paypal] }
+        account_id: { type: string, description: 'Stripe acct_…; PayPal merchant payer id' }
     Payout:
       type: object
       required: [id, provider, account_id, status, amount, arrival_date, created_at, method, destination_label, line_count]
       properties:
-        id: { type: string, description: 'Stripe po_…; PayPal the withdrawal''s transaction id' }
+        id: { type: string, description: 'Stripe po_…; PayPal the withdrawal''s transaction id, or day-YYYY-MM-DD-CUR for a balance day', examples: ['po_1ExAmPlE0000000000Payout', 'day-2026-11-02-USD'] }
         provider: { type: string, enum: [stripe, paypal] }
         account_id: { type: string, description: 'Stripe acct_…; PayPal merchant payer id (else the app client id)' }
         status: { type: string, enum: [pending, in_transit, paid, failed, canceled] }
         amount: { $ref: '#/components/schemas/Money', description: 'Negative for a debit (Stripe pulling money)' }
         arrival_date: { type: [string, 'null'], format: date }
         created_at: { type: string, format: date-time }
-        method: { type: [string, 'null'], description: 'standard | instant (Stripe); withdrawal or the T-code (PayPal)' }
+        method: { type: [string, 'null'], description: 'standard | instant (Stripe); withdrawal, the T-code, or balance for a balance day (PayPal)' }
         destination_label: { type: [string, 'null'], examples: ['Bank ••6789'] }
         line_count: { type: [integer, 'null'], description: 'May be null in the list, and on GET /payouts/{provider}/{id} for a Stripe payout of more than 1,000 lines; page the lines to exhaustion' }
     PayoutLine:
       type: object
       required: [id, type, category, source_id, order_id, order_number, payment_reference, gross, fee, net, fee_details, created_at, available_on, description]
       properties:
-        id: { type: string, description: 'Stripe txn_…; PayPal transaction id' }
-        type: { type: string, description: 'The processor''s own type (Stripe balance transaction type; PayPal T-code)' }
-        category: { type: string, enum: [charge, refund, dispute, dispute_reversal, fee, adjustment, reserve, transfer, other] }
-        source_id: { type: [string, 'null'], description: 'Stripe ch_/py_/re_/du_…; PayPal the transaction id' }
+        id: { type: string, description: 'Stripe txn_…; PayPal transaction id; carry_in:<id> / carry_out:<id> for a carry line' }
+        type: { type: string, description: 'The processor''s own type (Stripe balance transaction type; PayPal T-code; carry_in / carry_out)' }
+        category: { type: string, enum: [charge, refund, dispute, dispute_reversal, fee, adjustment, reserve, transfer, balance, other], description: 'balance: a PayPal partial withdrawal''s carry_in (+ balance left after the previous withdrawal) or carry_out (− balance left after this one)' }
+        source_id: { type: [string, 'null'], description: 'Stripe ch_/py_/re_/du_…; PayPal the transaction id (for a carry line, the transaction whose ending_balance it is)' }
         order_id: { type: [string, 'null'] }
         order_number: { type: [string, 'null'], description: 'Without the store''s number prefix' }
         payment_reference: { type: [string, 'null'], description: "The order's payment.reference (pi_…, PayPal capture id)" }

@@ -222,6 +222,7 @@ describe('stripe payouts', () => {
       ],
       next_cursor: null,
       providers: ['stripe'],
+      accounts: [{ provider: 'stripe', account_id: 'acct_1ExAmPlE00000000' }],
     })
 
     const one = await api('/payouts/stripe/po_1ExAmPlE0000000000Payout')
@@ -429,16 +430,29 @@ describe('stripe payouts', () => {
 // ── PayPal ──────────────────────────────────────────────────────────────────────────────────
 
 type PPTxn = { transaction_info: Record<string, unknown> & { transaction_id: string; transaction_initiation_date: string } }
-const pp = (id: string, code: string, date: string, value: string, opts: { fee?: string; currency?: string; status?: string; custom?: string; ref?: string } = {}): PPTxn => ({
+type PPOpts = {
+  fee?: string; currency?: string; status?: string; custom?: string; ref?: string
+  /** transaction_info.ending_balance: the balance in this currency after the transaction. */
+  balance?: string
+  /** transaction_info.transaction_updated_date. */
+  updated?: string
+  instrument?: string
+  subInstrument?: string
+}
+const pp = (id: string, code: string, date: string, value: string, opts: PPOpts = {}): PPTxn => ({
   transaction_info: {
     transaction_id: id,
     transaction_event_code: code,
     transaction_initiation_date: date.replace('Z', '+0000'),
+    ...(opts.updated ? { transaction_updated_date: opts.updated.replace('Z', '+0000') } : {}),
     transaction_amount: { currency_code: opts.currency ?? 'USD', value },
     ...(opts.fee ? { fee_amount: { currency_code: opts.currency ?? 'USD', value: opts.fee } } : {}),
     transaction_status: opts.status ?? 'S',
     ...(opts.custom ? { custom_field: opts.custom } : {}),
     ...(opts.ref ? { paypal_reference_id: opts.ref } : {}),
+    ...(opts.balance !== undefined ? { ending_balance: { currency_code: opts.currency ?? 'USD', value: opts.balance } } : {}),
+    ...(opts.instrument ? { instrument_type: opts.instrument } : {}),
+    ...(opts.subInstrument ? { instrument_sub_type: opts.subInstrument } : {}),
   },
 })
 
@@ -682,9 +696,10 @@ describe('paypal payouts', () => {
   })
 
   it('a transaction a fraction of a second after a 31-day window boundary is still found', async () => {
-    // created_since + (31 days − 1 s) is where the first window ends and the second starts.
+    // The read starts 14 days (the settlement delay) before created_since; 31 days − 1 s later the first window
+    // ends and the second starts: 2026-08-31T00:00:00Z + 31 d − 1 s = 2026-10-01T23:59:59Z.
     const { api } = await paypalRig({ txns: [pp('WFRAC', 'T0400', '2026-10-01T23:59:59.500Z', '-5.00')] })
-    const res = await api('/payouts?provider=paypal&created_since=2026-09-01T00:00:00Z')
+    const res = await api('/payouts?provider=paypal&created_since=2026-09-14T00:00:00Z')
     expect(res.body.data.map((p: any) => [p.id, p.created_at])).toEqual([['WFRAC', '2026-10-01T23:59:59Z']])
   })
 
@@ -787,7 +802,8 @@ describe('paypal payouts', () => {
     // The answered windows cover [created_since, now − lag] with no gap.
     const windows = [...split.fake.windows].sort((a, b) => a[0] - b[0])
     expect(windows.length).toBeGreaterThan(2) // more than the two 31-day windows: some were halved
-    expect(windows[0]![0]).toBe(Date.parse(since))
+    // From a settlement delay (14 days) before created_since, so a late-clearing eCheck is seen.
+    expect(windows[0]![0]).toBe(Date.parse(since) - 14 * 86_400_000)
     expect(windows[windows.length - 1]![1]).toBe(Date.parse(PAYPAL_NOW) - 3 * 3_600_000)
     // Adjacent windows overlap at their shared instant, so nothing between two whole seconds falls out.
     for (let i = 1; i < windows.length; i++) expect(windows[i]![0]).toBe(windows[i - 1]![1])
@@ -795,6 +811,221 @@ describe('paypal payouts', () => {
     const lines = (await split.api('/payouts/paypal/W2/lines')).body.data
     expect(lines.map((l: any) => l.id)).toEqual(['PAY2', 'FX-USD', 'REF1'])
     expect(sumNet(lines)).toBe(18990)
+  })
+})
+
+describe('paypal balance mode (paypal_mode=balance)', () => {
+  /** Two full days and a day still inside the reporting lag; withdrawals and withdrawal reversals are not lines. */
+  const balanceTxns = (): PPTxn[] => [
+    pp('W0', 'T0400', '2026-10-20T09:00:00Z', '-1.00'),
+    pp('PAYA', 'T0006', '2026-10-28T10:00:00Z', '100.00', { fee: '-3.20', custom: 'ord_A' }),
+    pp('PAYC', 'T0006', '2026-10-28T11:00:00Z', '50.00', { fee: '-1.75', currency: 'CAD', custom: 'ord_C' }),
+    pp('REFA', 'T1107', '2026-10-28T15:00:00Z', '-40.00', { fee: '1.00', ref: 'PAYA' }),
+    pp('FEE1', 'T0100', '2026-10-28T16:00:00Z', '-2.00'),
+    pp('WD', 'T0400', '2026-10-28T18:00:00Z', '-50.00'),
+    pp('PAYB', 'T0006', '2026-10-29T08:00:00Z', '20.00', { fee: '-0.80', custom: 'ord_B' }),
+    pp('WREV', 'T0400', '2026-10-29T12:00:00Z', '-30.00', { status: 'V' }),
+    pp('BACK', 'T1101', '2026-10-29T13:00:00Z', '30.00', { ref: 'WREV' }),
+    pp('PEND', 'T0006', '2026-10-29T14:00:00Z', '9.00', { status: 'P' }),
+    pp('PAYN', 'T0006', '2026-11-02T08:00:00Z', '10.00'),
+  ]
+
+  it('one payout per UTC day and currency, withdrawals excluded, status by reporting lag, Σ net = amount', async () => {
+    const { api } = await paypalRig({ txns: balanceTxns() })
+    const res = await api('/payouts?provider=paypal&paypal_mode=balance&created_since=2026-10-25T00:00:00Z')
+    expect(res.status).toBe(200)
+    expect(res.body.data.map((p: any) => [p.id, p.status, p.amount.amount, p.amount.currency, p.line_count])).toEqual([
+      ['day-2026-10-28-CAD', 'paid', 4825, 'cad', 1],
+      ['day-2026-10-28-USD', 'paid', 5580, 'usd', 3],
+      ['day-2026-10-29-USD', 'paid', 1920, 'usd', 1],
+      // 2026-11-02 ends after now − 3 h: listed, but pending (its amount can still change).
+      ['day-2026-11-02-USD', 'pending', 1000, 'usd', 1],
+    ])
+    expect(res.body.data[1]).toEqual({
+      id: 'day-2026-10-28-USD', provider: 'paypal', account_id: 'MERCHANTPAYER1', status: 'paid', amount: { amount: 5580, currency: 'usd' },
+      arrival_date: '2026-10-28', created_at: '2026-10-28T23:59:59Z', method: 'balance', destination_label: 'PayPal balance', line_count: 3,
+    })
+    for (const p of res.body.data) {
+      const lines = (await api(`/payouts/paypal/${p.id}/lines`)).body.data
+      expect(lines).toHaveLength(p.line_count)
+      expect(sumNet(lines)).toBe(p.amount.amount)
+      for (const l of lines) expect(l.gross.amount - l.fee.amount).toBe(l.net.amount)
+    }
+  })
+
+  it('a day\'s lines: refund and fee included, withdrawal, reversed withdrawal and its reversal left out; ids need no mode', async () => {
+    const { api } = await paypalRig({ txns: balanceTxns() })
+    // The id says what it is: get and lines need no paypal_mode.
+    expect((await api('/payouts/paypal/day-2026-10-28-USD')).body.data).toMatchObject({ amount: { amount: 5580 }, line_count: 3, method: 'balance' })
+    const lines = (await api('/payouts/paypal/day-2026-10-28-USD/lines')).body.data
+    expect(lines.map((l: any) => [l.id, l.category, l.net.amount])).toEqual([['PAYA', 'charge', 9680], ['REFA', 'refund', -3900], ['FEE1', 'fee', -200]])
+    expect(lines[1]).toMatchObject({ order_id: 'ord_A', payment_reference: 'PAYA' })
+    const d29 = (await api('/payouts/paypal/day-2026-10-29-USD/lines?paypal_mode=balance')).body.data
+    expect(d29.map((l: any) => l.id)).toEqual(['PAYB'])
+    // No movement that day / malformed day / unknown currency: 404.
+    expect((await api('/payouts/paypal/day-2026-10-30-USD')).status).toBe(404)
+    expect((await api('/payouts/paypal/day-2026-02-30-USD')).status).toBe(404)
+    expect((await api('/payouts/paypal/day-2026-10-28-EUR/lines')).status).toBe(404)
+  })
+
+  it('withdrawal mode stays the default; an unknown paypal_mode is 422; stripe ignores it', async () => {
+    const { api } = await paypalRig({ txns: balanceTxns() })
+    const withdrawals = await api('/payouts?provider=paypal&created_since=2026-10-25T00:00:00Z')
+    expect(withdrawals.body.data.map((p: any) => [p.id, p.status])).toEqual([['WD', 'paid'], ['WREV', 'canceled']])
+    const bad = await api('/payouts?provider=paypal&paypal_mode=sideways&created_since=2026-10-25T00:00:00Z')
+    expect(bad.status).toBe(422)
+    expect(bad.body.error.details).toEqual({ paypal_mode: 'must be one of withdrawal, balance' })
+    expect((await api('/payouts/paypal/WD?paypal_mode=sideways')).status).toBe(422)
+
+    const { store } = rig()
+    const stripe = stripePayments({ stripe: fakeStripe(stripeData()).stripe, webhookSecret: 'whsec' })
+    expect((await client(store, [stripe])('/payouts?provider=stripe&paypal_mode=sideways&created_since=2026-10-01T00:00:00Z')).status).toBe(200)
+  })
+
+  it('pages a balance-day list with the merged cursor', async () => {
+    const { api } = await paypalRig({ txns: balanceTxns() })
+    const ids: string[] = []
+    let cursor: string | null = null
+    do {
+      const res: any = await api(`/payouts?provider=paypal&paypal_mode=balance&created_since=2026-10-25T00:00:00Z&limit=1${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`)
+      ids.push(...res.body.data.map((p: any) => p.id))
+      cursor = res.body.next_cursor
+    } while (cursor)
+    expect(ids).toEqual(['day-2026-10-28-CAD', 'day-2026-10-28-USD', 'day-2026-10-29-USD', 'day-2026-11-02-USD'])
+  })
+})
+
+describe('paypal partial withdrawals (carry lines from ending_balance)', () => {
+  // Receive 100 (fee 3), withdraw 40 (57 stays), receive 20, withdraw 77 (balance emptied).
+  const partial = (o: { w1Balance?: string; w2Balance?: string } = {}): PPTxn[] => [
+    pp('W0', 'T0400', '2026-10-01T09:00:00Z', '-5.00', { balance: '0.00' }),
+    pp('P1', 'T0006', '2026-10-02T09:00:00Z', '100.00', { fee: '-3.00', balance: '97.00' }),
+    pp('W1', 'T0400', '2026-10-03T09:00:00Z', '-40.00', o.w1Balance === '' ? {} : { balance: o.w1Balance ?? '57.00' }),
+    pp('P2', 'T0006', '2026-10-04T09:00:00Z', '20.00', { balance: '77.00' }),
+    pp('W2', 'T0400', '2026-10-05T09:00:00Z', '-77.00', o.w2Balance === '' ? {} : { balance: o.w2Balance ?? '0.00' }),
+  ]
+
+  it('carry_out on the partial withdrawal, carry_in on the next: each withdrawal\'s lines sum to its amount', async () => {
+    const { api } = await paypalRig({ txns: partial() })
+    const w1 = (await api('/payouts/paypal/W1/lines')).body.data
+    expect(w1.map((l: any) => [l.id, l.type, l.category, l.net.amount])).toEqual([
+      ['P1', 'T0006', 'charge', 9700],
+      ['carry_out:W1', 'carry_out', 'balance', -5700],
+    ])
+    expect(w1[1]).toEqual({
+      id: 'carry_out:W1', type: 'carry_out', category: 'balance', source_id: 'W1', order_id: null, order_number: null, payment_reference: null,
+      gross: { amount: -5700, currency: 'usd' }, fee: { amount: 0, currency: 'usd' }, net: { amount: -5700, currency: 'usd' }, fee_details: [],
+      created_at: '2026-10-03T09:00:00Z', available_on: null, description: 'PayPal balance left after this withdrawal',
+    })
+    expect(sumNet(w1)).toBe(4000)
+    const w2 = (await api('/payouts/paypal/W2/lines')).body.data
+    expect(w2.map((l: any) => [l.id, l.category, l.net.amount])).toEqual([['carry_in:W1', 'balance', 5700], ['P2', 'charge', 2000]])
+    expect(w2[0]).toMatchObject({ type: 'carry_in', source_id: 'W1', gross: { amount: 5700 }, fee: { amount: 0 } })
+    expect(sumNet(w2)).toBe(7700)
+    // line_count counts the carry lines, in the list and on GET.
+    expect((await api('/payouts/paypal/W1')).body.data.line_count).toBe(2)
+    const list = await api('/payouts?provider=paypal&created_since=2026-09-25T00:00:00Z')
+    expect(list.body.data.map((p: any) => [p.id, p.line_count])).toEqual([['W0', null], ['W1', 2], ['W2', 2]])
+  })
+
+  it('no ending_balance on a needed boundary: no carry lines (the consumer holds the payout)', async () => {
+    const { api } = await paypalRig({ txns: partial({ w1Balance: '' }) })
+    const w1 = (await api('/payouts/paypal/W1/lines')).body.data
+    expect(w1.map((l: any) => l.id)).toEqual(['P1'])
+    expect(sumNet(w1)).toBe(9700) // ≠ 4000: not balanced, and no carry line pretends it is
+    const w2 = (await api('/payouts/paypal/W2/lines')).body.data
+    expect(w2.map((l: any) => l.id)).toEqual(['P2'])
+  })
+
+  it('balances that do not reconcile with the lines give no carry lines, never a plug', async () => {
+    const { api } = await paypalRig({ txns: partial({ w1Balance: '50.00' }) })
+    expect((await api('/payouts/paypal/W1/lines')).body.data.map((l: any) => l.id)).toEqual(['P1'])
+  })
+
+  it('a withdrawal that empties the balance gets no zero carry lines', async () => {
+    const { api } = await paypalRig({
+      txns: [
+        pp('W0', 'T0400', '2026-10-01T09:00:00Z', '-5.00', { balance: '0.00' }),
+        pp('P1', 'T0006', '2026-10-02T09:00:00Z', '100.00', { fee: '-3.00', balance: '97.00' }),
+        pp('W1', 'T0400', '2026-10-03T09:00:00Z', '-97.00', { balance: '0.00' }),
+      ],
+    })
+    expect((await api('/payouts/paypal/W1/lines')).body.data.map((l: any) => l.id)).toEqual(['P1'])
+  })
+})
+
+describe('paypal delayed settlement (eCheck)', () => {
+  /** An eCheck initiated before W1 that cleared after it (updated 10-06): its money went out with W2. */
+  const echeck = (extra: PPTxn[] = [], o: PPOpts = { instrument: 'BANK', subInstrument: 'ECHECK' }): PPTxn[] => [
+    pp('W0', 'T0400', '2026-10-01T09:00:00Z', '-1.00'),
+    pp('ECHK', 'T0006', '2026-10-02T10:00:00Z', '50.00', { fee: '-1.50', custom: 'ord_E', updated: '2026-10-06T10:00:00Z', ...o }),
+    pp('PAY', 'T0006', '2026-10-03T10:00:00Z', '20.00'),
+    pp('W1', 'T0400', '2026-10-04T09:00:00Z', '-20.00'),
+    pp('W2', 'T0400', '2026-10-08T09:00:00Z', '-48.50'),
+    ...extra,
+  ]
+
+  it('withdrawal mode: grouped by when it cleared, so it is in the later withdrawal', async () => {
+    const { api } = await paypalRig({ txns: echeck() })
+    const w1 = (await api('/payouts/paypal/W1/lines')).body.data
+    expect(w1.map((l: any) => l.id)).toEqual(['PAY'])
+    expect(sumNet(w1)).toBe(2000)
+    const w2 = (await api('/payouts/paypal/W2/lines')).body.data
+    expect(w2.map((l: any) => [l.id, l.created_at])).toEqual([['ECHK', '2026-10-02T10:00:00Z']])
+    expect(sumNet(w2)).toBe(4850)
+    const list = await api('/payouts?provider=paypal&created_since=2026-10-01T00:00:00Z')
+    expect(list.body.data.map((p: any) => [p.id, p.line_count])).toEqual([['W0', null], ['W1', 1], ['W2', 1]])
+  })
+
+  it('balance mode: in the day it cleared, not the day it started', async () => {
+    const { api } = await paypalRig({ txns: echeck() })
+    const days = (await api('/payouts?provider=paypal&paypal_mode=balance&created_since=2026-10-01T00:00:00Z')).body.data
+    expect(days.map((p: any) => [p.id, p.amount.amount])).toEqual([['day-2026-10-03-USD', 2000], ['day-2026-10-06-USD', 4850]])
+    expect((await api('/payouts/paypal/day-2026-10-06-USD/lines')).body.data.map((l: any) => l.id)).toEqual(['ECHK'])
+    expect((await api('/payouts/paypal/day-2026-10-02-USD')).status).toBe(404)
+  })
+
+  it('instrument_type BANK alone counts when it cleared a day or more later; an instant transfer or a card does not', async () => {
+    const bank = await paypalRig({ txns: echeck([], { instrument: 'BANK' }) })
+    expect((await bank.api('/payouts/paypal/W2/lines')).body.data.map((l: any) => l.id)).toEqual(['ECHK'])
+    const card = await paypalRig({ txns: echeck([], { instrument: 'CREDIT_CARD' }) })
+    expect((await card.api('/payouts/paypal/W1/lines')).body.data.map((l: any) => l.id)).toEqual(['ECHK', 'PAY'])
+    const instant = await paypalRig({
+      txns: [
+        pp('W0', 'T0400', '2026-10-01T09:00:00Z', '-1.00'),
+        // Updated two hours after it started (less than a day): an instant transfer, grouped by its start.
+        pp('BNK', 'T0006', '2026-10-03T08:00:00Z', '20.00', { instrument: 'BANK', updated: '2026-10-03T10:00:00Z' }),
+        pp('W1', 'T0400', '2026-10-04T09:00:00Z', '-20.00'),
+      ],
+    })
+    expect((await instant.api('/payouts/paypal/W1/lines')).body.data.map((l: any) => l.id)).toEqual(['BNK'])
+  })
+
+  it('a payment something references (a refund after the withdrawal) keeps its initiation date', async () => {
+    const { api } = await paypalRig({ txns: echeck([pp('REFE', 'T1107', '2026-10-05T10:00:00Z', '-10.00', { ref: 'ECHK' })]) })
+    // The refund is after W1, but W1's read looks ahead for it.
+    expect((await api('/payouts/paypal/W1/lines')).body.data.map((l: any) => l.id)).toEqual(['ECHK', 'PAY'])
+    expect((await api('/payouts/paypal/W2/lines')).body.data.map((l: any) => l.id)).toEqual(['REFE'])
+  })
+})
+
+describe('payout accounts on the list', () => {
+  it('names every payout-capable provider\'s account; one that cannot be read is left out', async () => {
+    const { store, adapter: paypal } = await paypalRig()
+    const stripe = stripePayments({ stripe: fakeStripe(stripeData()).stripe, webhookSecret: 'whsec' })
+    const api = client(store, [stripe, paypal, manualPayments()])
+    const res = await api('/payouts?provider=paypal&created_since=2026-10-01T00:00:00Z')
+    expect(res.body.accounts).toEqual([
+      { provider: 'paypal', account_id: 'MERCHANTPAYER1' },
+      { provider: 'stripe', account_id: 'acct_1ExAmPlE00000000' },
+    ])
+
+    const denied = fakeStripe({ payouts: [], txns: {} })
+    denied.raw.accounts.retrieve.mockRejectedValue(Object.assign(new Error('The provided key does not have the required permissions'), { type: 'StripePermissionError', statusCode: 403 }))
+    const noStripeAccount = client(store, [stripePayments({ stripe: denied.stripe, webhookSecret: 'whsec' }), paypal])
+    const listed = await noStripeAccount('/payouts?created_since=2026-10-01T00:00:00Z')
+    expect(listed.status).toBe(200)
+    expect(listed.body.accounts).toEqual([{ provider: 'paypal', account_id: 'MERCHANTPAYER1' }])
   })
 })
 
@@ -927,7 +1158,7 @@ describe('payouts across processors', () => {
   it('answers 404 for an unknown or payout-less provider and an empty list when there are none', async () => {
     const { store } = rig()
     const api = client(store, [manualPayments()])
-    expect((await api('/payouts')).body).toEqual({ data: [], next_cursor: null, providers: [] })
+    expect((await api('/payouts')).body).toEqual({ data: [], next_cursor: null, providers: [], accounts: [] })
     const res = await api('/payouts?provider=manual')
     expect(res.status).toBe(404)
     expect((await api('/payouts/stripe/po_1')).status).toBe(404)

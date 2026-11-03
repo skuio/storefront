@@ -82,10 +82,14 @@ export interface PaymentAdapter {
 
 export type PayoutStatus = 'pending' | 'in_transit' | 'paid' | 'failed' | 'canceled'
 
-/** What a payout line is, normalised across processors. `type` keeps the processor's own word. */
-export type PayoutLineCategory = 'charge' | 'refund' | 'dispute' | 'dispute_reversal' | 'fee' | 'adjustment' | 'reserve' | 'transfer' | 'other'
+/**
+ * What a payout line is, normalised across processors. `type` keeps the processor's own word.
+ * `balance` is money that stayed in (or came from) the processor balance across a payout boundary:
+ * PayPal's `carry_in` / `carry_out` lines for a partial withdrawal.
+ */
+export type PayoutLineCategory = 'charge' | 'refund' | 'dispute' | 'dispute_reversal' | 'fee' | 'adjustment' | 'reserve' | 'transfer' | 'balance' | 'other'
 
-export const PAYOUT_LINE_CATEGORIES: readonly PayoutLineCategory[] = ['charge', 'refund', 'dispute', 'dispute_reversal', 'fee', 'adjustment', 'reserve', 'transfer', 'other']
+export const PAYOUT_LINE_CATEGORIES: readonly PayoutLineCategory[] = ['charge', 'refund', 'dispute', 'dispute_reversal', 'fee', 'adjustment', 'reserve', 'transfer', 'balance', 'other']
 
 /**
  * One payout. `amount` is what reached (positive) or left (negative: a debit for a negative balance)
@@ -98,11 +102,11 @@ export interface Payout {
   accountId: string
   status: PayoutStatus
   amount: Money
-  /** `YYYY-MM-DD`, when the bank receives it (Stripe) or the withdrawal date (PayPal). */
+  /** `YYYY-MM-DD`, when the bank receives it (Stripe), the withdrawal date or the balance day (PayPal). */
   arrivalDate: string | null
   /** ISO 8601 UTC, second precision (`2026-11-03T00:08:09Z`). The list is ordered by it. */
   createdAt: string
-  /** `standard` / `instant` (Stripe), `withdrawal` (PayPal T0400) or the processor's code. */
+  /** `standard` / `instant` (Stripe), `withdrawal` (PayPal T0400), `balance` (a PayPal balance day) or the processor's code. */
   method: string | null
   /** A human label for the destination, e.g. `Bank ••6789`, when the processor says. */
   destinationLabel: string | null
@@ -167,6 +171,17 @@ export interface PayoutListParams {
    * late is never skipped by a cursor another processor moved past.
    */
   until?: string | null
+  /**
+   * The processor-specific payout mode the caller asked for (`<provider>_mode` on the Store API,
+   * e.g. `paypal_mode=balance`); null or omitted for the adapter's default. An adapter without modes
+   * ignores it; one with modes throws `invalid` for a value it does not know.
+   */
+  mode?: string | null
+}
+
+/** Options `get()` and `lines()` accept beside the id: the same `mode` as the list (ids are self-describing, so it is only validated). */
+export interface PayoutLookupOptions {
+  mode?: string | null
 }
 
 /** PayPal Transaction Search's documented reporting lag (up to three hours): its default `reportingLagMs`. */
@@ -199,9 +214,16 @@ export interface PaymentPayouts {
   readonly reportingLagMs?: number
   list(params: PayoutListParams): Promise<PayoutListResult>
   /** One payout with `lineCount` filled; null when the processor has no such payout. */
-  get(id: string): Promise<Payout | null>
+  get(id: string, options?: PayoutLookupOptions): Promise<Payout | null>
   /** Throw `notFound` (StoreError) when the payout does not exist. */
-  lines(payoutId: string, params: { cursor: string | null; limit: number }): Promise<PayoutLinePage>
+  lines(payoutId: string, params: { cursor: string | null; limit: number } & PayoutLookupOptions): Promise<PayoutLinePage>
+  /**
+   * Optional: the processor account this adapter pays out from (the same id its payouts carry), when
+   * it can be read cheaply (a cached id, or one already learned this request); null when it cannot.
+   * The list response reports it as `accounts`, so a consumer notices an account switch even when
+   * there are no new payouts. Must not throw for a missing permission: return null.
+   */
+  account?(): Promise<string | null>
 }
 
 /**

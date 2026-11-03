@@ -382,6 +382,14 @@ export function stripePayouts(stripe: Stripe): PaymentPayouts {
       return { payouts: ordered.slice(0, limit), hasMore: ordered.length > limit }
     },
 
+    async account() {
+      try {
+        return await accountId()
+      } catch {
+        return null
+      }
+    },
+
     async get(id) {
       const p = await retrieve(id)
       if (!p) return null

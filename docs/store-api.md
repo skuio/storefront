@@ -350,9 +350,14 @@ none.
 
 | Method | Path | Returns |
 |---|---|---|
-| GET | `/payouts?provider=stripe&created_since=2026-10-01T00:00:00Z&cursor=…&limit=50` | `{ "data": [Payout…], "next_cursor": "…"\|null, "providers": ["paypal", "stripe"] }` |
+| GET | `/payouts?provider=stripe&created_since=2026-10-01T00:00:00Z&paypal_mode=withdrawal&cursor=…&limit=50` | `{ "data": [Payout…], "next_cursor": "…"\|null, "providers": ["paypal", "stripe"], "accounts": [{ "provider": "paypal", "account_id": "…" }, …] }` |
 | GET | `/payouts/{provider}/{id}` | `{ "data": Payout }` |
 | GET | `/payouts/{provider}/{id}/lines?cursor=…&limit=100` | `{ "data": [PayoutLine…], "next_cursor": "…"\|null }` |
+
+`paypal_mode` is `withdrawal` (the default) or `balance` and chooses what a PayPal payout is (see
+**PayPal** below); any other value is `422`. Stripe ignores it. It is also accepted on the two
+single-payout endpoints, where it is only validated: a PayPal payout id says which mode it belongs to.
+Pass the same `paypal_mode` on every page of a list.
 
 **List.** Ordered by `created_at, provider, id` ascending. `provider` is optional: without it the
 list merges every payout-capable processor on the store (`providers` names them; empty when there
@@ -368,6 +373,14 @@ records per-processor sync errors should page each provider separately (`?provid
 `?provider=paypal`): a permission error on one fails the whole merged request. An unknown provider,
 or one without payouts, is `404 not_found`.
 
+**`accounts`** names the processor account of every payout-capable provider on the store (not only
+the one `provider` asks for): `[{ "provider": "paypal", "account_id": "EXAMPLEPAYER01" },
+{ "provider": "stripe", "account_id": "acct_1ExAmPlE00000000" }]`, ordered by provider. It is the same
+id the payouts carry in `account_id`, read cheaply (cached, or learned while listing), so a consumer
+can notice the store switched processor accounts even when no new payout has arrived. A provider
+whose account cannot be read (a Stripe key without account read; PayPal before any search has named
+the payer and without Log in with PayPal) is left out, never an error.
+
 **Payout:**
 ```json
 { "id": "po_1ExAmPlE0000000000Payout", "provider": "stripe", "account_id": "acct_1ExAmPlE00000000",
@@ -379,13 +392,13 @@ or one without payouts, is `404 not_found`.
 | Field | Meaning |
 |---|---|
 | `account_id` | The processor account that paid out: Stripe `acct_…`; PayPal the merchant's payer id (from Log in with PayPal's userinfo, else Transaction Search's `account_number`, else the app's client id). Two stores on one processor account report the same id. |
-| `status` | `pending \| in_transit \| paid \| failed \| canceled`. Only `paid` payouts are final; `failed` and `canceled` never settle anything (Stripe puts their transactions in a later payout). |
-| `amount` | What reached the bank, integer minor units, **negative for a debit** (Stripe pulling money to cover a negative balance). PayPal: the withdrawal's absolute value. |
-| `arrival_date` | `YYYY-MM-DD` the bank receives it (Stripe) or the withdrawal date (PayPal). |
-| `created_at` | ISO 8601 UTC, second precision. |
-| `method` | Stripe `standard` / `instant`; PayPal `withdrawal` (T0400) or the withdrawal's T-code (`T0401` auto-sweep, …). |
-| `destination_label` | e.g. `Bank ••6789` when the key may read the bank account; else `null`. Always `null` for PayPal. |
-| `line_count` | How many lines `/lines` returns. **May be `null` in the list** (counting a Stripe payout costs extra calls; a PayPal withdrawal whose previous withdrawal is before `created_since`). `GET /payouts/{provider}/{id}` fills it, except for a Stripe payout of more than 1,000 lines (counting it would take more than ten Stripe calls), where it is `null`. **Page `/lines` to exhaustion rather than trusting `line_count`** (SKU.io does). A change in `line_count` means the lines changed. |
+| `status` | `pending \| in_transit \| paid \| failed \| canceled`. Only `paid` payouts are final; `failed` and `canceled` never settle anything (Stripe puts their transactions in a later payout). A PayPal balance day is `pending` until the whole day is older than the reporting lag. |
+| `amount` | What reached the bank, integer minor units, **negative for a debit** (Stripe pulling money to cover a negative balance). PayPal withdrawal: the withdrawal's absolute value. PayPal balance day: the day's net movement (negative on a day of more refunds than sales). |
+| `arrival_date` | `YYYY-MM-DD` the bank receives it (Stripe), the withdrawal date or the balance day (PayPal). |
+| `created_at` | ISO 8601 UTC, second precision. A PayPal balance day: its last second (`2026-11-02T23:59:59Z`). |
+| `method` | Stripe `standard` / `instant`; PayPal `withdrawal` (T0400), the withdrawal's T-code (`T0401` auto-sweep, …), or `balance` (a balance day). |
+| `destination_label` | e.g. `Bank ••6789` when the key may read the bank account; else `null`. `null` for a PayPal withdrawal; `PayPal balance` for a balance day. |
+| `line_count` | How many lines `/lines` returns. **May be `null` in the list** (counting a Stripe payout costs extra calls; a PayPal withdrawal whose previous withdrawal is not at least 14 days after where the list's read starts, i.e. before `created_since`). `GET /payouts/{provider}/{id}` fills it, except for a Stripe payout of more than 1,000 lines (counting it would take more than ten Stripe calls), where it is `null`. **Page `/lines` to exhaustion rather than trusting `line_count`** (SKU.io does). A change in `line_count` means the lines changed. |
 
 **PayoutLine:**
 ```json
@@ -400,10 +413,10 @@ or one without payouts, is `404 not_found`.
 
 | Field | Meaning |
 |---|---|
-| `id` | Stripe balance transaction `txn_…`; PayPal transaction id. |
+| `id` | Stripe balance transaction `txn_…`; PayPal transaction id (`carry_in:…` / `carry_out:…` for a carry line). |
 | `type` | The processor's own type: Stripe balance transaction `type`, PayPal T-code. |
 | `category` | Normalised, table below. |
-| `source_id` | Stripe: the object behind it (`ch_…`, `py_…`, `re_…`, `du_…`, or `null` for a billing fee). PayPal: the transaction id. For a charge it equals the order's `payment.transaction_id`. |
+| `source_id` | Stripe: the object behind it (`ch_…`, `py_…`, `re_…`, `du_…`, or `null` for a billing fee). PayPal: the transaction id (for a carry line, the withdrawal or transaction whose `ending_balance` it is). For a charge it equals the order's `payment.transaction_id`. |
 | `order_id`, `order_number` | The store order, from the charge's `metadata.order_id` / `order_number` (Stripe; a refund or dispute reads the charge it is for) or the transaction's `custom_field` (PayPal, set to the order id at checkout; a refund uses the payment it refunds). When only one of the two is known, the store fills the other from its own orders. `null` for lines no order owns (fees, conversions, test charges). `order_number` has no prefix (`"15000"`). |
 | `payment_reference` | The order's `payment.reference` when known: Stripe PaymentIntent `pi_…`; PayPal the capture (transaction) id, for a refund the one it refunds. Additive to SKU-8600's contract. |
 | `gross`, `fee`, `net` | Integer minor units **in the payout currency** (the processor has already converted a charge taken in another currency). Always `gross − fee = net`. |
@@ -428,6 +441,7 @@ lines; the kit's tests assert this on a real payout).
 | `risk_reserved_funds`, `risk_reserve_released`, `reserve_transaction`, `reserved_funds` | T1105 (release of a general account hold), T1500–T1599 (holds) | `reserve` |
 | `adjustment`, `other_adjustment` | T0200–T0299 (currency conversion), T1900–T1999 | `adjustment` |
 | `transfer`, `transfer_reversal`, `topup`, `topup_reversal` | T0300–T0399, T1101 (withdrawal reversed), a reversed (`V`) withdrawal | `transfer` |
+| — | `carry_in` / `carry_out` (a partial withdrawal's balance lines, below) | `balance` |
 | anything else | anything else | `other` |
 
 PayPal T1300–T1399 (authorize, reauthorize, void an authorization) never move the balance and are
@@ -439,47 +453,112 @@ lines). The list walks Stripe newest-first back to `created_since` and serves th
 first; a range with more than 2,000 payouts is refused with 422 (use a later `created_since`).
 
 **PayPal.** PayPal has no payout object: money stays in the PayPal balance until a withdrawal
-(T04xx) moves it to the bank. So a payout is a withdrawal read through Transaction Search, and its
-lines are the balance movements **in the withdrawal's currency** after the previous withdrawal, up
-to it: transactions with status `S` (completed) or `V` (completed, then reversed: the original did
-move the balance, and its refund or reversal is a line of its own, in whichever payout it falls).
-Pending (`P`) and denied (`D`) transactions never moved the balance and are not lines. A
-transaction in the same second as a withdrawal belongs to that withdrawal. A withdrawal PayPal
-reversed (status `V`, the bank returned it) is no payout boundary, but the money did leave and
-come back: the reversed withdrawal is a negative `transfer` line in the payout whose interval it
-falls in, and its reversal (`T1101`) a positive `transfer` line in the payout whose interval that
-falls in, so each payout still sums to its amount. Anything else that references a withdrawal (a
-`T0102` withdrawal fee) is an ordinary line. Lines are shown by transaction date, then
-transaction id. Transactions after the latest withdrawal belong
-to no payout yet. PayPal keeps one balance per currency, so a CAD sale converted to USD shows as a
-`T0200` adjustment in the USD payout.
+(T04xx) moves it to the bank, and some merchants never withdraw (they book the PayPal balance as a
+bank account). Everything is read through Transaction Search, in one of two modes the operations
+system picks per store with `paypal_mode`:
+
+- **`withdrawal`** (default): a payout is a withdrawal, and its lines are the balance movements **in
+  the withdrawal's currency** after the previous withdrawal, up to it, plus the carry lines below.
+  Payout id: the withdrawal's transaction id.
+- **`balance`**: PayPal is a bank account in the merchant's books. A payout is one **UTC day × currency**
+  that had balance movements: id `day-YYYY-MM-DD-CUR` (`day-2026-11-02-USD`), `created_at` the day's
+  last second, `arrival_date` the day, `method: "balance"`, `destination_label: "PayPal balance"`,
+  `amount` the Σ `net` of its lines (so it always balances), `status` `paid` once the end of the day
+  is older than the reporting lag, else `pending`. Its lines are every movement settled that day
+  **except withdrawals** (any status) **and withdrawal reversals** (`T1101`): those are transfers the
+  merchant books between PayPal and the bank, not payout lines. A withdrawal fee (`T0102`) is a line.
+  Withdrawal mode never lists balance days and balance mode never lists withdrawals; `GET` and
+  `/lines` take either kind of id without `paypal_mode`.
+
+In both modes a line is a transaction with status `S` (completed) or `V` (completed, then reversed:
+the original did move the balance, and its refund or reversal is a line of its own, in whichever
+payout it falls). Pending (`P`) and denied (`D`) transactions never moved the balance and are not
+lines. PayPal keeps one balance per currency, so a CAD sale converted to USD shows as a `T0200`
+adjustment in the USD payout. Lines are shown in settlement order (below), then transaction id;
+`created_at` stays the transaction's own initiation date.
+
+*Withdrawal-mode details.* A transaction in the same second as a withdrawal belongs to that
+withdrawal. A withdrawal PayPal reversed (status `V`, the bank returned it) is no payout boundary,
+but the money did leave and come back: the reversed withdrawal is a negative `transfer` line in the
+payout whose interval it falls in, and its reversal (`T1101`) a positive `transfer` line in the payout
+whose interval that falls in, so each payout still sums to its amount. Anything else that references
+a withdrawal (a `T0102` withdrawal fee) is an ordinary line. Transactions after the latest withdrawal
+belong to no payout yet.
+
+**Carry lines (a partial withdrawal).** A withdrawal that leaves money in PayPal is itemised with two
+`balance` lines worked out from PayPal's `ending_balance` (the balance in that currency after a
+transaction, `transaction_info.ending_balance`):
+
+| `type` | `id` | Amount (`gross = net`, `fee` 0) | `source_id` |
+|---|---|---|---|
+| `carry_in` | `carry_in:<previous withdrawal id>` | **+** the balance left in PayPal after the previous withdrawal | that withdrawal |
+| `carry_out` | `carry_out:<this withdrawal id>` | **−** the balance left in PayPal after this withdrawal | this withdrawal |
+
+`carry_in` is the first line and `carry_out` the last; a zero carry is left out (a withdrawal that
+empties the balance has no `carry_out`). With them, `Σ net = amount` for a partial withdrawal too.
+Receive 100 (fee 3), withdraw 40, receive 20, withdraw 77: the first payout is `charge 97, carry_out −57`
+(Σ 40); the second `carry_in 57, charge 20` (Σ 77). The two lines of one boundary share the id
+suffix, so a consumer can see that `carry_out:W1` and `carry_in:W1` are the same money. A withdrawal
+with no earlier one in PayPal's history (three years) takes its `carry_in` from the first movement
+(its `ending_balance` minus its `net`; `source_id` that transaction).
+
+Carry lines are emitted only when they reconcile: `balance after the previous withdrawal + Σ net of
+the movement lines − amount = balance after this withdrawal`. If PayPal left `ending_balance` empty
+on either boundary (PayPal's reference says it is empty when the search passes "one or more optional
+query parameters"; the kit's range reads pass only dates, `fields=all` and paging, never a filter such
+as `transaction_id` — verify on the live account that it comes back), or the
+balances do not reconcile with the lines (PayPal ordered a same-second movement differently, or a
+movement was regrouped), the payout has **no** carry lines — never a plug — and its lines do not sum
+to its `amount`, so the consumer holds it. `line_count` counts carry lines.
+
+**Settlement time (eCheck and other delayed payments).** A transaction is grouped by when its money
+reached the balance, in both modes: its `transaction_initiation_date`, except for a payment that
+waited to clear, which is grouped by its `transaction_updated_date` (its settlement). Transaction
+Search has no field that says a transaction "was pending", so the rule is deliberately narrow — all
+of these must hold:
+
+1. the transaction is completed (`S`) and an incoming payment (`T0000`–`T0013`, `T0700`);
+2. `transaction_updated_date` is later than `transaction_initiation_date`, by at most 14 days;
+3. it was funded by an eCheck: `instrument_type` or `instrument_sub_type` contains `ECHECK` (or
+   `E_CHECK`), or `instrument_type` is `BANK` and it cleared **at least a day** after it started (an
+   instant bank transfer completes at once; an eCheck takes 3–5 business days);
+4. no other transaction references it (`paypal_reference_id`): a refund or dispute may itself be what
+   moved `transaction_updated_date`, so a referenced payment keeps its initiation date. To see such a
+   refund, a read that holds a delayed payment also reads the 14 days after the payout.
+
+Everything else keeps its initiation date. So an eCheck started before a withdrawal and cleared
+after it is a line of the **next** withdrawal (or of the balance day it cleared), where its money
+actually went out. Every read starts 14 days before the payout's interval (a withdrawal's previous
+withdrawal, a balance day, or `created_since`) to find delayed payments started earlier; in the
+list, a withdrawal's `line_count` is `null` when its previous withdrawal is less than 14 days after
+where the read starts.
 
 **PayPal payouts appear about three hours after the withdrawal.** Transaction Search lags real time
 by up to three hours, so the store reads only transactions older than that: a withdrawal (and any
 transaction) newer than three hours is not listed, not found by `GET /payouts/paypal/{id}` (404),
-and not in any lines yet. Poll again later. Transaction Search keeps three years; each request is
-cut into ≤ 31-day windows (a window PayPal finds too large is halved, down to an hour), so looking
-up an old payout costs one call per month back to it.
+and not in any lines yet; a balance day stays `pending` until three hours after it ends. Poll again
+later. Transaction Search keeps three years; each request is cut into ≤ 31-day windows (a window
+PayPal finds too large is halved, down to an hour), so looking up an old payout costs one call per
+month back to it.
 
-**Known limits (PayPal).** These are left to the operations system, which should hold a payout
-whose lines do not sum to its `amount` instead of posting it:
+**Known limits (PayPal).** The operations system should hold a payout whose lines do not sum to its
+`amount` instead of posting it:
 
-- **A partial withdrawal.** A withdrawal of only part of the balance is not carried forward: its
-  lines are every movement since the previous withdrawal, so they sum to more than its `amount`;
-  the next withdrawal's lines start after it, so they sum to less than that withdrawal's `amount`.
-  (Receive 100, withdraw 40, receive 20, withdraw 80: the first payout's lines sum to 100, the
-  second's to 20.) `Σ net = amount` holds when each withdrawal empties the balance (PayPal's
-  "withdraw all" and auto-sweep do).
+- **No `ending_balance`.** A partial withdrawal is balanced only by its carry lines; when PayPal does
+  not report `ending_balance` for the account (or it does not reconcile, above), the payout's lines
+  sum to more than its `amount` and the next one's to less. `paypal_mode=balance` has no such limit:
+  a balance day always sums to its amount.
+- **Delayed payments outside the rule.** A payment that cleared late but matches none of the funding
+  signals above (PayPal reports no eCheck or `BANK` instrument for it), or took longer than 14 days,
+  is grouped by its initiation date; in withdrawal mode its payout then does not reconcile and gets no
+  carry lines. `transaction_updated_date` is when PayPal last changed a transaction, so a later change
+  to a cleared eCheck (a refund or dispute more than 14 days on) can move it back to its initiation
+  date, changing an earlier payout's lines and `line_count`.
 - **Very high-volume PayPal accounts.** A payout read walks every transaction since the previous
-  withdrawal, one Transaction Search call per 500 transactions (plus one per month of history). An
-  account with tens of thousands of transactions between withdrawals can need more than the 50
-  outbound requests a Cloudflare Workers Free request allows; such a store needs the Workers Paid
-  plan (1,000) or a Node host.
-- **Payments that complete later.** A line is grouped by its **initiation** date. An eCheck or
-  other pending payment initiated before a withdrawal but completed after a later one is grouped
-  with the withdrawal that follows its initiation once it completes (that earlier payout's lines,
-  and its `line_count`, change), not with the later one its money actually went out in, so neither
-  payout sums to its `amount`.
+  withdrawal (plus 14 days), one Transaction Search call per 500 transactions (plus one per month of
+  history). An account with tens of thousands of transactions between withdrawals can need more than
+  the 50 outbound requests a Cloudflare Workers Free request allows; such a store needs the Workers
+  Paid plan (1,000) or a Node host, or `paypal_mode=balance`, whose day reads cover only the two weeks before it (and, with a delayed payment, the two after).
 
 ### Processor permissions
 
