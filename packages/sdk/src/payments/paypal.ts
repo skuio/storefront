@@ -21,6 +21,11 @@ export interface PayPalPaymentOptions {
   fetch?: typeof fetch
   /** Injected for tests; the clock payouts are listed up to. */
   now?: () => Date
+  /**
+   * How far behind real time Transaction Search is trusted, in ms (default `PAYPAL_REPORTING_LAG_MS`,
+   * three hours). Payouts read only transactions older than this, so a withdrawal shows up that long after it.
+   */
+  reportingLagMs?: number
 }
 
 const PROVIDER = 'paypal'
@@ -71,7 +76,11 @@ export function paypalPayments(options: PayPalPaymentOptions): PaymentAdapter {
       headers: { authorization: `Basic ${btoa(`${options.clientId}:${options.clientSecret}`)}`, 'content-type': 'application/x-www-form-urlencoded' },
       body: 'grant_type=client_credentials',
     })
-    if (!res.ok) throw new Error(`PayPal auth failed: ${res.status} ${await res.text()}`)
+    if (!res.ok) {
+      const text = await res.text()
+      if (res.status === 401 || res.status === 403) throw new PayPalAuthError(res.status, `PayPal auth failed: ${res.status} ${text}`)
+      throw new Error(`PayPal auth failed: ${res.status} ${text}`)
+    }
     const body = (await res.json()) as { access_token: string; expires_in: number }
     token = { value: body.access_token, expires: Date.now() + body.expires_in * 1000 }
     return token.value
@@ -245,7 +254,7 @@ export function paypalPayments(options: PayPalPaymentOptions): PaymentAdapter {
       return settlementOf(await api<PayPalCapture>('GET', `/v2/payments/captures/${encodeURIComponent(captureId)}`))
     },
 
-    payouts: paypalPayouts({ clientId: options.clientId, api, now: options.now }),
+    payouts: paypalPayouts({ clientId: options.clientId, api, now: options.now, reportingLagMs: options.reportingLagMs }),
   }
 }
 
@@ -273,6 +282,14 @@ function paypalMoney(m: PayPalMoney): Money {
 class PayPalError extends Error {
   constructor(readonly status: number, message: string, readonly body: string) {
     super(message)
+  }
+}
+
+/** The OAuth token endpoint refused the client id and secret (401/403). */
+export class PayPalAuthError extends Error {
+  constructor(readonly status: number, message: string) {
+    super(message)
+    this.name = 'PayPalAuthError'
   }
 }
 
@@ -363,7 +380,11 @@ export function paypalExpress(options: PayPalPaymentOptions): PayPalExpress {
       headers: { authorization: `Basic ${btoa(`${options.clientId}:${options.clientSecret}`)}`, 'content-type': 'application/x-www-form-urlencoded' },
       body: 'grant_type=client_credentials',
     })
-    if (!res.ok) throw new Error(`PayPal auth failed: ${res.status} ${await res.text()}`)
+    if (!res.ok) {
+      const text = await res.text()
+      if (res.status === 401 || res.status === 403) throw new PayPalAuthError(res.status, `PayPal auth failed: ${res.status} ${text}`)
+      throw new Error(`PayPal auth failed: ${res.status} ${text}`)
+    }
     const body = (await res.json()) as { access_token: string; expires_in: number }
     token = { value: body.access_token, expires: Date.now() + body.expires_in * 1000 }
     return token.value
@@ -491,6 +512,12 @@ const WINDOW_MS = 31 * 86_400_000 - 1000
 const HISTORY_MS = 3 * 365 * 86_400_000
 const MAX_WINDOWS = 37
 const PERMISSION = 'Transaction search'
+/** The client id and secret themselves were refused (OAuth 401/403). */
+const CREDENTIALS_PERMISSION = 'API credentials'
+/** PayPal: Transaction Search can lag real time by up to three hours. Payouts read only older data. */
+export const PAYPAL_REPORTING_LAG_MS = 3 * 3_600_000
+/** The smallest window a too-large result set is split down to. */
+const MIN_SPLIT_MS = 3_600_000
 
 interface PayPalTransaction {
   transaction_info: {
@@ -522,16 +549,24 @@ export function paypalLineCategory(code: string): PayPalLineCategoryOrPayout {
   if (!Number.isFinite(n)) return 'other'
   if (n >= 400 && n <= 499) return 'payout'
   if ((n >= 0 && n <= 13) || n === 700) return 'charge'
-  if (n === 1105 || n === 1107) return 'refund'
-  if (n === 1106 || n === 1201 || n === 1202) return 'dispute'
-  if (n === 1108) return 'dispute_reversal'
-  if ((n >= 100 && n <= 199) || (n >= 1300 && n <= 1399)) return 'fee'
-  if (n >= 1500 && n <= 1599) return 'reserve'
+  if (n === 1107) return 'refund'
+  if (n === 1106 || n === 1201) return 'dispute'
+  if (n === 1202) return 'dispute_reversal'
+  // T1108 fee reversal, T1109 fee refund: PayPal gives a fee back.
+  if ((n >= 100 && n <= 199) || n === 1108 || n === 1109) return 'fee'
+  // T1105 releases a general account hold; T15xx are holds.
+  if (n === 1105 || (n >= 1500 && n <= 1599)) return 'reserve'
   if ((n >= 200 && n <= 299) || (n >= 1900 && n <= 1999)) return 'adjustment'
   if (n >= 300 && n <= 399) return 'transfer'
   return 'other'
 }
 export type PayPalLineCategoryOrPayout = PayoutLineCategory | 'payout'
+
+/** T13xx are authorization events (authorize, reauthorize, void): they never move the balance. */
+export function isPayPalBalanceMovement(code: string): boolean {
+  const n = Number(code.replace(/^T/, ''))
+  return !(n >= 1300 && n <= 1399)
+}
 
 /** `2026-10-27T12:53:15+0000` → `2026-10-27T12:53:15Z`. */
 function paypalTime(value: string): string {
@@ -539,6 +574,8 @@ function paypalTime(value: string): string {
   return Number.isNaN(t) ? value : isoSeconds(new Date(t))
 }
 
+/** Transaction statuses whose amount moved the balance: success, and success later reversed. */
+const MOVED_BALANCE = new Set(['S', 'V'])
 const isWithdrawal = (t: PayPalTransaction) => paypalLineCategory(t.transaction_info.transaction_event_code) === 'payout'
 /** A withdrawal that took money out of the balance (completed or still on its way). */
 const isBoundary = (t: PayPalTransaction) => isWithdrawal(t) && ['S', 'P'].includes(t.transaction_info.transaction_status ?? 'S')
@@ -566,13 +603,45 @@ export function paypalPayouts(deps: {
   clientId: string
   api: <T>(method: string, path: string) => Promise<T>
   now?: () => Date
+  reportingLagMs?: number
 }): PaymentPayouts {
   const now = () => deps.now?.() ?? new Date()
+  /** The newest moment Transaction Search is trusted to be complete up to. */
+  const settled = () => now().getTime() - (deps.reportingLagMs ?? PAYPAL_REPORTING_LAG_MS)
   let account: string | null = null
   /** The `account_number` Transaction Search reports: the merchant's payer id. */
   let searchAccount: string | null = null
 
+  /** `deps.api`, with refused credentials turned into the Store API's 424. */
+  async function call<T>(method: string, path: string): Promise<T> {
+    try {
+      return await deps.api<T>(method, path)
+    } catch (e) {
+      if (e instanceof PayPalAuthError) {
+        throw new ProcessorPermissionError(PROVIDER, CREDENTIALS_PERMISSION, `PayPal refused the store's client id and secret (${e.status}): check PAYPAL_CLIENT_ID and PAYPAL_CLIENT_SECRET are the Live app's.`)
+      }
+      throw e
+    }
+  }
+
+  /**
+   * Every transaction in [start, end] (second precision, both ends inclusive), capped at the settled
+   * watermark. A window PayPal refuses as RESULTSET_TOO_LARGE is halved (down to an hour) into
+   * [start, mid] and [mid + 1s, end], so no second is searched twice or skipped.
+   */
   async function search(start: number, end: number, extra: Record<string, string> = {}): Promise<PayPalTransaction[]> {
+    end = Math.min(end, settled())
+    if (start > end) return []
+    try {
+      return await searchPages(start, end, extra)
+    } catch (e) {
+      if (!(e instanceof PayPalError && /RESULTSET_TOO_LARGE/.test(e.body)) || end - start <= MIN_SPLIT_MS) throw e
+      const mid = start + Math.floor((end - start) / 2000) * 1000
+      return [...(await search(start, mid, extra)), ...(await search(mid + 1000, end, extra))]
+    }
+  }
+
+  async function searchPages(start: number, end: number, extra: Record<string, string>): Promise<PayPalTransaction[]> {
     const out: PayPalTransaction[] = []
     for (let page = 1; ; page++) {
       const q = new URLSearchParams({
@@ -585,7 +654,7 @@ export function paypalPayouts(deps: {
       })
       let res: PayPalSearchPage
       try {
-        res = await deps.api<PayPalSearchPage>('GET', `/v1/reporting/transactions?${q}`)
+        res = await call<PayPalSearchPage>('GET', `/v1/reporting/transactions?${q}`)
       } catch (e) {
         if (e instanceof PayPalError && (e.status === 401 || e.status === 403)) {
           throw new ProcessorPermissionError(PROVIDER, PERMISSION, `PayPal refused Transaction Search (${e.status}${/NOT_AUTHORIZED/.test(e.body) ? ' NOT_AUTHORIZED' : ''}): enable "Transaction search" on the app.`)
@@ -609,15 +678,16 @@ export function paypalPayouts(deps: {
     const seen = new Set<string>()
     return list
       .filter((t) => (seen.has(t.transaction_info.transaction_id) ? false : (seen.add(t.transaction_info.transaction_id), true)))
-      .map((t, i) => ({ t, i, at: Date.parse(paypalTime(t.transaction_info.transaction_initiation_date)) }))
-      .sort((a, b) => a.at - b.at || a.i - b.i)
+      .map((t) => ({ t, id: t.transaction_info.transaction_id, at: Date.parse(paypalTime(t.transaction_info.transaction_initiation_date)) }))
+      // Deterministic whatever order PayPal answered in: by time, then transaction id.
+      .sort((a, b) => a.at - b.at || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
       .map((x) => x.t)
   }
 
   async function accountId(): Promise<string> {
     if (account) return account
     try {
-      const me = await deps.api<{ payer_id?: string }>('GET', '/v1/identity/oauth2/userinfo?schema=paypalv1.1')
+      const me = await call<{ payer_id?: string }>('GET', '/v1/identity/oauth2/userinfo?schema=paypalv1.1')
       if (me.payer_id) return (account = me.payer_id)
     } catch (e) {
       // An app without "Log in with PayPal" may not read its own identity; the client id still names it.
@@ -628,8 +698,10 @@ export function paypalPayouts(deps: {
   }
 
   /**
-   * The lines of the withdrawal at `index` in `txns`: same-currency, completed, non-withdrawal
-   * transactions after the previous boundary. Null when the previous boundary is not in `txns`
+   * The lines of the withdrawal at `index` in `txns`: same-currency, non-withdrawal balance movements
+   * after the previous boundary that moved the balance — completed (`S`) or completed and later
+   * reversed (`V`: the original did move the balance; its reversal is its own transaction). Pending
+   * (`P`) and denied (`D`) ones never did; authorization events (T13xx) never do. Null when the previous boundary is not in `txns`
    * (and `txns` does not reach back far enough to know).
    */
   function linesOf(txns: PayPalTransaction[], index: number, complete: boolean): PayPalTransaction[] | null {
@@ -643,7 +715,9 @@ export function paypalPayouts(deps: {
       }
     }
     if (from === -1 && !complete) return null
-    return txns.slice(from + 1, index).filter((t) => !isWithdrawal(t) && currencyOf(t) === currency && (t.transaction_info.transaction_status ?? 'S') === 'S')
+    return txns
+      .slice(from + 1, index)
+      .filter((t) => !isWithdrawal(t) && currencyOf(t) === currency && isPayPalBalanceMovement(t.transaction_info.transaction_event_code) && MOVED_BALANCE.has(t.transaction_info.transaction_status ?? 'S'))
   }
 
   function toPayout(w: PayPalTransaction, accountId: string, lineCount: number | null): Payout {
@@ -694,7 +768,7 @@ export function paypalPayouts(deps: {
 
   /** Find a withdrawal by id, newest window first. */
   async function findWithdrawal(id: string): Promise<PayPalTransaction | null> {
-    const end = now().getTime()
+    const end = settled()
     for (let w = 0; w < MAX_WINDOWS; w++) {
       const to = end - w * (WINDOW_MS + 1000)
       if (to <= end - HISTORY_MS) break
@@ -732,8 +806,8 @@ export function paypalPayouts(deps: {
 
   return {
     async list({ createdSince, after, limit }) {
-      const end = now().getTime()
-      const start = Math.max(Date.parse(after && after.createdAt > createdSince ? after.createdAt : createdSince), end - HISTORY_MS + 86_400_000)
+      const end = settled()
+      const start = Math.max(Date.parse(after && after.createdAt > createdSince ? after.createdAt : createdSince), now().getTime() - HISTORY_MS + 86_400_000)
       if (start >= end) return { payouts: [], hasMore: false }
       const txns = await range(start, end)
       const id = await accountId()

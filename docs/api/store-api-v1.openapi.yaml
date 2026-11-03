@@ -271,7 +271,14 @@ paths:
         - { name: provider, in: path, required: true, schema: { type: string, enum: [stripe, paypal] } }
         - { name: id, in: path, required: true, schema: { type: string } }
       responses:
-        '200': { description: 'OK, content: { application/json: { schema: { type: object, properties: { data: { $ref: ''#/components/schemas/Payout'' } } } } }' }
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: '#/components/schemas/Payout' }
         '404': { $ref: '#/components/responses/NotFound' }
         '424': { $ref: '#/components/responses/ProcessorPermissionMissing' }
   /payouts/{provider}/{id}/lines:
@@ -310,7 +317,8 @@ components:
       description: >-
         The processor refused the store's key (HTTP 401/403). error.code is processor_permission_missing and
         error.details is { provider, permission } with permission one of "Payouts: Read", "Balance: Read",
-        "Account: Read" (Stripe restricted key) or "Transaction search" (PayPal app feature).
+        "Balance transaction sources: Read", "Account: Read" (Stripe restricted key), "Transaction search"
+        (PayPal app feature) or "API credentials" (PayPal refused the client id and secret).
       content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
   schemas:
     Error:

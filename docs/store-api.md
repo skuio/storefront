@@ -415,14 +415,17 @@ lines; the kit's tests assert this on a real payout).
 | Stripe `reporting_category` (else `type`) | PayPal T-code | `category` |
 |---|---|---|
 | `charge`, `payment`, `charge_failure` | T0000–T0013, T0700 | `charge` |
-| `refund`, `payment_refund`, `refund_failure`, `payment_failure_refund` | T1105, T1107 | `refund` |
-| `dispute` | T1106, T1201, T1202 | `dispute` |
-| `dispute_reversal` | T1108 | `dispute_reversal` |
-| `fee`, `stripe_fee`, `tax`, `network_cost` | T0100–T0199, T1300–T1399 | `fee` |
-| `risk_reserved_funds`, `risk_reserve_released`, `reserve_transaction`, `reserved_funds` | T1500–T1599 | `reserve` |
+| `refund`, `payment_refund`, `refund_failure`, `payment_failure_refund` | T1107 (merchant refund) | `refund` |
+| `dispute` | T1106 (payment reversal by PayPal), T1201 (chargeback) | `dispute` |
+| `dispute_reversal` | T1202 (chargeback reversal) | `dispute_reversal` |
+| `fee`, `stripe_fee`, `tax`, `network_cost` | T0100–T0199, T1108 (fee reversal), T1109 (fee refund) — a fee given back is positive, as PayPal reports it | `fee` |
+| `risk_reserved_funds`, `risk_reserve_released`, `reserve_transaction`, `reserved_funds` | T1105 (release of a general account hold), T1500–T1599 (holds) | `reserve` |
 | `adjustment`, `other_adjustment` | T0200–T0299 (currency conversion), T1900–T1999 | `adjustment` |
 | `transfer`, `transfer_reversal`, `topup`, `topup_reversal` | T0300–T0399 | `transfer` |
 | anything else | anything else | `other` |
+
+PayPal T1300–T1399 (authorize, reauthorize, void an authorization) never move the balance and are
+never lines.
 
 **Stripe.** A payout is a Stripe payout; its lines are `balance_transactions?payout=` (Stripe only
 itemises automatic payouts: a payout sent by hand from the Dashboard has `line_count: 0` and no
@@ -431,14 +434,35 @@ first; a range with more than 2,000 payouts is refused with 422 (use a later `cr
 
 **PayPal.** PayPal has no payout object: money stays in the PayPal balance until a withdrawal
 (T04xx) moves it to the bank. So a payout is a withdrawal read through Transaction Search, and its
-lines are the completed (`S`) transactions **in the withdrawal's currency** after the previous
-withdrawal, up to it. Transactions after the latest withdrawal belong to no payout yet. PayPal keeps
-one balance per currency, so a CAD sale converted to USD shows as a `T0200` adjustment in the USD
-payout. Known limits: a withdrawal of only part of the balance leaves the remainder in the next
-withdrawal's lines, so `Σ net = amount` holds when each withdrawal empties the balance (PayPal's
-"withdraw all" and auto-sweep do); Transaction Search lags real time by up to three hours and keeps
-three years; each request is cut into ≤ 31-day windows, so looking up an old payout costs one call
-per month back to it.
+lines are the balance movements **in the withdrawal's currency** after the previous withdrawal, up
+to it: transactions with status `S` (completed) or `V` (completed, then reversed: the original did
+move the balance, and its refund or reversal is a line of its own, in whichever payout it falls).
+Pending (`P`) and denied (`D`) transactions never moved the balance and are not lines. Lines are
+ordered by transaction date, then transaction id. Transactions after the latest withdrawal belong
+to no payout yet. PayPal keeps one balance per currency, so a CAD sale converted to USD shows as a
+`T0200` adjustment in the USD payout.
+
+**PayPal payouts appear about three hours after the withdrawal.** Transaction Search lags real time
+by up to three hours, so the store reads only transactions older than that: a withdrawal (and any
+transaction) newer than three hours is not listed, not found by `GET /payouts/paypal/{id}` (404),
+and not in any lines yet. Poll again later. Transaction Search keeps three years; each request is
+cut into ≤ 31-day windows (a window PayPal finds too large is halved, down to an hour), so looking
+up an old payout costs one call per month back to it.
+
+**Known limits (PayPal).** These are left to the operations system, which should hold a payout
+whose lines do not sum to its `amount` instead of posting it:
+
+- **A partial withdrawal.** A withdrawal of only part of the balance is not carried forward: its
+  lines are every movement since the previous withdrawal, so they sum to more than its `amount`;
+  the next withdrawal's lines start after it, so they sum to less than that withdrawal's `amount`.
+  (Receive 100, withdraw 40, receive 20, withdraw 80: the first payout's lines sum to 100, the
+  second's to 20.) `Σ net = amount` holds when each withdrawal empties the balance (PayPal's
+  "withdraw all" and auto-sweep do).
+- **Payments that complete later.** A line is grouped by its **initiation** date. An eCheck or
+  other pending payment initiated before a withdrawal but completed after a later one is grouped
+  with the withdrawal that follows its initiation once it completes (that earlier payout's lines,
+  and its `line_count`, change), not with the later one its money actually went out in, so neither
+  payout sums to its `amount`.
 
 ### Processor permissions
 
@@ -454,12 +478,16 @@ When the processor refuses the store's key (HTTP 401/403), the Store API answers
 |---|---|---|
 | `stripe` | `Payouts: Read` | Stripe Dashboard → Developers → API keys → the store's restricted key → ⋯ → Edit → **Payouts: Read** → Update key. (A standard secret key already has it.) |
 | `stripe` | `Balance: Read` | Same screen → **Balance: Read** (needed for the lines). |
+| `stripe` | `Balance transaction sources: Read` | Same screen → **Balance transaction sources: Read** (the lines read the charge, refund or dispute behind each row; Stripe names it `rak_balance_transaction_source_read` in the error). |
 | `stripe` | `Account: Read` | Rare: a restricted key that cannot read its own account (`GET /v1/account`); same screen → give the key read access to the account. |
 | `paypal` | `Transaction search` | developer.paypal.com → Apps & Credentials → **Live** → the store's app → Features → tick **Transaction search** → Save. PayPal can take a few hours to grant the new scope to the app. |
+| `paypal` | `API credentials` | PayPal refused the client id and secret themselves (its OAuth token endpoint answered 401/403): the secret was rotated, the app deleted, or sandbox credentials are set on a live store. developer.paypal.com → Apps & Credentials → **Live** → the store's app → copy the Client ID and Secret into `PAYPAL_CLIENT_ID` / `PAYPAL_CLIENT_SECRET`. |
 
 Nothing is written on a 424, and a consumer should keep what it already has for that provider.
-Reading a refunded or disputed charge's order (Stripe, when the charge is not in the same page)
-needs **Charges: Read**; without it the line comes back with `order_id: null` instead of failing.
+Stripe lines cost one Stripe request per page: each row's source, and a refund's or dispute's
+charge, come expanded in that request. Expanding the charge needs **Charges: Read**; a key without
+it gets the lines anyway (one retry without the charge), and a refund or dispute whose charge is
+not on the same page comes back with `order_id: null` instead of failing.
 
 ## Errors
 

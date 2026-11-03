@@ -181,13 +181,25 @@ export interface PaymentPayouts {
 }
 
 /**
+ * What the built-in adapters name in a 424: Stripe restricted-key permissions, PayPal's app feature,
+ * or PayPal's client id and secret themselves.
+ */
+export type ProcessorPermission =
+  | 'Payouts: Read'
+  | 'Balance: Read'
+  | 'Balance transaction sources: Read'
+  | 'Account: Read'
+  | 'Transaction search'
+  | 'API credentials'
+
+/**
  * The processor answered 401/403: the store's key may not read what was asked. The Store API turns
  * it into HTTP 424 `processor_permission_missing` naming the permission to grant.
  */
 export class ProcessorPermissionError extends Error {
   readonly provider: string
-  /** `Payouts: Read`, `Balance: Read` (Stripe restricted key), `Transaction search` (PayPal app feature). */
-  readonly permission: string
+  /** One of `ProcessorPermission` for the built-in adapters; a custom adapter may name its own. */
+  readonly permission: ProcessorPermission | (string & {})
   constructor(provider: string, permission: string, message: string) {
     super(message)
     this.name = 'ProcessorPermissionError'

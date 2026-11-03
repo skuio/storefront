@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type Stripe from 'stripe'
 import { handleStoreApi } from '../src/api'
 import { manualPayments } from '../src/payments/manual'
-import { paypalLineCategory, paypalPayments } from '../src/payments/paypal'
+import { paypalLineCategory, paypalPayments, type PayPalPaymentOptions } from '../src/payments/paypal'
 import { stripeLineCategory, stripePayments } from '../src/payments/stripe'
 import type { PaymentAdapter } from '../src/payments'
 import type { Store } from '../src/store'
@@ -59,11 +59,18 @@ function fakeStripe(d: FakeStripeData) {
       }),
     },
     balanceTransactions: {
-      list: vi.fn(async (params: { payout: string; starting_after?: string; limit?: number }) => {
+      list: vi.fn(async (params: { payout: string; starting_after?: string; limit?: number; expand?: string[] }) => {
         if (d.fail?.balance) throw d.fail.balance
         const rows = d.txns[params.payout]
         if (!rows) throw Object.assign(new Error('No such payout'), { type: 'StripeInvalidRequestError', statusCode: 400 })
-        return page(rows, params)
+        const result = page(rows, params)
+        if (!params.expand?.includes('data.source.charge')) return result
+        // Stripe expands a refund's or dispute's charge inline.
+        const expand = (source: unknown) => {
+          const s = source as { charge?: unknown } | null
+          return s && typeof s === 'object' && typeof s.charge === 'string' && d.charges?.[s.charge] ? { ...s, charge: d.charges[s.charge] } : source
+        }
+        return { ...result, data: result.data.map((row) => ({ ...row, source: expand(row.source) })) }
       }),
     },
     charges: { retrieve: chargesRetrieve },
@@ -263,9 +270,12 @@ describe('stripe payouts', () => {
     // The disputed charge is on the same page: no extra read.
     expect(fake.raw.charges.retrieve).not.toHaveBeenCalled()
 
+    fake.raw.balanceTransactions.list.mockClear()
     const debit = (await api('/payouts/stripe/po_debit/lines')).body.data
-    // A refund of a charge paid out earlier reads that charge once.
-    expect(fake.raw.charges.retrieve.mock.calls).toEqual([['ch_C']])
+    // A refund of a charge paid out earlier gets that charge expanded inline: one Stripe call, no charge reads.
+    expect(fake.raw.charges.retrieve).not.toHaveBeenCalled()
+    expect(fake.raw.balanceTransactions.list).toHaveBeenCalledTimes(1)
+    expect(fake.raw.balanceTransactions.list.mock.calls[0]![0]).toMatchObject({ payout: 'po_debit', expand: ['data.source', 'data.source.charge'] })
     expect(debit.find((l: any) => l.id === 'txn_refund_c')).toMatchObject({ category: 'refund', order_id: 'ord_C', net: { amount: -2000 } })
     expect(debit.find((l: any) => l.id === 'txn_charge_small')).toMatchObject({ order_id: null, payment_reference: 'pi_D' })
   })
@@ -329,6 +339,54 @@ describe('stripe payouts', () => {
     expect(lines.body.error.details).toEqual({ provider: 'stripe', permission: 'Balance: Read' })
   })
 
+  it('a page of refunds of earlier charges costs one Stripe call, every line keeping its order', async () => {
+    const charges: Record<string, Record<string, unknown>> = {}
+    const rows: Txn[] = [bt('txn_po_refunds', 'payout', 100 * 500, 0, '2026-10-30T00:00:00Z', 'po_refunds', 'payout')]
+    for (let i = 0; i < 100; i++) {
+      charges[`ch_r${i}`] = { id: `ch_r${i}`, object: 'charge', payment_intent: `pi_r${i}`, metadata: { order_id: `ord_r${i}`, order_number: String(2000 + i) } }
+      rows.push(bt(`txn_r${i}`, 'refund', -500, 0, '2026-10-29T00:00:00Z', { id: `re_r${i}`, object: 'refund', charge: `ch_r${i}` }))
+    }
+    // A debit: Stripe pulls from the bank exactly what the refunds took.
+    const { api, fake } = stripeRig({ payouts: [synthPayout('po_refunds', -100 * 500, '2026-10-30T00:00:00Z')], txns: { po_refunds: rows }, charges })
+    const res = await api('/payouts/stripe/po_refunds/lines?limit=100')
+    expect(res.status).toBe(200)
+    expect(fake.raw.balanceTransactions.list).toHaveBeenCalledTimes(1)
+    expect(fake.raw.charges.retrieve).not.toHaveBeenCalled()
+    const lines = [...res.body.data]
+    if (res.body.next_cursor) lines.push(...(await api(`/payouts/stripe/po_refunds/lines?limit=100&cursor=${encodeURIComponent(res.body.next_cursor)}`)).body.data)
+    expect(lines).toHaveLength(100)
+    expect(lines.every((l: any) => l.order_id === `ord_${l.source_id.slice(3)}` && l.payment_reference === `pi_${l.source_id.slice(3)}`)).toBe(true)
+    expect(sumNet(lines)).toBe(-100 * 500)
+  })
+
+  it('a key that may not expand the charge falls back once to the sources alone', async () => {
+    const { api, fake } = stripeRig()
+    const original = fake.raw.balanceTransactions.list.getMockImplementation()!
+    fake.raw.balanceTransactions.list.mockImplementation(async (params: any) => {
+      if (params.expand?.includes('data.source.charge')) throw Object.assign(new Error('The provided key does not have the required permissions for this endpoint'), { type: 'StripePermissionError', statusCode: 403 })
+      return original(params)
+    })
+    const res = await api('/payouts/stripe/po_debit/lines')
+    expect(res.status).toBe(200)
+    expect(fake.raw.balanceTransactions.list).toHaveBeenCalledTimes(2)
+    expect(fake.raw.charges.retrieve).not.toHaveBeenCalled()
+    // The refunded charge is not on this page: the line posts without its order.
+    expect(res.body.data.find((l: any) => l.id === 'txn_refund_c')).toMatchObject({ category: 'refund', order_id: null, net: { amount: -2000 } })
+    expect(sumNet(res.body.data)).toBe(-1500)
+  })
+
+  it('names "Balance transaction sources: Read" when Stripe says the key may not read the sources', async () => {
+    const denied = Object.assign(
+      new Error("The provided key 'rk_live_…' does not have the required permissions for this endpoint on account 'acct_1ExAmPlE00000000'. Having the 'rak_balance_transaction_source_read' permission would allow this request to continue."),
+      { type: 'StripePermissionError', statusCode: 403 }
+    )
+    const { api } = stripeRig({ ...stripeData(), fail: { balance: denied } })
+    const res = await api('/payouts/stripe/po_refund/lines')
+    expect(res.status).toBe(424)
+    expect(res.body.error.details).toEqual({ provider: 'stripe', permission: 'Balance transaction sources: Read' })
+    expect(res.body.error.message).toContain('Grant "Balance transaction sources: Read"')
+  })
+
   it('caches the account id and falls back to no destination label when the key cannot expand it', async () => {
     const data = stripeData()
     const { api, fake } = stripeRig(data)
@@ -377,12 +435,27 @@ const paypalTxns = (orderId: string): PPTxn[] => [
   pp('W3', 'T0400', '2026-10-25T09:00:00Z', '-72.50', { status: 'D' }),
 ]
 
-function fakePayPal(txns: PPTxn[], opts: { userinfo?: number; search?: number; pageSize?: number } = {}) {
+type FakePayPalOptions = {
+  userinfo?: number
+  search?: number
+  pageSize?: number
+  /** The token endpoint's status (401: a wrong client id or secret). */
+  token?: number
+  /** More rows than this in one window is RESULTSET_TOO_LARGE. */
+  maxResults?: number
+}
+
+function fakePayPal(txns: PPTxn[], opts: FakePayPalOptions = {}) {
   const calls: string[] = []
+  /** Every [start, end] a range search (no transaction_id) answered, page 1 only. */
+  const windows: [number, number][] = []
   const impl = vi.fn(async (input: RequestInfo | URL) => {
     const url = new URL(String(input))
     calls.push(url.pathname + url.search)
-    if (url.pathname === '/v1/oauth2/token') return Response.json({ access_token: 'T', expires_in: 3600 })
+    if (url.pathname === '/v1/oauth2/token') {
+      if (opts.token) return new Response('{"error":"invalid_client","error_description":"Client Authentication failed"}', { status: opts.token })
+      return Response.json({ access_token: 'T', expires_in: 3600 })
+    }
     if (url.pathname === '/v1/identity/oauth2/userinfo') {
       if (opts.userinfo) return new Response('{"name":"NOT_AUTHORIZED"}', { status: opts.userinfo })
       return Response.json({ payer_id: 'MERCHANTPAYER1' })
@@ -398,8 +471,12 @@ function fakePayPal(txns: PPTxn[], opts: { userinfo?: number; search?: number; p
         const at = Date.parse(t.transaction_info.transaction_initiation_date.replace('+0000', 'Z'))
         return at >= start && at <= end && (!id || t.transaction_info.transaction_id === id)
       })
+      if (opts.maxResults !== undefined && rows.length > opts.maxResults) {
+        return new Response('{"name":"RESULTSET_TOO_LARGE","message":"Result set size is greater than the maximum limit. Change the filter criteria and try again."}', { status: 400 })
+      }
       const size = opts.pageSize ?? Number(q.get('page_size'))
       const n = Number(q.get('page'))
+      if (!id && n === 1) windows.push([start, end])
       return Response.json({
         account_number: 'MERCHANTPAYER1',
         transaction_details: rows.slice((n - 1) * size, n * size),
@@ -409,15 +486,17 @@ function fakePayPal(txns: PPTxn[], opts: { userinfo?: number; search?: number; p
     }
     return new Response('no route', { status: 599 })
   })
-  return { fetch: impl as unknown as typeof fetch, calls }
+  return { fetch: impl as unknown as typeof fetch, calls, windows }
 }
 
-async function paypalRig(opts: Parameters<typeof fakePayPal>[1] = {}) {
+const PAYPAL_NOW = '2026-11-02T12:00:00Z'
+
+async function paypalRig(opts: FakePayPalOptions & { txns?: PPTxn[]; adapter?: Partial<PayPalPaymentOptions> } = {}) {
   const { store } = rig()
   await seed(store)
   const order = await placeOrder(store)
-  const fake = fakePayPal(paypalTxns(order.id), { pageSize: 3, ...opts })
-  const adapter = paypalPayments({ clientId: 'CLIENT_ID', clientSecret: 's', webhookId: 'W', environment: 'live', fetch: fake.fetch, now: () => new Date('2026-11-02T12:00:00Z') })
+  const fake = fakePayPal(opts.txns ?? paypalTxns(order.id), { pageSize: 3, ...opts })
+  const adapter = paypalPayments({ clientId: 'CLIENT_ID', clientSecret: 's', webhookId: 'W', environment: 'live', fetch: fake.fetch, now: () => new Date(PAYPAL_NOW), ...opts.adapter })
   return { store, order, fake, adapter, api: client(store, [adapter]) }
 }
 
@@ -480,12 +559,16 @@ describe('paypal payouts', () => {
     expect((await api('/payouts/paypal/NOPE/lines')).status).toBe(404)
   })
 
-  it('maps T-codes to categories', () => {
+  it('maps T-codes to categories per PayPal\'s T-code reference', () => {
     expect(paypalLineCategory('T0006')).toBe('charge')
     expect(paypalLineCategory('T0700')).toBe('charge')
     expect(paypalLineCategory('T1107')).toBe('refund')
-    expect(paypalLineCategory('T1201')).toBe('dispute')
-    expect(paypalLineCategory('T1108')).toBe('dispute_reversal')
+    expect(paypalLineCategory('T1106')).toBe('dispute')
+    expect(paypalLineCategory('T1201')).toBe('dispute') // chargeback
+    expect(paypalLineCategory('T1202')).toBe('dispute_reversal') // chargeback reversal
+    expect(paypalLineCategory('T1108')).toBe('fee') // fee reversal
+    expect(paypalLineCategory('T1109')).toBe('fee') // fee refund
+    expect(paypalLineCategory('T1105')).toBe('reserve') // reversal of a general account hold
     expect(paypalLineCategory('T0106')).toBe('fee')
     expect(paypalLineCategory('T1501')).toBe('reserve')
     expect(paypalLineCategory('T0200')).toBe('adjustment')
@@ -504,6 +587,82 @@ describe('paypal payouts', () => {
     const noIdentity = await paypalRig({ userinfo: 403 })
     const list = await noIdentity.api('/payouts?provider=paypal&created_since=2026-10-01T00:00:00Z')
     expect(list.body.data[0].account_id).toBe('MERCHANTPAYER1')
+  })
+
+  it('refused client credentials (OAuth 401) answer 424 naming "API credentials"', async () => {
+    const { api } = await paypalRig({ token: 401 })
+    for (const path of ['/payouts?provider=paypal&created_since=2026-10-01T00:00:00Z', '/payouts/paypal/W2', '/payouts/paypal/W2/lines']) {
+      const res = await api(path)
+      expect(res.status).toBe(424)
+      expect(res.body.error).toMatchObject({ code: 'processor_permission_missing', details: { provider: 'paypal', permission: 'API credentials' } })
+    }
+  })
+
+  it('keeps a payment refunded later (status V) beside its refund; leaves out pending, denied and authorizations; orders by date then id', async () => {
+    const { api } = await paypalRig({
+      txns: [
+        pp('WA', 'T0400', '2026-10-01T09:00:00Z', '-10.00'),
+        // Completed, then reversed by the refund below: PayPal marks the original V.
+        pp('PAYV', 'T0006', '2026-10-02T10:00:00Z', '100.00', { fee: '-3.20', status: 'V', custom: 'ord_V' }),
+        pp('REFV', 'T1107', '2026-10-03T10:00:00Z', '-100.00', { fee: '2.90', ref: 'PAYV' }),
+        // Same second, answered out of id order.
+        pp('PAYB', 'T0006', '2026-10-04T10:00:00Z', '30.00', { fee: '-1.00', custom: 'ord_B' }),
+        pp('PAYA', 'T0006', '2026-10-04T10:00:00Z', '20.00', { fee: '-0.75', custom: 'ord_A' }),
+        pp('PEND', 'T0006', '2026-10-04T12:00:00Z', '20.00', { fee: '-0.70', status: 'P' }),
+        pp('DENY', 'T0006', '2026-10-04T13:00:00Z', '15.00', { status: 'D' }),
+        pp('AUTH', 'T1300', '2026-10-05T10:00:00Z', '40.00'),
+        pp('WB', 'T0400', '2026-10-06T09:00:00Z', '-47.95'),
+      ],
+    })
+    const lines = (await api('/payouts/paypal/WB/lines')).body.data
+    expect(lines.map((l: any) => l.id)).toEqual(['PAYV', 'REFV', 'PAYA', 'PAYB'])
+    expect(lines[0]).toMatchObject({ category: 'charge', gross: { amount: 10000 }, fee: { amount: 320 }, net: { amount: 9680 } })
+    expect(lines[1]).toMatchObject({ category: 'refund', payment_reference: 'PAYV', order_id: 'ord_V', gross: { amount: -10000 }, fee: { amount: -290 }, net: { amount: -9710 } })
+    expect(sumNet(lines)).toBe(4795)
+    expect((await api('/payouts/paypal/WB')).body.data).toMatchObject({ amount: { amount: 4795 }, line_count: 4 })
+  })
+
+  it('reads only data older than the reporting lag: a withdrawal from the last three hours is not listed yet', async () => {
+    const txns = [
+      pp('WOLD', 'T0400', '2026-10-30T09:00:00Z', '-10.00'),
+      pp('PAYNEW', 'T0006', '2026-11-02T09:30:00Z', '10.00'),
+      pp('WNEW', 'T0400', '2026-11-02T10:00:00Z', '-10.00'),
+    ]
+    const lagged = await paypalRig({ txns })
+    const list = await lagged.api('/payouts?provider=paypal&created_since=2026-10-25T00:00:00Z')
+    expect(list.body.data.map((p: any) => p.id)).toEqual(['WOLD'])
+    expect((await lagged.api('/payouts/paypal/WNEW')).status).toBe(404)
+    const watermark = Date.parse(PAYPAL_NOW) - 3 * 3_600_000
+    for (const call of lagged.fake.calls.filter((c) => c.startsWith('/v1/reporting/transactions'))) {
+      expect(Date.parse(new URLSearchParams(call.split('?')[1]).get('end_date')!)).toBeLessThanOrEqual(watermark)
+    }
+
+    // The lag is configurable; with none, the withdrawal and its payment are there.
+    const live = await paypalRig({ txns, adapter: { reportingLagMs: 0 } })
+    expect((await live.api('/payouts?provider=paypal&created_since=2026-10-25T00:00:00Z')).body.data.map((p: any) => p.id)).toEqual(['WOLD', 'WNEW'])
+    expect((await live.api('/payouts/paypal/WNEW/lines')).body.data.map((l: any) => l.id)).toEqual(['PAYNEW'])
+  })
+
+  it('halves a window PayPal finds too large, covering every second exactly once', async () => {
+    const plain = await paypalRig()
+    const split = await paypalRig({ maxResults: 2 })
+    const since = '2026-09-15T00:00:00Z'
+    const expected = (await plain.api(`/payouts?provider=paypal&created_since=${since}`)).body
+    split.fake.windows.length = 0
+    const res = await split.api(`/payouts?provider=paypal&created_since=${since}`)
+    expect(res.status).toBe(200)
+    expect(res.body).toEqual(expected)
+
+    // The answered windows tile [created_since, now − lag] with no gap and no overlap.
+    const windows = [...split.fake.windows].sort((a, b) => a[0] - b[0])
+    expect(windows.length).toBeGreaterThan(2) // more than the two 31-day windows: some were halved
+    expect(windows[0]![0]).toBe(Date.parse(since))
+    expect(windows[windows.length - 1]![1]).toBe(Date.parse(PAYPAL_NOW) - 3 * 3_600_000)
+    for (let i = 1; i < windows.length; i++) expect(windows[i]![0]).toBe(windows[i - 1]![1] + 1000)
+
+    const lines = (await split.api('/payouts/paypal/W2/lines')).body.data
+    expect(lines.map((l: any) => l.id)).toEqual(['PAY2', 'FX-USD', 'REF1'])
+    expect(sumNet(lines)).toBe(18990)
   })
 })
 
@@ -528,6 +687,23 @@ describe('payouts across processors', () => {
     expect(ids).toEqual([
       'stripe:po_refund', 'paypal:W2', 'stripe:po_dispute', 'stripe:po_debit', 'stripe:po_manual', 'paypal:W3', 'stripe:po_1ExAmPlE0000000000Payout',
     ])
+  })
+
+  it('pages same-second payouts of two processors one at a time without skipping or repeating', async () => {
+    const at = '2026-10-15T00:00:00Z'
+    const { store, adapter: paypal } = await paypalRig({ txns: [pp('z', 'T0400', at, '-10.00')] })
+    const stripe = stripePayments({ stripe: fakeStripe({ payouts: [synthPayout('po_A', 1000, at)], txns: {} }).stripe, webhookSecret: 'whsec' })
+    const api = client(store, [stripe, paypal])
+    const ids: string[] = []
+    let cursor: string | null = null
+    do {
+      const res: any = await api(`/payouts?created_since=2026-10-01T00:00:00Z&limit=1${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`)
+      expect(res.status).toBe(200)
+      ids.push(...res.body.data.map((p: any) => `${p.provider}:${p.id}`))
+      cursor = res.body.next_cursor
+    } while (cursor)
+    // (created_at, provider, id): paypal before stripe at the same second, though "po_A" < "z".
+    expect(ids).toEqual(['paypal:z', 'stripe:po_A'])
   })
 
   it('answers 404 for an unknown or payout-less provider and an empty list when there are none', async () => {

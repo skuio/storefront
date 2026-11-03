@@ -141,7 +141,8 @@ export function stripePayments(options: StripePaymentOptions): PaymentAdapter {
 // (`balance_transactions?payout=`), minus the payout's own `payout` row, keeping Stripe's signs:
 // gross = `amount`, fee = `fee`, net = `net` (refunds and disputes are negative; a dispute's fee is
 // positive, a won dispute's reversal gives it back as a negative fee). Their nets sum to the
-// payout's `amount`. A restricted key needs "Payouts: Read" and "Balance: Read".
+// payout's `amount`. A restricted key needs "Payouts: Read", "Balance: Read" and "Balance transaction
+// sources: Read" (the lines expand each row's source, and a refund's or dispute's charge, inline).
 
 /** Most payouts one list request walks (Stripe pages are 100): about five years of daily payouts. */
 const MAX_PAYOUT_PAGES = 20
@@ -180,10 +181,15 @@ export function stripeLineCategory(bt: { reporting_category?: string | null; typ
 
 type StripeErrorLike = { type?: string; statusCode?: number; code?: string; message?: string }
 
+/** What Stripe names when a key may read balance transactions but not the objects behind them. */
+const SOURCES_PERMISSION = 'Balance transaction sources: Read'
+
 function permissionError(e: unknown, permission: string): ProcessorPermissionError | null {
   const err = e as StripeErrorLike
   if (err?.type === 'StripePermissionError' || err?.type === 'StripeAuthenticationError' || err?.statusCode === 401 || err?.statusCode === 403) {
-    return new ProcessorPermissionError(PROVIDER, permission, `Stripe refused the store's key: ${err.message ?? 'permission denied'}. Grant "${permission}" on the restricted key.`)
+    // Stripe's message names the missing permission (`rak_balance_transaction_source_read`); trust it over the call's.
+    const named = /balance_transaction_source/i.test(`${err.message ?? ''} ${err.code ?? ''}`) ? SOURCES_PERMISSION : permission
+    return new ProcessorPermissionError(PROVIDER, named, `Stripe refused the store's key: ${err.message ?? 'permission denied'}. Grant "${named}" on the restricted key.`)
   }
   return null
 }
@@ -300,30 +306,36 @@ export function stripePayouts(stripe: Stripe): PaymentPayouts {
     }
   }
 
-  /** The charge behind a balance transaction's source: the charge itself, or the one a refund/dispute is for. */
-  async function chargeFor(source: Stripe.BalanceTransaction['source'], cache: Map<string, Promise<Stripe.Charge | null>>): Promise<Stripe.Charge | null> {
+  /**
+   * The lines' balance transactions with each source, and a refund's or dispute's charge, expanded
+   * inline: one Stripe request per page, whatever the page holds (a Worker has a subrequest budget).
+   * A key that may not expand the charge falls back once to the sources alone; those lines lose
+   * their order link (unless the charge is on the same page) instead of failing.
+   */
+  async function lineTransactions(payout: string, params: { starting_after?: string; limit: number }): Promise<Stripe.ApiList<Stripe.BalanceTransaction>> {
+    try {
+      return await stripe.balanceTransactions.list({ payout, ...params, expand: ['data.source', 'data.source.charge'] })
+    } catch (e) {
+      // A refused expansion (or a manual payout, which `transactions` recognises) takes the one fallback;
+      // a key that cannot read balance transactions at all fails there with the permission it lacks.
+      if (!permissionError(e, '') && (e as StripeErrorLike)?.type !== 'StripeInvalidRequestError') throw e
+      return transactions(payout, { ...params, expand: ['data.source'] })
+    }
+  }
+
+  /** The charge behind a balance transaction's source: the charge itself, or the (expanded) one a refund/dispute is for. */
+  function chargeFor(source: Stripe.BalanceTransaction['source'], onPage: Map<string, Stripe.Charge>): Stripe.Charge | null {
     if (!source || typeof source === 'string') return null
     const s = source as { object?: string; charge?: string | Stripe.Charge | null }
     if (s.object === 'charge') return source as Stripe.Charge
     const charge = s.charge
     if (!charge) return null
-    if (typeof charge === 'object') return charge
-    if (!cache.has(charge)) {
-      cache.set(
-        charge,
-        stripe.charges.retrieve(charge).catch((e) => {
-          // The line still posts without its order; a key without Charges: Read only loses the link.
-          console.warn('stripe payouts: could not read charge', charge, e instanceof Error ? e.message : String(e))
-          return null
-        })
-      )
-    }
-    return cache.get(charge)!
+    return typeof charge === 'object' ? charge : onPage.get(charge) ?? null
   }
 
-  async function toLine(bt: Stripe.BalanceTransaction, cache: Map<string, Promise<Stripe.Charge | null>>): Promise<PayoutLine> {
+  function toLine(bt: Stripe.BalanceTransaction, onPage: Map<string, Stripe.Charge>): PayoutLine {
     const currency = bt.currency.toLowerCase()
-    const charge = await chargeFor(bt.source, cache)
+    const charge = chargeFor(bt.source, onPage)
     const sourceId = typeof bt.source === 'string' ? bt.source : bt.source?.id ?? null
     const intent = charge?.payment_intent
     return {
@@ -378,15 +390,15 @@ export function stripePayouts(stripe: Stripe): PaymentPayouts {
         if (!parts || typeof parts[0] !== 'string') throw invalid('Invalid query', { cursor: 'was not issued by this store' })
         startingAfter = parts[0]
       }
-      const page = await transactions(payoutId, { limit, expand: ['data.source'], ...(startingAfter ? { starting_after: startingAfter } : {}) })
+      const page = await lineTransactions(payoutId, { limit, ...(startingAfter ? { starting_after: startingAfter } : {}) })
       if (!page.data.length && !startingAfter && !(await retrieve(payoutId))) throw notFound(`Payout ${payoutId}`)
-      // Charges already on this page answer their own refunds and disputes without another call.
-      const cache = new Map<string, Promise<Stripe.Charge | null>>()
+      // Charges on this page answer their own refunds and disputes when the charge could not be expanded.
+      const onPage = new Map<string, Stripe.Charge>()
       for (const row of page.data) {
         const source = row.source as { object?: string; id?: string } | string | null
-        if (source && typeof source === 'object' && source.object === 'charge' && source.id) cache.set(source.id, Promise.resolve(source as Stripe.Charge))
+        if (source && typeof source === 'object' && source.object === 'charge' && source.id) onPage.set(source.id, source as Stripe.Charge)
       }
-      const lines = await Promise.all(page.data.filter((bt) => bt.type !== 'payout').map((bt) => toLine(bt, cache)))
+      const lines = page.data.filter((bt) => bt.type !== 'payout').map((bt) => toLine(bt, onPage))
       const last = page.data[page.data.length - 1]
       return { lines, nextCursor: page.has_more && last ? encodeKeysetCursor([last.id]) : null }
     },

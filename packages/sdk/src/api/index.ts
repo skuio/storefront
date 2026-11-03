@@ -1,4 +1,4 @@
-import { comparePayouts, isAfter, ProcessorPermissionError, type PaymentAdapter, type PaymentPayouts, type Payout, type PayoutLine, type PayoutPosition } from '../payments'
+import { isAfter, ProcessorPermissionError, type PaymentAdapter, type PaymentPayouts, type Payout, type PayoutLine, type PayoutPosition } from '../payments'
 import type { Connection, Store } from '../store'
 import type { Order } from '../types'
 import { API_KEY_PREFIX, type ConnectScope } from '../store/connections'
@@ -338,6 +338,13 @@ function payoutAdapters(payments: StoreApiOptions['payments']): { id: string; pa
   return out.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
 }
 
+/** `(created_at, provider, id)` ascending: the merged list's order and its cursor's. */
+function compareMergedPayouts(a: Payout, b: Payout): number {
+  if (a.createdAt !== b.createdAt) return a.createdAt < b.createdAt ? -1 : 1
+  if (a.provider !== b.provider) return a.provider < b.provider ? -1 : 1
+  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0
+}
+
 function limitParam(url: URL, fallback: number, max: number): number {
   const raw = url.searchParams.get('limit')
   if (!raw) return fallback
@@ -388,9 +395,8 @@ async function payoutsRoute(segments: string[], url: URL, store: Store, payments
         return { ...page, payouts: page.payouts.filter((p) => isAfter(p, after)) }
       })
     )
-    const merged = pages
-      .flatMap((p) => p.payouts)
-      .sort((a, b) => comparePayouts(a, b) || (a.provider < b.provider ? -1 : a.provider > b.provider ? 1 : 0))
+    // The same (created_at, provider, id) order the cursor filter above assumes; any other order skips or repeats.
+    const merged = pages.flatMap((p) => p.payouts).sort(compareMergedPayouts)
     const page = merged.slice(0, limit)
     const more = merged.length > limit || pages.some((p) => p.hasMore)
     const last = page[page.length - 1]
