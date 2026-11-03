@@ -100,6 +100,27 @@ export class OrdersService {
     return order ?? null
   }
 
+  /**
+   * Just id, number and payment reference of the orders named by id or by `provider`'s payment
+   * reference — what a payout line needs — in a bounded number of queries (one per 80 keys of each
+   * kind). Missing orders are simply absent; a database error is thrown, never swallowed.
+   */
+  async paymentLinks(provider: string, ids: string[], references: string[]): Promise<{ id: string; number: string; reference: string | null }[]> {
+    type Row = { id: string; number: number; payment_reference: string | null }
+    const out = new Map<string, { id: string; number: string; reference: string | null }>()
+    const add = (rows: Row[]) => {
+      for (const r of rows) out.set(r.id, { id: r.id, number: String(r.number), reference: r.payment_reference })
+    }
+    for (const part of chunk([...new Set(ids)])) {
+      add((await this.ctx.db.prepare(`SELECT id, number, payment_reference FROM orders WHERE id IN (${placeholders(part.length)})`).bind(...part).all<Row>()).results)
+    }
+    for (const part of chunk([...new Set(references)])) {
+      const sql = `SELECT id, number, payment_reference FROM orders WHERE payment_provider = ? AND payment_reference IN (${placeholders(part.length)})`
+      add((await this.ctx.db.prepare(sql).bind(provider, ...part).all<Row>()).results)
+    }
+    return [...out.values()]
+  }
+
   /** Newest first, for the owner's order list. Unpaid processor checkouts are left out unless asked for. */
   async recent(opts: { limit?: number; includeUnpaid?: boolean } = {}): Promise<Order[]> {
     const limit = Math.min(Math.max(opts.limit ?? 100, 1), 500)

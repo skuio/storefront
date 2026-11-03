@@ -1,10 +1,14 @@
-import type { PaymentAdapter } from '../payments'
+import { isAfter, isoSeconds, isWithin, ProcessorPermissionError, type PaymentAdapter, type PaymentPayouts, type Payout, type PayoutLine, type PayoutPosition } from '../payments'
 import type { Connection, Store } from '../store'
 import type { Order } from '../types'
 import { API_KEY_PREFIX, type ConnectScope } from '../store/connections'
 import { secretsEqual } from '../store/crypto'
+import { decodeKeysetCursor, encodeKeysetCursor } from '../store/cursor'
 import { StoreError } from '../store/errors'
-import { serializeCategory, serializeFulfillment, serializeOrder, serializeProduct, serializeQuote, type ImageUrlResolver, type SerializeProductOptions } from './serialize'
+import {
+  serializeCategory, serializeFulfillment, serializeOrder, serializePayout, serializePayoutLine, serializeProduct, serializeQuote,
+  type ImageUrlResolver, type SerializeProductOptions,
+} from './serialize'
 import {
   validateCategories, validateFulfillment, validateInventory, validateListQuery, validateOrderPatch, validateProducts, validateQuotePatch, ValidationError,
 } from './validate'
@@ -93,6 +97,9 @@ export async function handleStoreApi(request: Request, options: StoreApiOptions)
   } catch (e) {
     if (e instanceof ValidationError) return error(422, 'validation_failed', e.message, e.details)
     if (e instanceof StoreError) return error(e.status, e.code, e.message, e.details)
+    if (e instanceof ProcessorPermissionError) {
+      return error(424, 'processor_permission_missing', e.message, { provider: e.provider, permission: e.permission })
+    }
     console.error('store api: unhandled error', e)
     return error(500, 'internal_error', 'The store could not complete the request')
   }
@@ -156,6 +163,8 @@ function scopeFor(path: string): ConnectScope | null {
   if (first === 'inventory') return 'inventory'
   if (first === 'products' || first === 'categories') return 'catalog'
   if (first === 'quotes') return 'quotes'
+  // Payouts itemise the money behind orders (fees, refunds, disputes): readable with the orders scope.
+  if (first === 'payouts') return 'orders'
   return null // /health, /connect
 }
 
@@ -243,6 +252,8 @@ async function route(
     }
   }
 
+  if (segments[0] === 'payouts' && method === 'GET') return payoutsRoute(segments, url, store, payments)
+
   if (path === '/inventory' && method === 'PUT') {
     const items = validateInventory(await readJson(request))
     return json({ data: await store.inventory.set(items) })
@@ -311,9 +322,174 @@ async function fillSettlement(store: Store, order: Order, payments: StoreApiOpti
   }
 }
 
+/** When `created_since` is omitted, payouts from the last 90 days. */
+const DEFAULT_PAYOUT_LOOKBACK_MS = 90 * 86_400_000
+
+function payoutAdapters(payments: StoreApiOptions['payments']): { id: string; payouts: PaymentPayouts }[] {
+  if (!payments) return []
+  const adapters = typeof payments === 'function' ? payments() : payments
+  const seen = new Set<string>()
+  const out: { id: string; payouts: PaymentPayouts }[] = []
+  for (const a of adapters) {
+    if (!a.payouts || seen.has(a.id)) continue
+    seen.add(a.id)
+    out.push({ id: a.id, payouts: a.payouts })
+  }
+  return out.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+}
+
+/** `(created_at, provider, id)` ascending: the merged list's order and its cursor's. */
+function compareMergedPayouts(a: Payout, b: Payout): number {
+  if (a.createdAt !== b.createdAt) return a.createdAt < b.createdAt ? -1 : 1
+  if (a.provider !== b.provider) return a.provider < b.provider ? -1 : 1
+  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0
+}
+
+function limitParam(url: URL, fallback: number, max: number): number {
+  const raw = url.searchParams.get('limit')
+  if (!raw) return fallback
+  const limit = Number(raw)
+  if (!Number.isInteger(limit) || limit < 1 || limit > max) throw new ValidationError('Invalid query', { limit: `must be an integer from 1 to ${max}` })
+  return limit
+}
+
+/**
+ * Every payout-capable provider's account, for `accounts` on the list: a provider that cannot name
+ * its account cheaply (no method, null, or an error) is left out rather than failing the list.
+ */
+async function payoutAccounts(adapters: { id: string; payouts: PaymentPayouts }[]): Promise<{ provider: string; account_id: string }[]> {
+  const found = await Promise.all(
+    adapters.map(async (a) => {
+      try {
+        const id = a.payouts.account ? await a.payouts.account() : null
+        return id ? [{ provider: a.id, account_id: id }] : []
+      } catch {
+        return []
+      }
+    })
+  )
+  return found.flat()
+}
+
+/**
+ * `GET /payouts`, `/payouts/{provider}/{id}`, `/payouts/{provider}/{id}/lines`. The list merges every
+ * payout-capable adapter (or the one `provider` names), ascending by `(created_at, provider, id)`;
+ * its cursor is that position.
+ */
+async function payoutsRoute(segments: string[], url: URL, store: Store, payments: StoreApiOptions['payments']): Promise<Response> {
+  const adapters = payoutAdapters(payments)
+  const providers = adapters.map((a) => a.id)
+  const adapterFor = (provider: string) => {
+    const found = adapters.find((a) => a.id === provider)
+    if (!found) throw new StoreError('not_found', `No payout-capable payment provider "${provider}" on this store`, { provider: providers.length ? `must be one of ${providers.join(', ')}` : 'this store has none' })
+    return found
+  }
+
+  if (segments.length === 1) {
+    const provider = url.searchParams.get('provider')
+    const since = url.searchParams.get('created_since')
+    if (since && Number.isNaN(Date.parse(since))) throw new ValidationError('Invalid query', { created_since: 'must be an ISO-8601 timestamp' })
+    const requestedSince = since ? new Date(since).toISOString().replace(/\.\d{3}Z$/, 'Z') : new Date(Date.now() - DEFAULT_PAYOUT_LOOKBACK_MS).toISOString().replace(/\.\d{3}Z$/, 'Z')
+    const limit = limitParam(url, 50, 100)
+    const cursorRaw = url.searchParams.get('cursor')
+    let cursor: { createdAt: string; provider: string; id: string; until: string; since: string; asOf: number } | null = null
+    if (cursorRaw) {
+      const parts = decodeKeysetCursor(cursorRaw, 6)
+      const asOf = parts?.[5]
+      if (!parts || !parts.slice(0, 5).every((p) => typeof p === 'string') || !parts[4] || typeof asOf !== 'number' || !Number.isFinite(asOf)) {
+        throw new ValidationError('Invalid query', { cursor: 'was not issued by this store' })
+      }
+      cursor = { createdAt: parts[0] as string, provider: parts[1] as string, id: parts[2] as string, until: parts[3] as string, since: parts[4] as string, asOf }
+    }
+    const chosen = provider ? [adapterFor(provider)] : adapters
+    // Both bounds are fixed by the first page and carried in the cursor, so later pages never
+    // recompute them from the clock. The lower one is created_since (or 90 days before the first page).
+    // The upper one, for a merged list only: now minus the largest reporting lag among the merged
+    // processors (Stripe has none; a custom adapter may declare one), so a processor that reports late never has
+    // a payout appear behind a cursor another processor already moved past. A single-provider list
+    // keeps the adapter's own horizon ('' in the cursor).
+    // The run's clock, also fixed by the first page: every page reads each processor as of it (minus its
+    // lag), so a payout made after the first page waits for the next run instead of landing behind the cursor.
+    const asOf = cursor ? cursor.asOf : Date.now()
+    const lag = Math.max(0, ...chosen.map((a) => a.payouts.reportingLagMs ?? 0))
+    const until = cursor ? cursor.until : provider ? '' : isoSeconds(new Date(asOf - lag))
+    const createdSince = cursor ? cursor.since : requestedSince
+
+    const pages = await Promise.all(
+      chosen.map(async (a) => {
+        // Keyset on (created_at, provider, id), mapped onto each adapter's (created_at, id).
+        let after: PayoutPosition | null = null
+        if (cursor) {
+          if (a.id === cursor.provider) after = { createdAt: cursor.createdAt, id: cursor.id }
+          else if (a.id > cursor.provider) after = { createdAt: cursor.createdAt, id: '' }
+          else after = { createdAt: cursor.createdAt, id: '\uffff' }
+        }
+        const page = await a.payouts.list({
+          createdSince, after, limit, until: until || null, asOf,
+        })
+        return { ...page, payouts: page.payouts.filter((p) => isAfter(p, after) && isWithin(p, until)) }
+      })
+    )
+    // The same (created_at, provider, id) order the cursor filter above assumes; any other order skips or repeats.
+    const merged = pages.flatMap((p) => p.payouts).sort(compareMergedPayouts)
+    const page = merged.slice(0, limit)
+    const more = merged.length > limit || pages.some((p) => p.hasMore)
+    const last = page[page.length - 1]
+    // After the pages: an adapter may have learned its account id while listing.
+    const accounts = await payoutAccounts(adapters)
+    return json({
+      data: page.map(serializePayout),
+      next_cursor: more && last ? encodeKeysetCursor([last.createdAt, last.provider, last.id, until, createdSince, asOf]) : null,
+      providers,
+      accounts,
+    })
+  }
+
+  const provider = decodeURIComponent(segments[1] ?? '')
+  const id = decodeURIComponent(segments[2] ?? '')
+  if (provider && id && segments.length === 3) {
+    const payout = await adapterFor(provider).payouts.get(id)
+    if (!payout) throw new StoreError('not_found', `Payout ${id} not found`)
+    return json({ data: serializePayout(payout) })
+  }
+  if (provider && id && segments.length === 4 && segments[3] === 'lines') {
+    const adapter = adapterFor(provider)
+    const page = await adapter.payouts.lines(id, { cursor: url.searchParams.get('cursor'), limit: limitParam(url, 100, 100) })
+    const lines = await withOrders(store, provider, page.lines)
+    return json({ data: lines.map(serializePayoutLine), next_cursor: page.nextCursor })
+  }
+  return error(404, 'not_found', `No such endpoint: GET /${segments.join('/')}`)
+}
+
+/**
+ * Fill a line's order from the store's own records when the processor did not carry it (a Stripe
+ * refund whose charge was not expanded) or carried only the id. One bulk read of just
+ * id, number and payment reference for the whole page; a database failure fails the request (a 200
+ * with order links silently missing would post an unlinked refund), a missing order stays null.
+ */
+async function withOrders(store: Store, provider: string, lines: PayoutLine[]): Promise<PayoutLine[]> {
+  const pending = lines.filter((l) => !(l.orderId && l.orderNumber))
+  const ids = pending.flatMap((l) => (l.orderId ? [l.orderId] : []))
+  const references = pending.flatMap((l) => (!l.orderId && l.paymentReference ? [l.paymentReference] : []))
+  if (!ids.length && !references.length) return lines
+  const found = await store.orders.paymentLinks(provider, ids, references)
+  const byId = new Map(found.map((o) => [o.id, o]))
+  const byReference = new Map(found.flatMap((o) => (o.reference ? [[o.reference, o] as const] : [])))
+  return lines.map((line) => {
+    if (line.orderId && line.orderNumber) return line
+    const order = line.orderId ? byId.get(line.orderId) : line.paymentReference ? byReference.get(line.paymentReference) : undefined
+    if (!order) return line
+    return { ...line, orderId: order.id, orderNumber: line.orderNumber ?? order.number }
+  })
+}
+
+export type { Payout, PayoutLine }
+
 export {
   serializeOrder, serializeFulfillment, serializeProduct, serializeCategory, serializeQuote, absoluteImageUrl,
   type ImageUrlResolver, type SerializeProductOptions,
+  serializePayout, serializePayoutLine,
   type ApiOrder, type ApiOrderPayment, type ApiFulfillment, type ApiProduct, type ApiCategory, type ApiQuote,
+  type ApiPayout, type ApiPayoutLine,
 } from './serialize'
 export { ValidationError } from './validate'

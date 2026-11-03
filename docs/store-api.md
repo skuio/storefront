@@ -29,6 +29,9 @@ is the first consumer; anything that can speak this contract can run the store.
 | GET | `/quotes` | Quote requests and offers changed since a watermark, oldest first, keyset-paged. |
 | GET | `/quotes/{id}` | One quote with its lines. |
 | PATCH | `/quotes/{id}` | Price it (`offer`), stamp `external_reference`, or withdraw it. |
+| GET | `/payouts` | Stripe payouts (PayPal is booked per order), oldest first, keyset-paged. |
+| GET | `/payouts/{provider}/{id}` | One payout, with its line count. |
+| GET | `/payouts/{provider}/{id}/lines` | What the payout is made of: charges, refunds, disputes, fees, … |
 
 ## Connecting from SKU.io
 
@@ -336,8 +339,148 @@ nodes. A slug is only suffixed (`<slug>-<id>`) when it is owned by a category un
 *different* parent, or when the batch itself claims the same slug twice. Products are always
 keyed by SKU and are unaffected by category re-keying. A second identical push changes nothing.
 
+## Payouts
+
+A payout is money a processor sent to (or pulled from) the merchant's bank. The store reads its
+processor with the key it already holds and itemises each payout, so an operations system can post
+one accounting document per payout and match the bank deposit to the cent, without ever holding
+processor credentials. Read with the `orders` scope (or the `STORE_API_KEY` secret). **Stripe is the
+only built-in payout provider**; `paypal`, `manual`, `bitcoin` and `btcpay` have none.
+
+**PayPal is not a payout provider.** The PayPal balance is the merchant's own account, not money in
+transit to a bank: each PayPal order lands in it as its own deposit. So there is nothing to group
+into payouts — each order's money and PayPal's fee are reported on the order itself
+(`payment.amount_received`, `fee`, `net`; see [What the processor captured and
+kept](#what-the-processor-captured-and-kept)), and the operations system books them per order. Moving
+money from PayPal to the bank is a transfer between two of the merchant's accounts, booked there.
+
+| Method | Path | Returns |
+|---|---|---|
+| GET | `/payouts?provider=stripe&created_since=2026-10-01T00:00:00Z&cursor=…&limit=50` | `{ "data": [Payout…], "next_cursor": "…"\|null, "providers": ["stripe"], "accounts": [{ "provider": "stripe", "account_id": "acct_…" }] }` |
+| GET | `/payouts/{provider}/{id}` | `{ "data": Payout }` |
+| GET | `/payouts/{provider}/{id}/lines?cursor=…&limit=100` | `{ "data": [PayoutLine…], "next_cursor": "…"\|null }` |
+
+**List.** Ordered by `created_at, provider, id` ascending. `provider` is optional: without it the
+list merges every payout-capable processor on the store (`providers` names them; empty when there
+are none) — with the built-in adapters that is Stripe alone; a store that adds its own payout-capable
+adapter is merged with it. `created_since` is inclusive and defaults to 90 days ago. `limit` is 1–100
+(default 50). An unknown provider, or one without payouts (`paypal` included), is `404 not_found`.
+
+The cursor is opaque: echo it back. It freezes three things from the first page, so later pages
+never recompute them from the clock: the lower bound (`created_since`, or 90 days before the first
+page); **the run's clock**, so every page reads the processor as of the same moment and a payout
+created after the first page waits for the next run instead of landing behind the cursor; and, for a
+merged list, one upper cutoff — now minus the largest reporting lag among the merged processors
+(Stripe has none; a custom adapter may declare `reportingLagMs`) — so a processor that reports late
+can never have a payout appear behind a cursor another processor already moved past. Because a
+merged list fails as a whole when one processor refuses, a consumer that records per-processor sync
+errors should page each provider separately (`?provider=stripe`).
+
+**`accounts`** names the processor account of every payout-capable provider on the store (not only
+the one `provider` asks for): `[{ "provider": "stripe", "account_id": "acct_1ExAmPlE00000000" }]`,
+ordered by provider. It is the same id the payouts carry in `account_id`, read once and cached, so a
+consumer can notice the store switched processor accounts even when no new payout has arrived. A
+provider whose account cannot be read (a Stripe restricted key without account read) is left out,
+never an error.
+
+**Payout:**
+```json
+{ "id": "po_1ExAmPlE0000000000Payout", "provider": "stripe", "account_id": "acct_1ExAmPlE00000000",
+  "status": "paid", "amount": { "amount": 49688, "currency": "usd" },
+  "arrival_date": "2026-11-03", "created_at": "2026-11-03T00:08:09Z",
+  "method": "standard", "destination_label": "Bank ••6789", "line_count": 2 }
+```
+
+| Field | Meaning |
+|---|---|
+| `account_id` | The processor account that paid out: Stripe `acct_…`. Two stores on one Stripe account report the same id. |
+| `status` | `pending \| in_transit \| paid \| failed \| canceled`. Only `paid` payouts are final; `failed` and `canceled` never settle anything (Stripe puts their transactions in a later payout). |
+| `amount` | What reached the bank, integer minor units, **negative for a debit** (Stripe pulling money to cover a negative balance). |
+| `arrival_date` | `YYYY-MM-DD` the bank receives it. |
+| `created_at` | ISO 8601 UTC, second precision. |
+| `method` | Stripe `standard` / `instant`. |
+| `destination_label` | e.g. `Bank ••6789` when the key may read the bank account; else `null`. |
+| `line_count` | How many lines `/lines` returns. **`null` in the list** (counting a Stripe payout costs extra calls). `GET /payouts/{provider}/{id}` fills it, except for a Stripe payout of more than 1,000 lines (counting it would take more than ten Stripe calls), where it is `null`. **Page `/lines` to exhaustion rather than trusting `line_count`** (SKU.io does). |
+
+**PayoutLine:**
+```json
+{ "id": "txn_1ExAmPlE000000000Charge1", "type": "charge", "category": "charge",
+  "source_id": "ch_1ExAmPlE00000000000Charge1", "order_id": "ord_example0000000000001", "order_number": "15000",
+  "payment_reference": "pi_…",
+  "gross": { "amount": 17078, "currency": "usd" }, "fee": { "amount": 525, "currency": "usd" },
+  "net": { "amount": 16553, "currency": "usd" },
+  "fee_details": [{ "type": "stripe_fee", "amount": 525, "description": "Stripe processing fees" }],
+  "created_at": "2026-10-27T12:53:15Z", "available_on": "2026-11-03", "description": "Example Store order EX15000" }
+```
+
+| Field | Meaning |
+|---|---|
+| `id` | Stripe balance transaction `txn_…`. |
+| `type` | Stripe's balance transaction `type`. |
+| `category` | Normalised, table below. |
+| `source_id` | The object behind it (`ch_…`, `py_…`, `re_…`, `du_…`, or `null` for a billing fee). For a charge it equals the order's `payment.transaction_id`. |
+| `order_id`, `order_number` | The store order, from the charge's `metadata.order_id` / `order_number` (a refund or dispute reads the charge it is for). When only one of the two is known, the store fills the other from its own orders. `null` for lines no order owns (fees, test charges). `order_number` has no prefix (`"15000"`). |
+| `payment_reference` | The order's `payment.reference` when known: the PaymentIntent `pi_…`. |
+| `gross`, `fee`, `net` | Integer minor units **in the payout currency** (Stripe has already converted a charge taken in another currency). Always `gross − fee = net`. |
+| `fee_details` | Stripe's breakdown (`stripe_fee`, `tax`, `application_fee`, …); `amount` is integer minor units in the payout currency. |
+| `available_on` | `YYYY-MM-DD` the funds became available. |
+
+**Sign conventions.** The signs are Stripe's balance: money in is positive, money out negative, and
+`fee` is what Stripe kept (negative when it gave a fee back). So a refund is `gross −3000, fee 0,
+net −3000`; a lost dispute `gross −5000, fee 1500, net −6500`; its reversal when won `gross 5000,
+fee −1500, net 6500`; a standalone billing fee `gross −200, fee 0, net −200`. **The `net` of a
+payout's lines sums to its `amount`** (Stripe's own `payout` row is left out of the lines; the kit's
+tests assert this on a real payout).
+
+| Stripe `reporting_category` (else `type`) | `category` |
+|---|---|
+| `charge`, `payment`, `charge_failure` | `charge` |
+| `refund`, `payment_refund`, `refund_failure`, `payment_failure_refund` | `refund` |
+| `dispute` | `dispute` |
+| `dispute_reversal` | `dispute_reversal` |
+| `fee`, `stripe_fee`, `tax`, `network_cost` | `fee` |
+| `risk_reserved_funds`, `risk_reserve_released`, `reserve_transaction`, `reserved_funds` | `reserve` |
+| `adjustment`, `other_adjustment` | `adjustment` |
+| `transfer`, `transfer_reversal`, `topup`, `topup_reversal` | `transfer` |
+| anything else | `other` |
+
+**Stripe.** A payout is a Stripe payout; its lines are `balance_transactions?payout=` (Stripe only
+itemises automatic payouts: a payout sent by hand from the Dashboard has `line_count: 0` and no
+lines). The list walks Stripe newest-first back to `created_since` and serves the result oldest
+first; a range with more than 2,000 payouts is refused with 422 (use a later `created_since`).
+
+**A paged list reflects live statuses.** The cursor fixes which payouts a run reads, not a snapshot
+of them: Stripe can move a payout from `in_transit` to `paid` (or `failed`) between two pages, or
+between the list and a later read. Re-read each payout by id (`GET /payouts/{provider}/{id}`, then
+its `/lines`) before relying on it — SKU.io does — and post only what that read says is `paid`.
+
+### Processor permissions
+
+When Stripe refuses the store's key (HTTP 401/403), the Store API answers **424**:
+```json
+{ "error": { "code": "processor_permission_missing",
+  "message": "Stripe refused the store's key: …. Grant \"Balance: Read\" on the restricted key.",
+  "details": { "provider": "stripe", "permission": "Balance: Read" } } }
+```
+`details.permission` is one of:
+
+| Provider | `permission` | How the merchant grants it |
+|---|---|---|
+| `stripe` | `Payouts: Read` | Stripe Dashboard → Developers → API keys → the store's restricted key → ⋯ → Edit → **Payouts: Read** → Update key. (A standard secret key already has it.) |
+| `stripe` | `Balance: Read` | Same screen → **Balance: Read** (needed for the lines). |
+| `stripe` | `Balance transaction sources: Read` | Same screen → **Balance transaction sources: Read** (the lines read the charge, refund or dispute behind each row; Stripe names it `rak_balance_transaction_source_read` in the error). |
+| `stripe` | `Account: Read` | Rare: a restricted key that cannot read its own account (`GET /v1/account`); same screen → give the key read access to the account. |
+
+Nothing is written on a 424, and a consumer should keep what it already has for that provider.
+Stripe lines cost one Stripe request per page: each row's source, and a refund's or dispute's
+charge, come expanded in that request. Expanding the charge needs **Charges: Read**; a key without
+it gets the lines anyway (one retry without the charge), and a refund or dispute whose charge is
+not on the same page comes back with `order_id: null` instead of failing.
+
 ## Errors
 
 `401 unauthorized` (missing/wrong key) · `404 not_found` · `422 validation_failed` (with
 `details` per field) · `409 conflict` (e.g. cancelling a fulfilled order) · `400 invalid_grant` (code
-exchange) · `429 rate_limited` (repeated sign-in or exchange failures from one address).
+exchange) · `429 rate_limited` (repeated sign-in or exchange failures from one address) ·
+`424 processor_permission_missing` (payouts: the processor refused the store's key; `details`
+names the provider and permission).
