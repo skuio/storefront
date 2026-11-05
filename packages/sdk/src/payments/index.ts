@@ -132,6 +132,11 @@ export interface PayoutLine {
   orderNumber: string | null
   /** The store's `payment.reference` of that order (`pi_…`), when known. */
   paymentReference: string | null
+  /**
+   * The payment method the money was paid with (a refund or dispute: the payment it is for), when the
+   * processor says. Optional so an adapter written before it still type-checks; absent reads as null.
+   */
+  paymentMethod?: PayoutLineMethod | null
   gross: Money
   fee: Money
   net: Money
@@ -140,6 +145,12 @@ export interface PayoutLine {
   /** `YYYY-MM-DD` the funds became available (Stripe); null when the processor has no such date. */
   availableOn: string | null
   description: string | null
+}
+
+/** A payout line's payment method: the processor's own `type` (Stripe `affirm`, `card`, …) and a label for people. */
+export interface PayoutLineMethod {
+  type: string
+  label: string
 }
 
 export interface PayoutFeeDetail {

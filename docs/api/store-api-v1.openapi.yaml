@@ -636,6 +636,13 @@ components:
         order_id: { type: [string, 'null'] }
         order_number: { type: [string, 'null'], description: 'Without the store''s number prefix' }
         payment_reference: { type: [string, 'null'], description: "The order's payment.reference (pi_…)" }
+        payment_method:
+          type: [object, 'null']
+          description: 'The method the money was paid with (a refund or dispute: the payment it is for). Null when the processor does not say, or from a store older than 0.11.0 (field absent there).'
+          properties:
+            type: { type: string, description: 'Stripe payment method type: card, affirm, klarna, afterpay_clearpay, cashapp, link, us_bank_account, …' }
+            label: { type: string, examples: ['Affirm', 'Card', 'Cash App Pay'] }
+          required: [type, label]
         gross: { $ref: '#/components/schemas/Money' }
         fee: { $ref: '#/components/schemas/Money', description: 'What the processor kept; negative when it gave a fee back' }
         net: { $ref: '#/components/schemas/Money', description: 'gross - fee' }

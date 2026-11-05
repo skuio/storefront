@@ -6,7 +6,7 @@ import { invalid, notFound } from '../store/errors'
 import {
   comparePayouts, isAfter, isoSeconds, isWithin, PaymentWebhookError, ProcessorPermissionError,
   type PaymentAdapter, type PaymentContext, type PaymentEvent, type PaymentPayouts, type PaymentStart, type Payout,
-  type PayoutLine, type PayoutLineCategory,
+  type PayoutLine, type PayoutLineCategory, type PayoutLineMethod,
 } from './index'
 
 export interface StripePaymentOptions {
@@ -337,6 +337,12 @@ export function stripePayouts(stripe: Stripe): PaymentPayouts {
     return typeof charge === 'object' ? charge : onPage.get(charge) ?? null
   }
 
+  /** The method the charge was paid with (for a refund or dispute, the charge it is for); null when unknown. */
+  function methodOf(charge: Stripe.Charge | null): PayoutLineMethod | null {
+    const type = usedMethodType(charge)
+    return type ? { type, label: stripeMethodLabel(type) } : null
+  }
+
   function toLine(bt: Stripe.BalanceTransaction, onPage: Map<string, Stripe.Charge>): PayoutLine {
     const currency = bt.currency.toLowerCase()
     const charge = chargeFor(bt.source, onPage)
@@ -350,6 +356,7 @@ export function stripePayouts(stripe: Stripe): PaymentPayouts {
       orderId: charge?.metadata?.order_id || null,
       orderNumber: charge?.metadata?.order_number || null,
       paymentReference: typeof intent === 'string' ? intent : intent?.id ?? null,
+      paymentMethod: methodOf(charge),
       gross: { amount: bt.amount, currency },
       fee: { amount: bt.fee, currency },
       net: { amount: bt.net, currency },
@@ -456,7 +463,8 @@ async function withSettlement(stripe: Stripe, events: PaymentEvent[]): Promise<P
       if (event.type !== 'paid' || !event.reference?.startsWith('pi_')) return event
       try {
         const pi = await stripe.paymentIntents.retrieve(event.reference, { expand: [...SETTLEMENT_EXPAND] })
-        return { ...event, ...settlementFields(pi) }
+        const used = usedMethodLabel(pi)
+        return { ...event, ...settlementFields(pi), ...(used ? { methodLabel: used } : {}) }
       } catch (e) {
         console.error('stripe: could not read the settlement for', event.reference, e instanceof Error ? e.message : String(e))
         return event
@@ -736,7 +744,7 @@ function paidEvent(session: Stripe.Checkout.Session): PaymentEvent {
     orderId,
     provider: PROVIDER,
     reference,
-    methodLabel: labelFor(session.payment_method_types?.[0]),
+    methodLabel: allowedMethodLabel(session.payment_method_types),
     paidAt: new Date().toISOString(),
     ...(typeof session.amount_total === 'number' ? { amount: { amount: session.amount_total, currency } } : {}),
     adjustments: {
@@ -757,25 +765,67 @@ function paidFromIntent(pi: Stripe.PaymentIntent): PaymentEvent {
     orderId,
     provider: PROVIDER,
     reference: pi.id,
-    methodLabel: labelFor(pi.payment_method_types?.[0]),
+    methodLabel: usedMethodLabel(pi) ?? allowedMethodLabel(pi.payment_method_types),
     paidAt: new Date().toISOString(),
     amount: { amount: received, currency },
     adjustments: { total: { amount: received, currency } },
   }
 }
 
-function labelFor(type: string | undefined): string {
-  switch (type) {
-    case undefined:
-    case 'card':
-      return 'Card'
-    case 'link':
-      return 'Link'
-    case 'us_bank_account':
-      return 'Bank account'
-    default:
-      return type.replace(/_/g, ' ').replace(/^\w/, (c) => c.toUpperCase())
-  }
+/** Stripe payment method `type` → what a buyer or a bookkeeper calls it. */
+const METHOD_LABELS: Record<string, string> = {
+  card: 'Card',
+  card_present: 'Card',
+  link: 'Link',
+  affirm: 'Affirm',
+  klarna: 'Klarna',
+  afterpay_clearpay: 'Afterpay / Clearpay',
+  zip: 'Zip',
+  cashapp: 'Cash App Pay',
+  amazon_pay: 'Amazon Pay',
+  paypal: 'PayPal',
+  revolut_pay: 'Revolut Pay',
+  us_bank_account: 'ACH bank debit',
+  acss_debit: 'Canadian pre-authorized debit',
+  sepa_debit: 'SEPA Direct Debit',
+  bacs_debit: 'Bacs Direct Debit',
+  au_becs_debit: 'BECS Direct Debit',
+  ideal: 'iDEAL',
+  bancontact: 'Bancontact',
+  eps: 'EPS',
+  giropay: 'giropay',
+  p24: 'Przelewy24',
+  sofort: 'Sofort',
+  alipay: 'Alipay',
+  wechat_pay: 'WeChat Pay',
+  customer_balance: 'Bank transfer',
+}
+
+/** A label for a Stripe payment method `type`; an unlisted type reads as itself ("Mobilepay"). Exported for tests. */
+export function stripeMethodLabel(type: string): string {
+  return METHOD_LABELS[type] ?? type.replace(/_/g, ' ').replace(/^\w/, (c) => c.toUpperCase())
+}
+
+/** The payment method type the buyer actually paid with: the charge's `payment_method_details.type`. */
+function usedMethodType(charge: Stripe.Charge | null | undefined): string | null {
+  return charge?.payment_method_details?.type || null
+}
+
+/** The label of the method used for a PaymentIntent whose `latest_charge` is expanded; null when it is not. */
+function usedMethodLabel(pi: Stripe.PaymentIntent): string | null {
+  const charge = typeof pi.latest_charge === 'object' ? pi.latest_charge : null
+  const type = usedMethodType(charge)
+  return type ? stripeMethodLabel(type) : null
+}
+
+/**
+ * The label when only the allowed methods are known. `payment_method_types` lists what the buyer
+ * MAY pay with, not what they did: only a single allowed method says which one was used. Otherwise
+ * null, and the label comes from the charge (`withSettlement`).
+ */
+function allowedMethodLabel(types: string[] | null | undefined): string | null {
+  if (!types?.length) return 'Card'
+  return types.length === 1 ? stripeMethodLabel(types[0]!) : null
 }
 
 /** Map a Stripe event to store events. Exported for tests. */

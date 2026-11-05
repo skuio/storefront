@@ -479,6 +479,47 @@ describe('processor fees (payment settlement)', () => {
     expect(again!.payment.feeReportedAt).toBe(filled!.payment.feeReportedAt)
   })
 
+  it('stripe: the method label is the method the buyer used (the charge), not the first one Checkout allowed', async () => {
+    const { store, order, ctx } = await discountedOrder()
+    const charge = (type: string | null) => ({ id: 'py_1', amount_captured: 98910, balance_transaction: null, ...(type ? { payment_method_details: { type } } : {}) })
+    let used: string | null = 'affirm'
+    let fail = false
+    const retrieve = vi.fn(async () => {
+      if (fail) throw new Error('rate limited')
+      return expanded({ metadata: { order_id: order.id }, payment_method_types: ['card', 'link', 'affirm', 'klarna'], latest_charge: charge(used) })
+    })
+    const session = (types: string[]) => ({ id: 'cs_1', client_reference_id: order.id, payment_status: 'paid', currency: 'usd', amount_total: 98910, payment_intent: 'pi_1', payment_method_types: types, total_details: {} })
+    let types = ['card', 'link', 'affirm', 'klarna']
+    const stripe = {
+      paymentIntents: { retrieve },
+      webhooks: { constructEventAsync: vi.fn(async () => ({ type: 'checkout.session.completed', data: { object: session(types) } })) },
+    } as unknown as Stripe
+    const adapter = stripePayments({ stripe, webhookSecret: 'whsec' })
+    const req = () => new Request('https://store.test/api/payments/webhook', { method: 'POST', headers: { 'stripe-signature': 's' }, body: '{}' })
+
+    expect(await adapter.handleWebhook(req(), ctx)).toMatchObject([{ type: 'paid', methodLabel: 'Affirm' }])
+    used = 'klarna'
+    expect(await adapter.handleWebhook(req(), ctx)).toMatchObject([{ methodLabel: 'Klarna' }])
+    used = 'cashapp'
+    expect(await adapter.handleWebhook(req(), ctx)).toMatchObject([{ methodLabel: 'Cash App Pay' }])
+    used = 'us_bank_account'
+    expect(await adapter.handleWebhook(req(), ctx)).toMatchObject([{ methodLabel: 'ACH bank debit' }])
+    // A charge without details falls back: several allowed methods say nothing about the one used.
+    used = null
+    expect(await adapter.handleWebhook(req(), ctx)).toMatchObject([{ methodLabel: null }])
+    // Stripe unreachable: the payment still goes through; one allowed method is the one used.
+    fail = true
+    expect(await adapter.handleWebhook(req(), ctx)).toMatchObject([{ type: 'paid', methodLabel: null }])
+    types = ['card']
+    expect(await adapter.handleWebhook(req(), ctx)).toMatchObject([{ type: 'paid', methodLabel: 'Card' }])
+
+    // Express: the intent read back with its charge names the wallet's method.
+    const pi = { ...expanded({ metadata: { order_id: order.id, checkout: 'express' }, payment_method_types: ['card', 'link'], latest_charge: charge('link') }) }
+    expect(eventsFromStripe({ type: 'payment_intent.succeeded', data: { object: pi } } as unknown as Stripe.Event)).toMatchObject([{ type: 'paid', methodLabel: 'Link' }])
+    const [paid] = await applyPaymentEvents(store, [{ type: 'paid', orderId: order.id, provider: 'stripe', reference: 'pi_1', methodLabel: 'Affirm' }])
+    expect(paid!.payment.methodLabel).toBe('Affirm')
+  })
+
   it('stripe: the return page records the fee, and settlement() reads it later for the Store API', async () => {
     const { store, order, ctx } = await discountedOrder()
     let bt: unknown = null
