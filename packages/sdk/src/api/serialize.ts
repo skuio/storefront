@@ -349,6 +349,8 @@ export interface ApiPayoutLine {
   order_id: string | null
   order_number: string | null
   payment_reference: string | null
+  /** The method the money was paid with, e.g. `{ "type": "affirm", "label": "Affirm" }`; null when unknown. */
+  payment_method: { type: string; label: string } | null
   gross: ApiMoney
   fee: ApiMoney
   net: ApiMoney
@@ -382,6 +384,7 @@ export function serializePayoutLine(l: PayoutLine): ApiPayoutLine {
     order_id: l.orderId,
     order_number: l.orderNumber,
     payment_reference: l.paymentReference,
+    payment_method: l.paymentMethod ? { type: l.paymentMethod.type, label: l.paymentMethod.label } : null,
     gross: l.gross,
     fee: l.fee,
     net: l.net,

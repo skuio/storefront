@@ -155,6 +155,12 @@ a paid order is never lost — so a consumer that mirrors `cancelled` must accep
 `paid`. `payment.provider` is set as soon as the adapter starts (`stripe`, `manual`), before
 `payment.status` becomes `paid`.
 
+`payment.method_label` names the method the buyer actually paid with — `Card`, `Link`, `Affirm`,
+`Klarna`, `Afterpay / Clearpay`, `Cash App Pay`, `ACH bank debit`, … — read from the Stripe charge's
+`payment_method_details`, or `null` when the processor did not say. (Before 0.11.0 a Stripe order
+named the first method Checkout *allowed*, so most read `Card` whatever was used; those labels are not
+rewritten.)
+
 ### What the processor captured and kept
 
 `payment` carries what the processor actually took, so an operations system never has to call
@@ -406,7 +412,7 @@ never an error.
 ```json
 { "id": "txn_1ExAmPlE000000000Charge1", "type": "charge", "category": "charge",
   "source_id": "ch_1ExAmPlE00000000000Charge1", "order_id": "ord_example0000000000001", "order_number": "15000",
-  "payment_reference": "pi_…",
+  "payment_reference": "pi_…", "payment_method": { "type": "card", "label": "Card" },
   "gross": { "amount": 17078, "currency": "usd" }, "fee": { "amount": 525, "currency": "usd" },
   "net": { "amount": 16553, "currency": "usd" },
   "fee_details": [{ "type": "stripe_fee", "amount": 525, "description": "Stripe processing fees" }],
@@ -421,9 +427,15 @@ never an error.
 | `source_id` | The object behind it (`ch_…`, `py_…`, `re_…`, `du_…`, or `null` for a billing fee). For a charge it equals the order's `payment.transaction_id`. |
 | `order_id`, `order_number` | The store order, from the charge's `metadata.order_id` / `order_number` (a refund or dispute reads the charge it is for). When only one of the two is known, the store fills the other from its own orders. `null` for lines no order owns (fees, test charges). `order_number` has no prefix (`"15000"`). |
 | `payment_reference` | The order's `payment.reference` when known: the PaymentIntent `pi_…`. |
+| `payment_method` | The method the money was paid with: `{ "type", "label" }`, e.g. `{ "type": "affirm", "label": "Affirm" }`. `type` is Stripe's payment method type (`card`, `link`, `affirm`, `klarna`, `afterpay_clearpay`, `cashapp`, `us_bank_account`, …), read from the charge's `payment_method_details` (a refund or dispute: the charge it is for); `label` is for people. `null` when Stripe does not say (fees, transfers) — and absent from stores older than 0.11.0, so read a missing field as `null`. |
 | `gross`, `fee`, `net` | Integer minor units **in the payout currency** (Stripe has already converted a charge taken in another currency). Always `gross − fee = net`. |
 | `fee_details` | Stripe's breakdown (`stripe_fee`, `tax`, `application_fee`, …); `amount` is integer minor units in the payout currency. |
 | `available_on` | `YYYY-MM-DD` the funds became available. |
+
+**`charge` or `payment`?** Both are a customer paying, and both are category `charge`. Stripe calls a
+card payment a `charge` (`ch_…`) and a payment made with any other method — buy now, pay later
+(Affirm, Klarna, Afterpay), Link, Cash App Pay, bank debits — a `payment` (often `py_…`). Which
+method it was is `payment_method`; don't infer it from `type`.
 
 **Sign conventions.** The signs are Stripe's balance: money in is positive, money out negative, and
 `fee` is what Stripe kept (negative when it gave a fee back). So a refund is `gross −3000, fee 0,

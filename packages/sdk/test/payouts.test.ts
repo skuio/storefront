@@ -3,7 +3,7 @@ import type Stripe from 'stripe'
 import { handleStoreApi } from '../src/api'
 import { manualPayments } from '../src/payments/manual'
 import { paypalPayments } from '../src/payments/paypal'
-import { stripeLineCategory, stripePayments } from '../src/payments/stripe'
+import { stripeLineCategory, stripeMethodLabel, stripePayments } from '../src/payments/stripe'
 import { comparePayouts, isAfter, isoSeconds, isWithin, type PaymentAdapter, type PaymentPayouts, type Payout } from '../src/payments'
 import type { Store } from '../src/store'
 import { rig } from './helpers'
@@ -98,6 +98,7 @@ const realCharge = (id: string, orderId: string, number: string) => ({
   object: 'charge',
   payment_intent: `pi_test_${number}`,
   metadata: { order_id: orderId, order_number: number },
+  payment_method_details: { type: 'card', card: { brand: 'visa' } },
 })
 const realTxns: Txn[] = [
   {
@@ -235,6 +236,7 @@ describe('stripe payouts', () => {
     expect(lines.body.data.find((l: any) => l.id === 'txn_1ExAmPlE000000000Charge1')).toEqual({
       id: 'txn_1ExAmPlE000000000Charge1', type: 'charge', category: 'charge',
       source_id: 'ch_1ExAmPlE00000000000Charge1', order_id: 'ord_example0000000000001', order_number: '15000', payment_reference: 'pi_test_15000',
+      payment_method: { type: 'card', label: 'Card' },
       gross: { amount: 17078, currency: 'usd' }, fee: { amount: 525, currency: 'usd' }, net: { amount: 16553, currency: 'usd' },
       fee_details: [{ type: 'stripe_fee', amount: 525, description: 'Stripe processing fees' }],
       created_at: '2026-10-27T12:53:15Z', available_on: '2026-11-03', description: 'Example Store order EX15000',
@@ -267,7 +269,7 @@ describe('stripe payouts', () => {
     const byId = Object.fromEntries(dispute.map((l: any) => [l.id, l]))
     expect(byId.txn_dispute).toMatchObject({ type: 'adjustment', category: 'dispute', source_id: 'du_1', order_id: 'ord_B', gross: { amount: -5000 }, fee: { amount: 1500 }, net: { amount: -6500 } })
     expect(byId.txn_dispute_won).toMatchObject({ category: 'dispute_reversal', order_id: 'ord_B', gross: { amount: 5000 }, fee: { amount: -1500 }, net: { amount: 6500 } })
-    expect(byId.txn_billing).toMatchObject({ type: 'stripe_fee', category: 'fee', source_id: null, order_id: null, order_number: null, net: { amount: -200 } })
+    expect(byId.txn_billing).toMatchObject({ type: 'stripe_fee', category: 'fee', source_id: null, order_id: null, order_number: null, payment_method: null, net: { amount: -200 } })
     // The disputed charge is on the same page: no extra read.
     expect(fake.raw.charges.retrieve).not.toHaveBeenCalled()
 
@@ -279,6 +281,50 @@ describe('stripe payouts', () => {
     expect(fake.raw.balanceTransactions.list.mock.calls[0]![0]).toMatchObject({ payout: 'po_debit', expand: ['data.source', 'data.source.charge'] })
     expect(debit.find((l: any) => l.id === 'txn_refund_c')).toMatchObject({ category: 'refund', order_id: 'ord_C', net: { amount: -2000 } })
     expect(debit.find((l: any) => l.id === 'txn_charge_small')).toMatchObject({ order_id: null, payment_reference: 'pi_D' })
+  })
+
+  it('names the method each line was paid with, read from the expanded source in the same one request', async () => {
+    const data = stripeData()
+    const affirm = { id: 'py_1ExAmPlE00000000000Affirm', object: 'charge', payment_intent: 'pi_M1', metadata: { order_id: 'ord_M1', order_number: '201' }, payment_method_details: { type: 'affirm', affirm: {} } }
+    const cashapp = { id: 'py_1ExAmPlE0000000000Cashapp', object: 'charge', payment_intent: 'pi_M2', metadata: { order_id: 'ord_M2', order_number: '202' }, payment_method_details: { type: 'cashapp', cashapp: {} } }
+    const card = { id: 'ch_M3', object: 'charge', payment_intent: 'pi_M3', metadata: { order_id: 'ord_M3', order_number: '203' }, payment_method_details: { type: 'card', card: { brand: 'amex' } } }
+    const bare = { id: 'ch_M4', object: 'charge', payment_intent: 'pi_M4', metadata: { order_id: 'ord_M4', order_number: '204' } }
+    data.payouts.push(synthPayout('po_methods', 68600, '2026-10-25T00:00:00Z'))
+    data.charges = { ...data.charges, [affirm.id]: affirm }
+    data.txns.po_methods = [
+      bt('txn_po_methods', 'payout', -(68600), 0, '2026-10-25T00:00:00Z', 'po_methods', 'payout'),
+      bt('txn_refund_affirm', 'payment_refund', -4000, 0, '2026-10-24T00:00:00Z', { id: 'pyr_1', object: 'refund', charge: affirm.id }, 'refund'),
+      bt('txn_bare', 'charge', 10000, 320, '2026-10-23T00:00:00Z', bare),
+      bt('txn_card', 'charge', 20000, 610, '2026-10-22T00:00:00Z', card),
+      bt('txn_cashapp', 'payment', 15000, 465, '2026-10-21T00:00:00Z', cashapp, 'charge'),
+      bt('txn_affirm', 'payment', 30000, 1005, '2026-10-20T00:00:00Z', affirm, 'charge'),
+    ]
+    const { api, fake } = stripeRig(data)
+    const lines = (await api('/payouts/stripe/po_methods/lines')).body.data
+    const byId = Object.fromEntries(lines.map((l: any) => [l.id, l]))
+    expect(byId.txn_affirm).toMatchObject({ type: 'payment', category: 'charge', source_id: affirm.id, payment_method: { type: 'affirm', label: 'Affirm' } })
+    expect(byId.txn_cashapp.payment_method).toEqual({ type: 'cashapp', label: 'Cash App Pay' })
+    expect(byId.txn_card).toMatchObject({ type: 'charge', payment_method: { type: 'card', label: 'Card' } })
+    // A refund names the method of the payment it gives back.
+    expect(byId.txn_refund_affirm).toMatchObject({ category: 'refund', order_id: 'ord_M1', payment_method: { type: 'affirm', label: 'Affirm' } })
+    // No payment_method_details: null, never a guess.
+    expect(byId.txn_bare.payment_method).toBeNull()
+    expect(sumNet(lines)).toBe(68600)
+    // Still one Stripe request for the page: the method rides on the expanded source.
+    expect(fake.raw.balanceTransactions.list).toHaveBeenCalledTimes(1)
+    expect(fake.raw.charges.retrieve).not.toHaveBeenCalled()
+  })
+
+  it('labels Stripe payment method types for people', () => {
+    expect(stripeMethodLabel('card')).toBe('Card')
+    expect(stripeMethodLabel('affirm')).toBe('Affirm')
+    expect(stripeMethodLabel('klarna')).toBe('Klarna')
+    expect(stripeMethodLabel('afterpay_clearpay')).toBe('Afterpay / Clearpay')
+    expect(stripeMethodLabel('cashapp')).toBe('Cash App Pay')
+    expect(stripeMethodLabel('link')).toBe('Link')
+    expect(stripeMethodLabel('us_bank_account')).toBe('ACH bank debit')
+    expect(stripeMethodLabel('mobilepay')).toBe('Mobilepay')
+    expect(stripeMethodLabel('some_new_method')).toBe('Some new method')
   })
 
   it('a manual payout has no lines; an unknown payout is 404', async () => {
