@@ -1,6 +1,6 @@
 import type { StorefrontConfig } from '../config'
 import { formatMoney } from '../money'
-import type { Address, Fulfillment, Order, StoreQuote } from '../types'
+import type { Address, Fulfillment, Order, OrderRefund, StoreQuote } from '../types'
 
 export interface RenderedMail {
   subject: string
@@ -139,6 +139,29 @@ ${tracking ? `<p style="margin:0 0 16px;font-size:14px">Tracking number: ${track
     `Track it in your account: ${portalUrl}`,
   ].join('\n')
   return { subject: `Order ${number} has shipped — ${config.name}`, html, text }
+}
+
+/** The buyer's refund notice: how much is coming back and to what. */
+export function refundIssuedMail(order: Order, refund: OrderRefund, ctx: MailContext): RenderedMail {
+  const { config } = ctx
+  const number = `${config.orders.numberPrefix}${order.number}`
+  const amount = formatMoney(refund.amount, config.locale)
+  const method = order.payment.methodLabel ?? 'your original payment method'
+  const timing = refund.status === 'pending' ? 'It is on its way' : 'It has been sent'
+  const html = layout(
+    config,
+    `Refund for order ${number}`,
+    `<p style="margin:0 0 16px;font-size:14px">We have refunded <strong>${escapeHtml(amount)}</strong> for order ${escapeHtml(number)} to ${escapeHtml(method)}. ${timing}; your bank or card issuer may take a few business days to show it.</p>
+${refund.reason ? `<p style="margin:0 0 16px;font-size:14px">Reason: ${escapeHtml(refund.reason)}</p>` : ''}`,
+    contactFooter(config)
+  )
+  const text = [
+    `${config.name} — refund for order ${number}`,
+    '',
+    `We have refunded ${amount} to ${method}. ${timing}; your bank or card issuer may take a few business days to show it.`,
+    ...(refund.reason ? ['', `Reason: ${refund.reason}`] : []),
+  ].join('\n')
+  return { subject: `Refund for order ${number} — ${config.name}`, html, text }
 }
 
 export function partnerSignInMail(input: { url: string; name: string; expiresMinutes: number }, ctx: MailContext): RenderedMail {

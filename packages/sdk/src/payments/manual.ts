@@ -16,6 +16,9 @@ export interface ManualPaymentOptions {
  * Proves the pipeline needs no processor at all. `start()` is pure — the
  * checkout endpoint sends the "order received" email once, and the pending
  * page may call `start()` again to re-render the instructions.
+ *
+ * No `refund()`: money taken outside the store goes back outside it, so the
+ * Store API reports these orders `payment.refundable: false`.
  */
 export function manualPayments(options: ManualPaymentOptions = {}): PaymentAdapter {
   const label = options.label ?? 'Pay by invoice'

@@ -1,4 +1,4 @@
-export type StoreErrorCode = 'not_found' | 'validation_failed' | 'conflict' | 'unavailable' | 'rate_limited' | 'invalid_grant'
+export type StoreErrorCode = 'not_found' | 'validation_failed' | 'conflict' | 'unavailable' | 'rate_limited' | 'invalid_grant' | 'refund_unsupported'
 
 /** A domain error the API maps straight to a status code. */
 export class StoreError extends Error {
@@ -19,6 +19,7 @@ export class StoreError extends Error {
       case 'validation_failed':
         return 422
       case 'conflict':
+      case 'refund_unsupported':
         return 409
       case 'unavailable':
         return 503
@@ -34,3 +35,4 @@ export const notFound = (what: string) => new StoreError('not_found', `${what} n
 export const invalid = (message: string, details: Record<string, string> | null = null) =>
   new StoreError('validation_failed', message, details)
 export const conflict = (message: string) => new StoreError('conflict', message)
+export const refundUnsupported = (message: string) => new StoreError('refund_unsupported', message)

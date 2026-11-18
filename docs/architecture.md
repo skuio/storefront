@@ -61,7 +61,12 @@ addressed order and returns a redirect or instructions; `handleWebhook`
 decodes what the processor reports; `verifyReturn` covers the buyer coming
 back before the webhook lands; the optional `settlement(order)` asks the
 processor what it captured and kept (its fee), which the Store API uses to fill
-in `payment.fee` on `GET /orders/{id}` when the confirmation did not carry it. `stripe` (hosted Checkout in payment-only
+in `payment.fee` on `GET /orders/{id}` when the confirmation did not carry it. The optional
+`refund(order, { refundId, amount, reason, idempotencyKey })` gives money back (Stripe `POST /v1/refunds`,
+PayPal capture refund) and `refundStatus()` re-reads a pending one; the store core keeps the
+`order_refunds` rows and the refundable-amount check, and only calls the adapter it is handed, so it
+still never talks to a processor itself. An adapter without `refund()` (manual, bitcoin, btcpay) makes its
+orders `payment.refundable: false`. `stripe` (hosted Checkout in payment-only
 mode) and `manual` (pay later, marked paid by the operations system) ship;
 `manual` is the proof that the pipeline needs no processor at all.
 

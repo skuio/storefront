@@ -1,13 +1,13 @@
 import type { DbStatement } from '../db/driver'
-import { merchantNewOrderMail, orderConfirmationMail, shippingConfirmationMail } from '../mail/templates'
-import type { Fulfillment, Money, Order, OrderStatus, PaymentSettlement } from '../types'
+import { merchantNewOrderMail, orderConfirmationMail, refundIssuedMail, shippingConfirmationMail } from '../mail/templates'
+import type { Fulfillment, Money, Order, OrderRefund, OrderStatus, PaymentSettlement } from '../types'
 import { chunk, placeholders, type StoreContext } from './context'
 import { newId } from './crypto'
 import { normalizeEmail } from './customers'
 import { conflict, invalid, notFound } from './errors'
 import type { EventsService } from './events'
 import type { InventoryService } from './inventory'
-import { ORDER_SELECT, rowToFulfillment, rowToOrder, type FulfillmentLineRow, type FulfillmentRow, type OrderLineRow, type OrderRow } from './rows'
+import { ORDER_SELECT, rowToFulfillment, rowToOrder, rowToRefund, type FulfillmentLineRow, type FulfillmentRow, type OrderLineRow, type OrderRow, type RefundRow } from './rows'
 
 export interface PaymentRecord {
   provider: string
@@ -97,6 +97,14 @@ export class OrdersService {
 
   async byPaymentReference(provider: string, reference: string): Promise<Order | null> {
     const [order] = await this.hydrate(`${ORDER_SELECT} WHERE o.payment_provider = ? AND o.payment_reference = ?`, [provider, reference])
+    return order ?? null
+  }
+
+  /** The order `provider` took payment for under `reference`: its payment reference (`pi_…`) or transaction id (`ch_…`). */
+  async byPaymentOrTransaction(provider: string, reference: string): Promise<Order | null> {
+    const byReference = await this.byPaymentReference(provider, reference)
+    if (byReference) return byReference
+    const [order] = await this.hydrate(`${ORDER_SELECT} WHERE o.payment_provider = ? AND o.payment_transaction_id = ?`, [provider, reference])
     return order ?? null
   }
 
@@ -202,25 +210,29 @@ export class OrdersService {
     const lines = new Map<string, OrderLineRow[]>()
     const fulfillments = new Map<string, FulfillmentRow[]>()
     const fulfillmentLines = new Map<string, FulfillmentLineRow[]>()
+    const refunds = new Map<string, RefundRow[]>()
     for (const part of chunk(ids)) {
       const ph = placeholders(part.length)
-      const [l, f, fl] = await Promise.all([
+      const [l, f, fl, rf] = await Promise.all([
         this.ctx.db.prepare(`SELECT * FROM order_lines WHERE order_id IN (${ph}) ORDER BY position, id`).bind(...part).all<OrderLineRow>(),
         this.ctx.db.prepare(`SELECT * FROM fulfillments WHERE order_id IN (${ph}) ORDER BY created_at, id`).bind(...part).all<FulfillmentRow>(),
         this.ctx.db
           .prepare(`SELECT fl.* FROM fulfillment_lines fl JOIN fulfillments f ON f.id = fl.fulfillment_id WHERE f.order_id IN (${ph}) ORDER BY fl.sku`)
           .bind(...part)
           .all<FulfillmentLineRow>(),
+        this.ctx.db.prepare(`SELECT * FROM order_refunds WHERE order_id IN (${ph}) ORDER BY created_at, id`).bind(...part).all<RefundRow>(),
       ])
       for (const r of l.results) (lines.get(r.order_id) ?? lines.set(r.order_id, []).get(r.order_id)!).push(r)
       for (const r of f.results) (fulfillments.get(r.order_id) ?? fulfillments.set(r.order_id, []).get(r.order_id)!).push(r)
       for (const r of fl.results) (fulfillmentLines.get(r.fulfillment_id) ?? fulfillmentLines.set(r.fulfillment_id, []).get(r.fulfillment_id)!).push(r)
+      for (const r of rf.results) (refunds.get(r.order_id) ?? refunds.set(r.order_id, []).get(r.order_id)!).push(r)
     }
     return rows.map((r) =>
       rowToOrder(
         r,
         lines.get(r.id) ?? [],
-        (fulfillments.get(r.id) ?? []).map((f) => rowToFulfillment(f, fulfillmentLines.get(f.id) ?? []))
+        (fulfillments.get(r.id) ?? []).map((f) => rowToFulfillment(f, fulfillmentLines.get(f.id) ?? [])),
+        (refunds.get(r.id) ?? []).map(rowToRefund)
       )
     )
   }
@@ -340,13 +352,16 @@ export class OrdersService {
     if (input.status === 'refunded') {
       if (order.payment.status === 'refunded') return order
       if (order.payment.status !== 'paid') throw conflict('Only a paid order can be refunded')
+      // Refunds already recorded one by one (order_refunds) are in the ledger; book only the rest.
+      const given = (order.refunds ?? []).filter((r) => r.status === 'succeeded').reduce((sum, r) => sum + r.amount.amount, 0)
+      const remaining = Math.max(order.total.amount - given, 0)
       await this.ctx.db.batch([
         this.ctx.db
           .prepare(`UPDATE orders SET status = 'refunded', payment_status = 'refunded', payment_provider = COALESCE(?, payment_provider), payment_reference = COALESCE(?, payment_reference), updated_at = ? WHERE id = ?`)
           .bind(input.provider ?? null, input.reference ?? null, now, id),
         this.ctx.db
           .prepare(`INSERT INTO payments (id, order_id, provider, reference, status, amount, currency, method_label, created_at) VALUES (?, ?, ?, ?, 'refunded', ?, ?, ?, ?)`)
-          .bind(newId('pay'), id, input.provider ?? order.payment.provider ?? 'manual', input.reference ?? order.payment.reference, -order.total.amount, order.currency, order.payment.methodLabel, now),
+          .bind(newId('pay'), id, input.provider ?? order.payment.provider ?? 'manual', input.reference ?? order.payment.reference, -remaining, order.currency, order.payment.methodLabel, now),
         this.events.statement(id, 'refunded', { provider: input.provider ?? null, reference: input.reference ?? null }),
       ])
       return this.require(id)
@@ -455,6 +470,11 @@ export class OrdersService {
   async notifyShipped(order: Order, fulfillment: Fulfillment): Promise<void> {
     const sent = await this.send(order.id, 'shipping_confirmation', order.customer.email, shippingConfirmationMail(order, fulfillment, this.mailContext()))
     if (sent) await this.ctx.db.prepare(`UPDATE fulfillments SET notified_at = ? WHERE id = ?`).bind(this.ctx.now(), fulfillment.id).run()
+  }
+
+  /** The buyer's refund notice. Logged and recorded like every other email; never thrown. */
+  async notifyRefunded(order: Order, refund: OrderRefund): Promise<boolean> {
+    return this.send(order.id, 'refund_notice', order.customer.email, refundIssuedMail(order, refund, this.mailContext()))
   }
 
   private async send(orderId: string, kind: string, to: string, mail: { subject: string; html: string; text: string }, replyTo?: string): Promise<boolean> {

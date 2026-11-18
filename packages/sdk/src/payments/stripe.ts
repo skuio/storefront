@@ -6,8 +6,9 @@ import { invalid, notFound } from '../store/errors'
 import {
   comparePayouts, isAfter, isoSeconds, isWithin, PaymentWebhookError, ProcessorPermissionError,
   type PaymentAdapter, type PaymentContext, type PaymentEvent, type PaymentPayouts, type PaymentStart, type Payout,
-  type PayoutLine, type PayoutLineCategory, type PayoutLineMethod,
+  type PayoutLine, type PayoutLineCategory, type PayoutLineMethod, type ProcessorRefund, type RefundResult,
 } from './index'
+import type { RefundStatus } from '../types'
 
 export interface StripePaymentOptions {
   /** A configured Stripe client (use `Stripe.createFetchHttpClient()` on Workers). */
@@ -107,7 +108,8 @@ export function stripePayments(options: StripePaymentOptions): PaymentAdapter {
       } catch (e) {
         throw new PaymentWebhookError(400, `invalid signature: ${e instanceof Error ? e.message : String(e)}`)
       }
-      return withSettlement(stripe, eventsFromStripe(event))
+      const events = await withSettlement(stripe, eventsFromStripe(event))
+      return event.type === 'charge.refunded' ? withRefunds(stripe, event.data.object, events) : events
     },
 
     async verifyReturn(params, order): Promise<PaymentEvent[]> {
@@ -132,7 +134,102 @@ export function stripePayments(options: StripePaymentOptions): PaymentAdapter {
     },
 
     payouts: stripePayouts(stripe),
+
+    // POST /v1/refunds against the PaymentIntent (or the charge), carrying the store's key as Stripe's
+    // Idempotency-Key and the store's ids as metadata, so the webhook finds the row it belongs to.
+    async refund(order, request): Promise<RefundResult> {
+      const target = refundTarget(order)
+      if (!target) return { status: 'failed', reference: null, failureReason: 'The order has no Stripe payment (pi_… or ch_…) to refund' }
+      try {
+        const refund = await stripe.refunds.create(
+          {
+            ...target,
+            amount: request.amount.amount,
+            metadata: { order_id: order.id, order_number: order.number, refund_id: request.refundId, ...(request.reason ? { reason: request.reason.slice(0, 500) } : {}) },
+          },
+          { idempotencyKey: request.idempotencyKey }
+        )
+        return refundResult(refund)
+      } catch (e) {
+        const err = e as StripeErrorLike
+        // Stripe answered and said no (already refunded, amount too large, …): a failed refund. Anything else is an unknown outcome.
+        if (typeof err?.statusCode === 'number' && err.statusCode >= 400 && err.statusCode < 500) {
+          return { status: 'failed', reference: null, failureReason: err.message ?? `Stripe refused the refund (${err.statusCode})` }
+        }
+        throw e
+      }
+    },
+
+    async refundStatus(_order, reference): Promise<RefundResult | null> {
+      try {
+        return refundResult(await stripe.refunds.retrieve(reference))
+      } catch (e) {
+        if (isMissing(e)) return null
+        throw e
+      }
+    },
   }
+}
+
+/** What to refund: the PaymentIntent the order was paid through, else its charge. */
+function refundTarget(order: Order): { payment_intent: string } | { charge: string } | null {
+  const ref = order.payment.reference
+  if (ref?.startsWith('pi_')) return { payment_intent: ref }
+  if (ref?.startsWith('ch_') || ref?.startsWith('py_')) return { charge: ref }
+  const tx = order.payment.transactionId
+  if (tx?.startsWith('ch_') || tx?.startsWith('py_')) return { charge: tx }
+  return null
+}
+
+/** Stripe refund status → the store's. `requires_action` waits on the buyer, so it is still pending. */
+function refundStatusOf(status: string | null | undefined): RefundStatus {
+  if (status === 'succeeded') return 'succeeded'
+  if (status === 'failed' || status === 'canceled') return 'failed'
+  return 'pending'
+}
+
+function refundResult(r: Stripe.Refund): RefundResult {
+  const status = refundStatusOf(r.status)
+  return { status, reference: r.id, failureReason: status === 'failed' ? (r.failure_reason ?? r.status ?? 'failed') : null }
+}
+
+/** A Stripe refund as a store `refund` event. Exported for tests. */
+export function refundEventFromStripe(r: Stripe.Refund, charge?: Stripe.Charge | null): PaymentEvent {
+  const status = refundStatusOf(r.status)
+  const paymentIntent = typeof r.payment_intent === 'string' ? r.payment_intent : r.payment_intent?.id ?? null
+  const chargeId = typeof r.charge === 'string' ? r.charge : r.charge?.id ?? null
+  const orderId = r.metadata?.order_id || charge?.metadata?.order_id || null
+  const refund: ProcessorRefund = {
+    reference: r.id,
+    status,
+    amount: { amount: r.amount, currency: r.currency.toLowerCase() },
+    failureReason: status === 'failed' ? (r.failure_reason ?? r.status ?? 'failed') : null,
+    refundId: r.metadata?.refund_id || null,
+    reason: r.metadata?.reason || r.reason || null,
+  }
+  return { type: 'refund', orderId, provider: PROVIDER, paymentReference: paymentIntent ?? chargeId, refund }
+}
+
+/**
+ * `charge.refunded` says the charge's refunded total changed, not which refund did it: list the
+ * charge's refunds and report each (one Stripe call), before the full-refund event when there is one.
+ * Rows already up to date are left alone. When the list cannot be read, the event stays as it was.
+ */
+async function withRefunds(stripe: Stripe, charge: Stripe.Charge, events: PaymentEvent[]): Promise<PaymentEvent[]> {
+  let refunds: Stripe.Refund[]
+  try {
+    refunds = (await stripe.refunds.list({ charge: charge.id, limit: 100 })).data
+  } catch (e) {
+    console.error('stripe: could not list the refunds of', charge.id, e instanceof Error ? e.message : String(e))
+    return events
+  }
+  const fromCharge = new Set(events.flatMap((e) => (e.type === 'refund' ? [e.refund.reference] : [])))
+  const listed = refunds.filter((r) => !fromCharge.has(r.id)).map((r) => refundEventFromStripe(r, charge))
+  const rest = events.filter((e) => e.type !== 'ignored')
+  const refundEvents = rest.filter((e) => e.type === 'refund')
+  const others = rest.filter((e) => e.type !== 'refund')
+  const out = [...refundEvents, ...listed, ...others]
+  return out.length ? out : events
 }
 
 // ── Payouts ─────────────────────────────────────────────────────────────────────────────────
@@ -857,11 +954,19 @@ export function eventsFromStripe(event: Stripe.Event): PaymentEvent[] {
       return [{ type: 'failed', orderId: pi.metadata.order_id, provider: PROVIDER, reference: pi.id, reason: pi.last_payment_error?.code ?? 'payment failed' }]
     }
     case 'charge.refunded': {
+      // Each refund on the charge (when the event carries them; the adapter lists them otherwise),
+      // then the whole order once the charge is fully refunded.
       const charge = event.data.object
-      if (!charge.refunded) return [{ type: 'ignored', reason: `charge ${charge.id} is only partially refunded` }]
+      const refunds = (charge.refunds?.data ?? []).map((r) => refundEventFromStripe(r, charge))
       const reference = typeof charge.payment_intent === 'string' ? charge.payment_intent : charge.payment_intent?.id ?? null
-      return [{ type: 'refunded', orderId: charge.metadata?.order_id ?? null, provider: PROVIDER, reference }]
+      if (!charge.refunded) return refunds.length ? refunds : [{ type: 'ignored', reason: `charge ${charge.id} is only partially refunded; its refunds are listed by the adapter` }]
+      return [...refunds, { type: 'refunded', orderId: charge.metadata?.order_id ?? null, provider: PROVIDER, reference }]
     }
+    case 'charge.refund.updated':
+    case 'refund.created':
+    case 'refund.updated':
+    case 'refund.failed':
+      return [refundEventFromStripe(event.data.object as Stripe.Refund)]
     default:
       return [{ type: 'ignored', reason: `unhandled event ${event.type}` }]
   }

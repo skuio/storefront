@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { absoluteImageUrl, handleStoreApi, type StoreApiOptions } from '../src/api'
 import type { PaymentAdapter } from '../src/payments'
@@ -42,6 +43,9 @@ describe('Store API auth', () => {
     expect(res.status).toBe(200)
     expect(res.body.data).toMatchObject({ name: 'Test Store', currency: 'USD', counts: { products: 3, categories: 6, orders: 0, customers: 0 } })
     expect(res.headers.get('cache-control')).toBe('no-store')
+    // The SDK version, so a consumer can tell which Store API features the store has (refunds: 0.12.0+).
+    const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string }
+    expect(res.body.data.sdk_version).toBe(pkg.version)
   })
 
   it('404s unknown endpoints', async () => {
@@ -80,6 +84,7 @@ describe('Store API orders', () => {
       payment: {
         status: 'unpaid', provider: null, reference: null, method_label: null, paid_at: null,
         amount_received: null, fee: null, net: null, transaction_id: null, fee_reported_at: null,
+        refundable: false, refunded: { amount: 0, currency: 'USD' }, refundable_amount: { amount: 0, currency: 'USD' },
       },
       currency: 'USD',
       subtotal: { amount: 109900, currency: 'USD' },
@@ -94,6 +99,7 @@ describe('Store API orders', () => {
       shipping_method: { code: 'us', name: 'Free shipping (United States)' },
       lines: [{ id: a.lines[0]!.id, sku: 'VDCTOYTAC9504', name: products[0]!.name, quantity: 1, unit_amount: { amount: 109900, currency: 'USD' }, total_amount: { amount: 109900, currency: 'USD' }, fulfilled_quantity: 0 }],
       fulfillments: [],
+      refunds: [],
       external_reference: null,
       notes: null,
       metadata: {},
@@ -123,6 +129,7 @@ describe('Store API orders', () => {
     expect(paid.body.data.status).toBe('paid')
     expect(paid.body.data.payment).toEqual({ status: 'paid', provider: 'manual', reference: 'wire-1', method_label: null, paid_at: '2026-09-13T10:00:00.000Z',
       amount_received: null, fee: null, net: null, transaction_id: null, fee_reported_at: null,
+      refundable: false, refunded: { amount: 0, currency: 'USD' }, refundable_amount: { amount: 109900, currency: 'USD' },
     })
 
     expect((await api('PATCH', `/orders/${order.id}`, { status: 'refunded' })).status).toBe(422)
@@ -558,6 +565,9 @@ describe('Store API payment settlement (fee)', () => {
       net: { amount: 106683, currency: 'USD' },
       transaction_id: 'ch_1',
       fee_reported_at: expect.any(String),
+      refundable: false,
+      refunded: { amount: 0, currency: 'USD' },
+      refundable_amount: { amount: 109900, currency: 'USD' },
     })
     expect(Date.parse(res.body.data.payment.fee_reported_at)).not.toBeNaN()
   })

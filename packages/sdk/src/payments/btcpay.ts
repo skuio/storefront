@@ -34,7 +34,8 @@ interface Invoice {
  * invoice is priced in the store currency from the order total — discount
  * and shipping included — and BTCPay converts at its rate. Funds settle to the
  * merchant's own wallet; there are no chargebacks, and refunds are issued
- * from BTCPay (they are not reported back here).
+ * from BTCPay (they are not reported back here, and there is no `refund()`:
+ * the Store API reports these orders `payment.refundable: false`).
  *
  * The webhook payload is only a nudge: the adapter reads the invoice back
  * from the API before it believes anything, so a forged or replayed body

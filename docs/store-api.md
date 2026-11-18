@@ -19,6 +19,9 @@ is the first consumer; anything that can speak this contract can run the store.
 | GET | `/orders/{id}` | One order with lines, payment, addresses, fulfilments. |
 | PATCH | `/orders/{id}` | Stamp `external_reference`, record a payment status, or cancel. |
 | POST | `/orders/{id}/fulfillments` | Push a shipment (idempotent per `external_id`); the store emails the buyer. |
+| POST | `/orders/{id}/refunds` | Refund the buyer through the store's payment processor (idempotent per `idempotency_key`). 0.12.0+. |
+| GET | `/orders/{id}/refunds` | The order's refunds, oldest first. |
+| GET | `/orders/{id}/refunds/{refund_id}` | One refund (a `pending` one is re-checked with the processor). |
 | PUT | `/inventory` | Batch upsert of available quantities per SKU. |
 | GET | `/products` | The catalog the store holds, oldest-updated first, keyset-paged. |
 | GET | `/products/{sku}` | One product, active or not. |
@@ -42,7 +45,7 @@ consumer in the browser, and the consumer trades a one-time code for a key it al
    against the deployed store. `GET /health` reports `owner_configured: true` from then on;
    until it does, there is nobody to approve anything and the consumer should say so.
 2. **Browser step.** The consumer sends the owner's browser to
-   `https://<store>/admin/connect?client_id=<your system>&redirect_uri=<https url>&state=<opaque>&tenant=<account name>&scope=orders,payments,fulfillments,inventory,catalog,quotes`
+   `https://<store>/admin/connect?client_id=<your system>&redirect_uri=<https url>&state=<opaque>&tenant=<account name>&scope=orders,payments,refunds,fulfillments,inventory,catalog,quotes`
    (SKU.io sends `client_id=skuio`).
    The store asks the owner to sign in (password, or an emailed reset if forgotten), then shows who
    is asking, what it may do, and the host the browser will be sent to. Approve → `302 <redirect_uri>?code=…&state=…`.
@@ -58,10 +61,15 @@ consumer in the browser, and the consumer trades a one-time code for a key it al
 Redirect rules: `redirect_uri` must be absolute `https` (plain `http` is allowed only for
 `localhost`, `*.localhost` and `*.test`, so a developer's SKU.io works), must not carry a fragment
 or credentials, and `client_id` is any 2–63 lowercase letters, digits, dots, dashes or underscores
-naming your system (`skuio` is shown as "SKU.io"; others are shown as sent). Scopes are the six listed;
-they are shown to the owner, travel with the connection and are **enforced per endpoint**:
+naming your system (`skuio` is shown as "SKU.io"; others are shown as sent). Scopes are the seven listed;
+a scope the store does not know (a consumer built for a newer SDK) is **dropped, not rejected** (0.12.0+):
+the owner sees it listed as not supported by this store version, and only the known ones are granted.
+A request with no known scope at all is refused. `GET /health` reports `sdk_version` (`"0.12.0"`) so a
+consumer can tell what the store supports before asking. Scopes
+are shown to the owner, travel with the connection and are **enforced per endpoint**:
 `orders` for `GET`/`PATCH /orders…`, `payments` additionally for a `PATCH` that carries `payment`
-(marking an order paid, refunded or failed), `fulfillments` for `POST /orders/{id}/fulfillments`,
+(marking an order paid, refunded or failed), `refunds` for `POST /orders/{id}/refunds` (moving money
+back to a buyer through the processor; reading refunds needs only `orders`), `fulfillments` for `POST /orders/{id}/fulfillments`,
 `inventory` for `PUT /inventory`, `catalog` for `/products…` and `/categories…`, `quotes` for `/quotes…`. A connection that
 lacks one gets `403 forbidden`. The `STORE_API_KEY` secret is not scoped.
 
@@ -198,6 +206,87 @@ change them.
 Returns `201` with the fulfilment the first time and `200` with the same one on redelivery.
 The store raises `fulfilled_quantity` on the lines, moves the order to `partially_fulfilled`
 or `fulfilled`, and emails the buyer once per fulfilment.
+
+### Refunds (0.12.0+)
+
+The store refunds through the processor that took the payment, so an operations system never holds
+processor credentials. Built in: `stripe` (`POST /v1/refunds` against the PaymentIntent, or the charge)
+and `paypal` (`POST /v2/payments/captures/{capture}/refund`). `manual`, `bitcoin` and `btcpay` cannot
+refund (their `PaymentAdapter` has no `refund()`): money taken outside the store goes back outside it.
+
+Every order carries:
+
+```jsonc
+"payment": {
+  …,
+  "refundable": true,                                   // the provider can refund, the payment is paid, something is left
+  "refunded": { "amount": 1500, "currency": "USD" },    // pending + succeeded refunds
+  "refundable_amount": { "amount": 108400, "currency": "USD" } // amount_received (or total) − refunded; 0 unless paid
+},
+"refunds": [Refund, …]                                   // oldest first (newest last)
+```
+
+A store older than 0.12.0 has none of these fields. A partly refunded order stays `payment.status: "paid"`;
+once the succeeded refunds reach what was received the payment becomes `refunded` (and, as with every
+refund, the order status `refunded`), and `updated_at` moves on every refund change.
+
+A refund:
+
+```jsonc
+{
+  "id": "rf_…", "order_id": "ord_…",
+  "status": "pending" | "succeeded" | "failed",
+  "amount": { "amount": 1500, "currency": "USD" },
+  "shipping": { "amount": 0, "currency": "USD" } | null,           // part of amount that is shipping (informational)
+  "lines": [{ "sku": "X", "quantity": 1, "amount": {…} }],         // informational, may be []
+  "reason": "…" | null, "note": "…" | null,
+  "provider": "stripe", "reference": "re_…" | null,                // the processor's refund id
+  "failure_reason": "…" | null,
+  "idempotency_key": "sku-crr-123-1",
+  "source": "api" | "processor",                                   // processor: made in the Stripe/PayPal dashboard
+  "created_at": "…", "updated_at": "…"
+}
+```
+
+`POST /orders/{id}/refunds` (scope `refunds`):
+
+```json
+{ "idempotency_key": "sku-crr-123-1", "amount": { "amount": 1500, "currency": "USD" },
+  "shipping": { "amount": 0, "currency": "USD" }, "lines": [{ "sku": "X", "quantity": 1, "amount": { "amount": 1500, "currency": "USD" } }],
+  "reason": "Damaged", "note": "internal", "notify_customer": true }
+```
+
+`idempotency_key` (1–100 characters) and `amount` (> 0, the order currency) are required; `shipping` ≤
+`amount`; each line's `sku` must be on the order and its `quantity` at most what was ordered; `reason` ≤ 255,
+`note` ≤ 1000 characters. With `notify_customer: true` the store emails the buyer a refund notice (not for a
+failed refund).
+
+- `201 { "data": Refund }` — made; `status` is `succeeded` or `pending`.
+- `200 { "data": Refund }` — this `idempotency_key` was already used on this order: the existing refund,
+  whatever its status. **The processor is never called twice for one key** — retry a failed refund with a new key.
+- `409 refund_unsupported` — the order's provider cannot refund, or the order is not paid (or already fully refunded).
+- `422 validation_failed` — the amount is more than `refundable_amount`, a currency or line does not match, …
+  The amount is reserved by one conditional insert that sums the order's pending and succeeded refunds in the same
+  statement, so concurrent requests can never refund more than was received; the loser gets this 422.
+- `502 { "error": { "code": "processor_error", "message" }, "data": Refund }` — the processor answered and refused;
+  the refund is kept with `status: "failed"` and `failure_reason`.
+- When the processor does **not** answer (timeout, network, 5xx) the money may have moved, so the refund is kept
+  `pending` (`201`, amount still reserved), never `failed`. A later `GET` replays the same processor idempotency
+  key to learn the outcome — only within 23 hours of creation, inside Stripe's 24-hour key window; after that the
+  processor webhook settles it.
+
+The processor call carries an idempotency key of its own (`Idempotency-Key: storefront-refund-<refund id>` for
+Stripe, `PayPal-Request-Id` for PayPal) and the store's refund id (Stripe `metadata.refund_id`, PayPal
+`custom_id`), so a later webhook updates the row it belongs to — including a refund recorded as failed because
+the processor could not be reached.
+
+`GET /orders/{id}/refunds` and `GET /orders/{id}/refunds/{refund_id}` (scope `orders`): a `pending` refund is
+re-checked with the processor first (bounded; a processor error never fails the read).
+
+**Refunds made in the processor.** Stripe `charge.refunded` / `charge.refund.updated` / `refund.*` and PayPal
+`PAYMENT.CAPTURE.REFUNDED` webhooks — partial refunds included — update the matching row, or insert one with
+`source: "processor"` for a refund made in the processor's dashboard (counted against `refundable_amount` like
+any other).
 
 ## Quotes (request for quote)
 
@@ -495,4 +584,5 @@ not on the same page comes back with `order_id: null` instead of failing.
 `details` per field) · `409 conflict` (e.g. cancelling a fulfilled order) · `400 invalid_grant` (code
 exchange) · `429 rate_limited` (repeated sign-in or exchange failures from one address) ·
 `424 processor_permission_missing` (payouts: the processor refused the store's key; `details`
-names the provider and permission).
+names the provider and permission) · `409 refund_unsupported` (refunds: the order's processor cannot refund, or
+it is not paid) · `502 processor_error` (refunds: the processor refused; the body also carries the failed refund as `data`).

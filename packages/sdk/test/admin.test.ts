@@ -161,10 +161,21 @@ describe('connect: authorize', () => {
     expect(v({ redirect_uri: 'http://acme.sku.test/cb' })).toBeNull()
     expect(v({ client_id: 'Not An Id!' })).toMatchObject({ client_id: expect.stringContaining('lowercase') })
     expect(v({ client_id: 'netsuite' })).toBeNull() // any operations system the owner approves
-    expect(v({ scope: 'orders,launch_codes' })).toMatchObject({ scope: 'unknown scope: launch_codes' })
+    // An unknown scope is dropped, not rejected (0.12.0); only a request with no known scope fails.
+    expect(v({ scope: 'orders,launch_codes' })).toBeNull()
+    expect(v({ scope: 'launch_codes' })).toMatchObject({ scope: expect.stringContaining('no scope this store supports') })
     expect(v({ scope: '' })).toMatchObject({ scope: 'is required' })
     expect(v({ state: '' })).toMatchObject({ state: 'is required' })
     expect(v({ tenant: '' })).toMatchObject({ tenant: 'is required' })
+  })
+
+  it('drops scopes this store version does not know, grants the known ones and lists the rest for the owner', async () => {
+    const { store } = rig()
+    const req = store.connections.validateAuthorize({ ...REQUEST, scope: 'orders,refunds,launch_codes,teleport' })
+    expect(req.scopes).toEqual(['orders', 'refunds'])
+    expect(req.unsupportedScopes).toEqual(['launch_codes', 'teleport'])
+    const approved = await store.connections.approve(req, null)
+    expect(approved.connection.scopes).toEqual(['orders', 'refunds'])
   })
 
   it('normalises the request: host, de-duplicated scopes, opaque state echoed untouched', () => {

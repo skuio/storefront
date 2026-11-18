@@ -1,6 +1,7 @@
 import type { Payout, PayoutLine, PayoutLineCategory, PayoutStatus } from '../payments'
 import type { CategoryRecord, ProductRecord } from '../store/catalog'
-import type { Address, Fulfillment, Money, Order, QuoteStatus, StoreQuote } from '../types'
+import { refundTotals } from '../store/refunds'
+import type { Address, Fulfillment, Money, Order, OrderRefund, QuoteStatus, StoreQuote } from '../types'
 
 export interface ApiMoney {
   amount: number
@@ -45,6 +46,36 @@ export interface ApiOrderPayment {
   transaction_id: string | null
   /** When the store recorded the fee (ISO 8601). */
   fee_reported_at: string | null
+  /** The order's processor can refund it (its adapter has `refund()`), it is paid, and something is left to refund. */
+  refundable: boolean
+  /** Pending plus succeeded refunds, in the order currency. */
+  refunded: ApiMoney
+  /** What was received (amount_received, or the total) minus `refunded`; 0 when nothing is left or the order is not paid. */
+  refundable_amount: ApiMoney
+}
+
+export interface ApiRefund {
+  id: string
+  order_id: string
+  status: OrderRefund['status']
+  amount: ApiMoney
+  shipping: ApiMoney | null
+  lines: { sku: string; quantity: number; amount: ApiMoney }[]
+  reason: string | null
+  note: string | null
+  provider: string
+  reference: string | null
+  failure_reason: string | null
+  idempotency_key: string
+  source: OrderRefund['source']
+  created_at: string
+  updated_at: string
+}
+
+/** What `serializeOrder` needs to know beyond the order. */
+export interface SerializeOrderOptions {
+  /** Ids of the payment adapters that can refund (have `refund()`). Omitted: none, so `refundable` is false. */
+  refundProviders?: ReadonlySet<string> | readonly string[]
 }
 
 export interface ApiOrder {
@@ -66,6 +97,8 @@ export interface ApiOrder {
   shipping_method: { code: string; name: string } | null
   lines: { id: string; sku: string; name: string; quantity: number; unit_amount: ApiMoney; total_amount: ApiMoney; fulfilled_quantity: number }[]
   fulfillments: ApiFulfillment[]
+  /** Oldest first (newest last). */
+  refunds: ApiRefund[]
   external_reference: string | null
   notes: string | null
   metadata: Record<string, string>
@@ -169,7 +202,30 @@ export function serializeFulfillment(f: Fulfillment): ApiFulfillment {
  * The Store API's view of an order. `access_key` never leaves the store. `number` is the human number the buyer
  * sees, with the store's prefix (VLD4200), so the consumer shows the same number.
  */
-export function serializeOrder(o: Order, numberPrefix = ''): ApiOrder {
+export function serializeRefund(r: OrderRefund): ApiRefund {
+  return {
+    id: r.id,
+    order_id: r.orderId,
+    status: r.status,
+    amount: money(r.amount),
+    shipping: r.shipping ? money(r.shipping) : null,
+    lines: r.lines.map((l) => ({ sku: l.sku, quantity: l.quantity, amount: money(l.amount) })),
+    reason: r.reason,
+    note: r.note,
+    provider: r.provider,
+    reference: r.reference,
+    failure_reason: r.failureReason,
+    idempotency_key: r.idempotencyKey,
+    source: r.source,
+    created_at: r.createdAt,
+    updated_at: r.updatedAt,
+  }
+}
+
+export function serializeOrder(o: Order, numberPrefix = '', options: SerializeOrderOptions = {}): ApiOrder {
+  const totals = refundTotals(o)
+  const providers = options.refundProviders
+  const canRefund = !!o.payment.provider && !!providers && (Array.isArray(providers) ? providers.includes(o.payment.provider) : (providers as ReadonlySet<string>).has(o.payment.provider))
   return {
     id: o.id,
     number: `${numberPrefix}${o.number}`,
@@ -185,6 +241,9 @@ export function serializeOrder(o: Order, numberPrefix = ''): ApiOrder {
       net: o.payment.net ? money(o.payment.net) : null,
       transaction_id: o.payment.transactionId,
       fee_reported_at: o.payment.feeReportedAt,
+      refundable: canRefund && o.payment.status === 'paid' && totals.refundable.amount > 0,
+      refunded: money(totals.refunded),
+      refundable_amount: money(totals.refundable),
     },
     currency: o.currency.toUpperCase(),
     subtotal: money(o.subtotal),
@@ -207,6 +266,7 @@ export function serializeOrder(o: Order, numberPrefix = ''): ApiOrder {
       fulfilled_quantity: l.fulfilledQuantity,
     })),
     fulfillments: o.fulfillments.map(serializeFulfillment),
+    refunds: (o.refunds ?? []).map(serializeRefund),
     external_reference: o.externalReference,
     notes: o.notes,
     metadata: o.metadata,

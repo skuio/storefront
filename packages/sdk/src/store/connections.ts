@@ -20,12 +20,13 @@ const CLIENT_ID = /^[a-z0-9][a-z0-9._-]{1,62}$/
 export function connectClientName(clientId: string): string {
   return KNOWN_CONNECT_CLIENTS[clientId] ?? clientId
 }
-export const CONNECT_SCOPES = ['orders', 'payments', 'fulfillments', 'inventory', 'catalog', 'quotes'] as const
+export const CONNECT_SCOPES = ['orders', 'payments', 'refunds', 'fulfillments', 'inventory', 'catalog', 'quotes'] as const
 export type ConnectScope = (typeof CONNECT_SCOPES)[number]
 
 export const SCOPE_DESCRIPTIONS: Record<ConnectScope, string> = {
   orders: 'Read orders, stamp its own order number on them and cancel them',
   payments: 'Mark orders paid, refunded or failed (for payments taken outside this store)',
+  refunds: "Refund buyers' payments through the store's payment processor",
   fulfillments: 'Push shipments and tracking to orders',
   inventory: 'Update available stock',
   catalog: 'Read and update products and categories',
@@ -64,6 +65,11 @@ export interface AuthorizeRequest {
   state: string
   tenant: string
   scopes: ConnectScope[]
+  /**
+   * Requested scopes this store version does not know (a consumer built for a newer SDK). Dropped,
+   * not rejected: the owner sees them listed as not supported, and only `scopes` is granted.
+   */
+  unsupportedScopes: string[]
 }
 
 export interface IssuedKey {
@@ -150,11 +156,13 @@ export class ConnectionsService {
     const scopeRaw = (params.scope ?? '').split(/[\s,]+/).map((s) => s.trim()).filter(Boolean)
     const scopes = [...new Set(scopeRaw)] as string[]
     const unknown = scopes.filter((s) => !(CONNECT_SCOPES as readonly string[]).includes(s))
+    const known = scopes.filter((s) => (CONNECT_SCOPES as readonly string[]).includes(s))
     if (!scopes.length) details.scope = 'is required'
-    else if (unknown.length) details.scope = `unknown scope: ${unknown.join(', ')}`
+    // Unknown scopes are dropped (0.12.0+), so a consumer that asks for a newer scope still connects with the rest.
+    else if (!known.length) details.scope = `no scope this store supports (asked for: ${unknown.join(', ')})`
 
     if (Object.keys(details).length) throw new StoreError('validation_failed', 'Invalid connect request', details)
-    return { clientId, clientName: connectClientName(clientId), redirectUri: redirect!.href, redirectHost: redirect!.host, state, tenant, scopes: scopes as ConnectScope[] }
+    return { clientId, clientName: connectClientName(clientId), redirectUri: redirect!.href, redirectHost: redirect!.host, state, tenant, scopes: known as ConnectScope[], unsupportedScopes: unknown }
   }
 
   /** The owner said yes: create the connection and a one-time code. Returns the URL to send the browser to. */

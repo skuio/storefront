@@ -2,6 +2,8 @@ import type { CategoryInput, ProductInput } from '../store/catalog'
 import type { InventoryItemInput } from '../store/inventory'
 import type { FulfillmentInput } from '../store/orders'
 import type { QuoteOfferInput } from '../store/quotes'
+import type { RefundInput } from '../store/refunds'
+import type { RefundLine } from '../types'
 import type { Money } from '../types'
 
 export class ValidationError extends Error {
@@ -276,6 +278,47 @@ export function validateFulfillment(body: Record<string, unknown>): FulfillmentI
     shipped_at: shippedAt ?? null,
     lines,
     notify_customer: body.notify_customer === undefined ? true : (body.notify_customer as boolean),
+  }
+}
+
+/**
+ * `POST /orders/{id}/refunds`. Shape only: whether the amount fits the order, the currency is the
+ * order's and the lines are on it is checked by the store against the order itself.
+ */
+export function validateRefund(body: Record<string, unknown>): RefundInput {
+  const details: Details = {}
+  const key = str(details, body, 'idempotency_key', 'idempotency_key', { required: true, max: 100 })
+  const amount = moneyField(details, body.amount, 'amount', { required: true })
+  if (amount && amount.amount <= 0) details.amount = 'must be greater than zero'
+  const shipping = moneyField(details, body.shipping, 'shipping', { nullable: true })
+  if (amount && shipping && shipping.currency.toLowerCase() === amount.currency.toLowerCase() && shipping.amount > amount.amount) details.shipping = 'must not be more than amount'
+  const reason = str(details, body, 'reason', 'reason', { nullable: true, max: 255 })
+  const note = str(details, body, 'note', 'note', { nullable: true, max: 1000 })
+  if (body.notify_customer !== undefined && typeof body.notify_customer !== 'boolean') details.notify_customer = 'must be a boolean'
+  const lines: RefundLine[] = []
+  if (body.lines !== undefined && body.lines !== null) {
+    if (!Array.isArray(body.lines)) details.lines = 'must be an array'
+    else
+      body.lines.forEach((raw, i) => {
+        if (!isObject(raw)) {
+          details[`lines.${i}`] = 'must be an object'
+          return
+        }
+        if (!isString(raw.sku) || !raw.sku.trim()) details[`lines.${i}.sku`] = 'is required'
+        if (!isInt(raw.quantity) || raw.quantity < 1) details[`lines.${i}.quantity`] = 'must be an integer of at least 1'
+        const lineAmount = moneyField(details, raw.amount, `lines.${i}.amount`, { required: true })
+        if (isString(raw.sku) && raw.sku.trim() && isInt(raw.quantity) && raw.quantity >= 1 && lineAmount) lines.push({ sku: raw.sku.trim(), quantity: raw.quantity, amount: lineAmount })
+      })
+  }
+  finish(details, 'Invalid refund')
+  return {
+    idempotency_key: key!,
+    amount: amount!,
+    shipping: shipping ?? null,
+    lines,
+    reason: reason ?? null,
+    note: note ?? null,
+    notify_customer: body.notify_customer === true,
   }
 }
 
