@@ -24,6 +24,11 @@ export interface RefundInput {
  * The processor side of a refund, handed in by the caller (the Store API, from the order's
  * `PaymentAdapter`): the store core itself never talks to a processor.
  */
+/** How long after a refund's creation a replay of its idempotency key is still safe (Stripe keeps keys 24h). */
+export const REPLAY_WINDOW_HOURS = 23
+
+const addHours = (iso: string, hours: number): string => new Date(Date.parse(iso) + hours * 3_600_000).toISOString()
+
 export interface Refunder {
   /** The adapter id; must be the provider that took the order's payment. */
   provider: string
@@ -163,8 +168,11 @@ export class RefundsService {
     try {
       result = await refunder.refund(order, { refundId: id, amount: { amount: input.amount.amount, currency }, reason: input.reason ?? null, idempotencyKey: `storefront-refund-${id}` })
     } catch (e) {
-      // Unknown outcome: recorded as failed; a later processor webhook carrying the refund id corrects it.
-      result = { status: 'failed', reference: null, failureReason: e instanceof Error ? e.message : String(e) }
+      // Unknown outcome (timeout, network, 5xx): the money may have moved. Stay `pending` so the amount
+      // stays reserved and nobody retries under a new key; a GET replays the same idempotency key
+      // (`refreshPending`) and a processor webhook carrying the refund id settles it.
+      this.ctx.log('refunds: the processor did not answer; the refund stays pending', { orderId, refund: id, error: e instanceof Error ? e.message : String(e) })
+      result = { status: 'pending', reference: null, failureReason: null }
     }
     if (result.status === 'failed' && !result.failureReason) result = { ...result, failureReason: 'The processor refused the refund' }
 
@@ -199,12 +207,23 @@ export class RefundsService {
    * Re-check `pending` refunds that have a processor reference through `check` (the adapter's
    * `refundStatus`). Errors and unknown answers leave the row as it is.
    */
-  async refreshPending(orderId: string, provider: string, check: (order: Order, reference: string) => Promise<RefundResult | null>): Promise<void> {
+  async refreshPending(
+    orderId: string,
+    provider: string,
+    check: (order: Order, reference: string) => Promise<RefundResult | null>,
+    replay?: Refunder['refund'],
+  ): Promise<void> {
     const order = await this.orders.require(orderId)
     for (const refund of order.refunds ?? []) {
-      if (refund.status !== 'pending' || !refund.reference || refund.provider !== provider) continue
+      if (refund.status !== 'pending' || refund.provider !== provider) continue
+      // No reference = the processor never answered the original call. Replaying the same idempotency
+      // key returns that call's outcome instead of refunding again — but only inside the processor's
+      // key window (Stripe keeps keys 24h); past it a replay could refund twice, so leave it to the webhook.
+      if (!refund.reference && (!replay || this.ctx.now() > addHours(refund.createdAt, REPLAY_WINDOW_HOURS))) continue
       try {
-        const result = await check(order, refund.reference)
+        const result = refund.reference
+          ? await check(order, refund.reference)
+          : await replay!(order, { refundId: refund.id, amount: refund.amount, reason: refund.reason, idempotencyKey: `storefront-refund-${refund.id}` })
         if (result && result.status !== 'pending') await this.apply(refund, order, { ...result, reference: result.reference ?? refund.reference }, { requested: false })
       } catch (e) {
         this.ctx.log('refunds: could not re-check a pending refund', { orderId, refund: refund.id, error: e instanceof Error ? e.message : String(e) })

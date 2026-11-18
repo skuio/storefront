@@ -268,8 +268,12 @@ failed refund).
 - `422 validation_failed` — the amount is more than `refundable_amount`, a currency or line does not match, …
   The amount is reserved by one conditional insert that sums the order's pending and succeeded refunds in the same
   statement, so concurrent requests can never refund more than was received; the loser gets this 422.
-- `502 { "error": { "code": "processor_error", "message" }, "data": Refund }` — the processor refused (or could
-  not be reached); the refund is kept with `status: "failed"` and `failure_reason`.
+- `502 { "error": { "code": "processor_error", "message" }, "data": Refund }` — the processor answered and refused;
+  the refund is kept with `status: "failed"` and `failure_reason`.
+- When the processor does **not** answer (timeout, network, 5xx) the money may have moved, so the refund is kept
+  `pending` (`201`, amount still reserved), never `failed`. A later `GET` replays the same processor idempotency
+  key to learn the outcome — only within 23 hours of creation, inside Stripe's 24-hour key window; after that the
+  processor webhook settles it.
 
 The processor call carries an idempotency key of its own (`Idempotency-Key: storefront-refund-<refund id>` for
 Stripe, `PayPal-Request-Id` for PayPal) and the store's refund id (Stripe `metadata.refund_id`, PayPal

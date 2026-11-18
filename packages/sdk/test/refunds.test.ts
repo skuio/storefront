@@ -146,13 +146,31 @@ describe('POST /orders/{id}/refunds — Stripe', () => {
     expect(fake.raw.refunds.create).toHaveBeenCalledTimes(1)
   })
 
-  it('records a thrown processor error (unknown outcome) as failed too', async () => {
+  it('keeps an unanswered processor call pending (amount reserved) and settles it by replaying the same idempotency key', async () => {
     const { store, order } = await paidOrder()
-    const fake = fakeStripe(() => Object.assign(new Error('socket hang up'), { type: 'StripeConnectionError' }))
+    let down = true
+    const fake = fakeStripe((p, n) => (down ? Object.assign(new Error('socket hang up'), { type: 'StripeConnectionError' }) : { id: `re_${n}`, status: 'succeeded', amount: p.amount!, currency: 'usd' }))
     const api = client(store, [stripePayments({ stripe: fake.stripe, webhookSecret: 'whsec' })])
     const res = await api('POST', `/orders/${order.id}/refunds`, { idempotency_key: 'k-x', amount: usd(1000) })
-    expect(res.status).toBe(502)
-    expect(res.body.data).toMatchObject({ status: 'failed', failure_reason: 'socket hang up' })
+    expect(res.status).toBe(201)
+    expect(res.body.data).toMatchObject({ status: 'pending', reference: null, failure_reason: null })
+    // Still reserved: the money may have moved.
+    expect((await api('GET', `/orders/${order.id}`)).body.data.payment).toMatchObject({ refunded: usd(1000), refundable_amount: usd(TOTAL - 1000) })
+
+    down = false
+    const read = await api('GET', `/orders/${order.id}/refunds/${res.body.data.id}`)
+    expect(read.body.data).toMatchObject({ status: 'succeeded', reference: 're_2' })
+    expect(fake.created.map((c) => c.options?.idempotencyKey)).toEqual([`storefront-refund-${res.body.data.id}`, `storefront-refund-${res.body.data.id}`])
+  })
+
+  it('never replays an unanswered refund once the processor key window has passed', async () => {
+    const { store, order, clock } = await paidOrder()
+    const fake = fakeStripe(() => Object.assign(new Error('socket hang up'), { type: 'StripeConnectionError' }))
+    const api = client(store, [stripePayments({ stripe: fake.stripe, webhookSecret: 'whsec' })])
+    const res = await api('POST', `/orders/${order.id}/refunds`, { idempotency_key: 'k-y', amount: usd(1000) })
+    clock.tick(24 * 3_600_000)
+    await api('GET', `/orders/${order.id}/refunds/${res.body.data.id}`)
+    expect(fake.raw.refunds.create).toHaveBeenCalledTimes(1)
   })
 
   it('refuses more than is left to refund with 422, including two concurrent requests that each fit alone', async () => {

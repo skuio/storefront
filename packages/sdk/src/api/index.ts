@@ -379,7 +379,7 @@ function refundProviders(payments: StoreApiOptions['payments']): Set<string> {
  */
 async function refreshPendingRefunds(store: Store, orderId: string, payments: StoreApiOptions['payments']): Promise<void> {
   const order = await store.orders.require(orderId)
-  const pending = (order.refunds ?? []).filter((r) => r.status === 'pending' && r.reference)
+  const pending = (order.refunds ?? []).filter((r) => r.status === 'pending')
   if (!pending.length || !payments) return
   let timer: ReturnType<typeof setTimeout> | undefined
   try {
@@ -388,7 +388,7 @@ async function refreshPendingRefunds(store: Store, orderId: string, payments: St
       [...providers].map(async (provider) => {
         const adapter = adapterFor(payments, provider)
         if (!adapter?.refundStatus) return
-        await store.refunds.refreshPending(orderId, provider, adapter.refundStatus.bind(adapter))
+        await store.refunds.refreshPending(orderId, provider, adapter.refundStatus.bind(adapter), adapter.refund?.bind(adapter))
       })
     )
     const timeout = new Promise<void>((resolve) => {
