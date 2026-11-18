@@ -108,6 +108,39 @@ export interface OrderPayment {
   feeReportedAt: string | null
 }
 
+export type RefundStatus = 'pending' | 'succeeded' | 'failed'
+
+/** A refund line: informational, what the operations system says the refund is for. */
+export interface RefundLine {
+  sku: string
+  quantity: number
+  amount: Money
+}
+
+/** Money given back to the buyer through the processor that took the payment. */
+export interface OrderRefund {
+  /** `rf_…` */
+  id: string
+  orderId: string
+  status: RefundStatus
+  /** Integer minor units in the order currency. */
+  amount: Money
+  /** The part of `amount` that is shipping (informational). */
+  shipping: Money | null
+  lines: RefundLine[]
+  reason: string | null
+  note: string | null
+  provider: string
+  /** The processor's refund id (Stripe `re_…`, PayPal refund id). */
+  reference: string | null
+  failureReason: string | null
+  idempotencyKey: string
+  /** `api`: asked for through the Store API. `processor`: found in a webhook (made in the processor's dashboard). */
+  source: 'api' | 'processor'
+  createdAt: string
+  updatedAt: string
+}
+
 /** What a processor reports about a settled payment: captured amount, fee, net, charge id. Every field optional. */
 export interface PaymentSettlement {
   amountReceived?: Money | null
@@ -180,6 +213,11 @@ export interface Order {
   shippingMethod: ShippingMethod | null
   lines: OrderLine[]
   fulfillments: Fulfillment[]
+  /**
+   * Refunds made through the Store API or reported by the processor, oldest first. Filled by every
+   * store read; optional so an Order built by hand (a test, a custom adapter) still type-checks.
+   */
+  refunds?: OrderRefund[]
   /** The operations system's own order number, stamped back through the Store API. */
   externalReference: string | null
   notes: string | null

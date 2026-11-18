@@ -13,9 +13,12 @@ import { InventoryService } from './inventory'
 import { OrdersService } from './orders'
 import { OwnersService } from './owners'
 import { QuotesService } from './quotes'
+import { RefundsService } from './refunds'
 import { SessionsService } from './sessions'
 
 export const STORE_PLATFORM_VERSION = '2.2.0'
+/** The `@skuio/storefront` package version, reported as `sdk_version` by `GET /health`. A test keeps it equal to package.json. */
+export const SDK_VERSION = '0.12.0'
 
 export interface StoreOptions {
   db: Database
@@ -35,6 +38,8 @@ export interface StoreHealth {
   currency: string
   locale: string
   version: string
+  /** The `@skuio/storefront` version the store runs, so a consumer can tell which Store API features it has. */
+  sdk_version: string
   counts: { products: number; categories: number; orders: number; customers: number; quotes: number }
   /** True once an owner exists, so a consumer can tell the merchant to run `owner:create` first. */
   owner_configured: boolean
@@ -52,6 +57,7 @@ export interface Store {
   readonly inventory: InventoryService
   readonly customers: CustomersService
   readonly orders: OrdersService
+  readonly refunds: RefundsService
   readonly checkout: CheckoutService
   readonly quotes: QuotesService
   readonly sessions: SessionsService
@@ -83,6 +89,7 @@ export function createStore(options: StoreOptions): Store {
   const events = new EventsService(ctx)
   const customers = new CustomersService(ctx)
   const orders = new OrdersService(ctx, events, inventory)
+  const refunds = new RefundsService(ctx, events, orders)
   const checkout = new CheckoutService(ctx, catalog, orders, events)
   const quotes = new QuotesService(ctx, catalog, checkout, orders)
   const sessions = new SessionsService(ctx, customers)
@@ -101,6 +108,7 @@ export function createStore(options: StoreOptions): Store {
     inventory,
     customers,
     orders,
+    refunds,
     checkout,
     quotes,
     sessions,
@@ -116,6 +124,7 @@ export function createStore(options: StoreOptions): Store {
         currency: ctx.config.currency.toUpperCase(),
         locale: ctx.config.locale,
         version: STORE_PLATFORM_VERSION,
+        sdk_version: SDK_VERSION,
         counts: { ...counts, orders: orderCount, customers: customerCount, quotes: quoteCount },
         owner_configured: ownerCount > 0,
         time: ctx.now(),
@@ -135,6 +144,7 @@ export {
 export { InventoryService, type InventoryItemInput, type InventoryResult } from './inventory'
 export { CustomersService, normalizeEmail } from './customers'
 export { OrdersService, ABANDONED_AFTER_MINUTES, type PaymentRecord, type FulfillmentInput, type ChangedPage } from './orders'
+export { RefundsService, refundTotals, type RefundInput, type Refunder, type RefundOutcome, type RefundTotals } from './refunds'
 export { CheckoutService, checkShippingAddress, type CheckoutInput, type CheckoutItem, type Quote, type PricedLine, type PricedOrderSpec } from './checkout'
 export { QuotesService, type QuoteRequestInput, type QuoteRequestItem, type QuoteOfferInput, type QuoteAcceptInput, type QuoteChangedPage } from './quotes'
 export { SessionsService, type MagicLink, type Session, MAGIC_LINK_MINUTES, SESSION_DAYS } from './sessions'

@@ -102,6 +102,49 @@ paths:
         '201': { description: Recorded, content: { application/json: { schema: { $ref: '#/components/schemas/FulfillmentEnvelope' } } } }
         '200': { description: Already recorded (same external_id), content: { application/json: { schema: { $ref: '#/components/schemas/FulfillmentEnvelope' } } } }
         '422': { $ref: '#/components/responses/Unprocessable' }
+  /orders/{id}/refunds:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+    post:
+      operationId: createRefund
+      description: >-
+        Refund the buyer through the processor that took the payment (scope refunds; 0.12.0+). Idempotent per
+        idempotency_key: a key seen before on this order returns that refund with 200 and never calls the processor
+        again, whatever its status. The amount is reserved atomically, so concurrent requests cannot refund more than
+        was received.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/RefundInput' } } }
+      responses:
+        '201': { description: Made (succeeded or pending), content: { application/json: { schema: { $ref: '#/components/schemas/RefundEnvelope' } } } }
+        '200': { description: The idempotency_key was already used on this order; the existing refund, content: { application/json: { schema: { $ref: '#/components/schemas/RefundEnvelope' } } } }
+        '403': { description: The connection lacks the refunds scope, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: 'error.code refund_unsupported: the provider cannot refund, or the order is not paid', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+        '502':
+          description: 'error.code processor_error: the processor refused or could not be reached; data is the refund, stored as failed'
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/Error' }
+                  - { $ref: '#/components/schemas/RefundEnvelope' }
+    get:
+      operationId: listRefunds
+      description: The order's refunds, oldest first (scope orders). Pending ones are re-checked with the processor first.
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: object, properties: { data: { type: array, items: { $ref: '#/components/schemas/Refund' } } } } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /orders/{id}/refunds/{refund_id}:
+    get:
+      operationId: getRefund
+      description: One refund (scope orders); a pending one is re-checked with the processor first.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: refund_id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/RefundEnvelope' } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
   /quotes:
     get:
       operationId: listQuotes
@@ -356,6 +399,7 @@ components:
             currency: { type: string }
             locale: { type: string }
             version: { type: string, description: Store platform version }
+            sdk_version: { type: string, description: 'The @skuio/storefront version (0.12.0+), so a consumer can tell which features the store has' }
             counts: { type: object, properties: { products: { type: integer }, categories: { type: integer }, orders: { type: integer }, customers: { type: integer }, quotes: { type: integer } } }
             owner_configured: { type: boolean, description: True once an owner exists; false means `npm run owner:create` has not been run and nobody can approve a connection yet }
             connection:
@@ -370,7 +414,7 @@ components:
         id: { type: string, description: con_… }
         name: { type: string }
         tenant: { type: [string, 'null'], description: The consumer's display name for itself (the SKU.io tenant) }
-        scopes: { type: array, items: { type: string, enum: [orders, payments, fulfillments, inventory, catalog, quotes] } }
+        scopes: { type: array, items: { type: string, enum: [orders, payments, refunds, fulfillments, inventory, catalog, quotes] } }
         key_prefix: { type: [string, 'null'], description: First characters of the key, for display only }
         created_at: { type: string, format: date-time }
         issued_at: { type: [string, 'null'], format: date-time }
@@ -424,6 +468,38 @@ components:
         shipped_at: { type: [string, 'null'], format: date-time }
         lines: { type: array, minItems: 1, items: { type: object, required: [sku, quantity], properties: { sku: { type: string }, quantity: { type: integer, minimum: 1 } } } }
         notify_customer: { type: boolean, default: true }
+    Refund:
+      type: object
+      properties:
+        id: { type: string, description: rf_… }
+        order_id: { type: string }
+        status: { type: string, enum: [pending, succeeded, failed] }
+        amount: { $ref: '#/components/schemas/Money' }
+        shipping: { description: The part of amount that is shipping (informational), oneOf: [{ $ref: '#/components/schemas/Money' }, { type: 'null' }] }
+        lines: { type: array, items: { type: object, properties: { sku: { type: string }, quantity: { type: integer }, amount: { $ref: '#/components/schemas/Money' } } } }
+        reason: { type: [string, 'null'] }
+        note: { type: [string, 'null'] }
+        provider: { type: string, description: stripe, paypal, … }
+        reference: { type: [string, 'null'], description: "The processor's refund id: Stripe re_…, PayPal refund id" }
+        failure_reason: { type: [string, 'null'] }
+        idempotency_key: { type: string }
+        source: { type: string, enum: [api, processor], description: processor = found in a webhook (made in the processor's dashboard) }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    RefundInput:
+      type: object
+      required: [idempotency_key, amount]
+      properties:
+        idempotency_key: { type: string, minLength: 1, maxLength: 100 }
+        amount: { $ref: '#/components/schemas/Money', description: 'Greater than zero, in the order currency, at most payment.refundable_amount' }
+        shipping: { description: At most amount, oneOf: [{ $ref: '#/components/schemas/Money' }, { type: 'null' }] }
+        lines: { type: array, items: { type: object, required: [sku, quantity, amount], properties: { sku: { type: string }, quantity: { type: integer, minimum: 1 }, amount: { $ref: '#/components/schemas/Money' } } } }
+        reason: { type: [string, 'null'], maxLength: 255 }
+        note: { type: [string, 'null'], maxLength: 1000 }
+        notify_customer: { type: boolean, default: false }
+    RefundEnvelope:
+      type: object
+      properties: { data: { $ref: '#/components/schemas/Refund' } }
     FulfillmentEnvelope:
       type: object
       properties: { data: { $ref: '#/components/schemas/Fulfillment' } }
@@ -452,6 +528,9 @@ components:
               oneOf: [{ $ref: '#/components/schemas/Money' }, { type: 'null' }]
             transaction_id: { type: [string, 'null'], description: "The processor's charge / capture id: Stripe ch_…, PayPal capture id." }
             fee_reported_at: { type: [string, 'null'], format: date-time, description: When the store recorded the fee. Recording it bumps the order's updated_at. }
+            refundable: { type: boolean, description: 'The provider can refund (stripe, paypal), the payment is paid and something is left. False for manual, bitcoin, btcpay, unpaid and failed orders. 0.12.0+' }
+            refunded: { $ref: '#/components/schemas/Money', description: Pending plus succeeded refunds }
+            refundable_amount: { $ref: '#/components/schemas/Money', description: 'amount_received (or total) minus refunded; 0 when nothing is left or the order is not paid' }
         currency: { type: string }
         subtotal: { $ref: '#/components/schemas/Money' }
         shipping: { $ref: '#/components/schemas/Money' }
@@ -465,6 +544,7 @@ components:
         shipping_method: { type: [object, 'null'], properties: { code: { type: string }, name: { type: string } } }
         lines: { type: array, items: { $ref: '#/components/schemas/OrderLine' } }
         fulfillments: { type: array, items: { $ref: '#/components/schemas/Fulfillment' } }
+        refunds: { type: array, description: Oldest first (newest last). 0.12.0+, items: { $ref: '#/components/schemas/Refund' } }
         external_reference: { type: [string, 'null'] }
         notes: { type: [string, 'null'] }
         metadata: { type: object, additionalProperties: { type: string } }

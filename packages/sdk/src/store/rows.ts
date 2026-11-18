@@ -1,4 +1,4 @@
-import type { Address, Fulfillment, Money, Order, OrderLine, OrderStatus, PaymentStatus } from '../types'
+import type { Address, Fulfillment, Money, Order, OrderLine, OrderRefund, OrderStatus, PaymentStatus, RefundLine, RefundStatus } from '../types'
 import { parseJson } from './context'
 
 export interface OrderRow {
@@ -121,7 +121,7 @@ function storedMoney(amount: number | null | undefined, currency: string | null 
   return typeof amount === 'number' && currency ? { amount, currency } : null
 }
 
-export function rowToOrder(r: OrderRow, lines: OrderLineRow[], fulfillments: Fulfillment[]): Order {
+export function rowToOrder(r: OrderRow, lines: OrderLineRow[], fulfillments: Fulfillment[], refunds: OrderRefund[] = []): Order {
   const money = (amount: number) => ({ amount, currency: r.currency })
   return {
     id: r.id,
@@ -153,6 +153,7 @@ export function rowToOrder(r: OrderRow, lines: OrderLineRow[], fulfillments: Ful
     shippingMethod: r.shipping_method_code && r.shipping_method_name ? { code: r.shipping_method_code, name: r.shipping_method_name } : null,
     lines: lines.map((l) => rowToLine(l, r.currency)),
     fulfillments,
+    refunds,
     externalReference: r.external_reference,
     notes: r.notes,
     metadata: parseJson<Record<string, string>>(r.metadata_json, {}),
@@ -161,5 +162,45 @@ export function rowToOrder(r: OrderRow, lines: OrderLineRow[], fulfillments: Ful
     updatedAt: r.updated_at,
     paidAt: r.paid_at,
     cancelledAt: r.cancelled_at,
+  }
+}
+
+export interface RefundRow {
+  id: string
+  order_id: string
+  status: string
+  amount: number
+  currency: string
+  shipping: number | null
+  lines_json: string
+  reason: string | null
+  note: string | null
+  provider: string
+  reference: string | null
+  failure_reason: string | null
+  idempotency_key: string
+  source: string
+  notify_customer: number
+  created_at: string
+  updated_at: string
+}
+
+export function rowToRefund(r: RefundRow): OrderRefund {
+  return {
+    id: r.id,
+    orderId: r.order_id,
+    status: r.status as RefundStatus,
+    amount: { amount: r.amount, currency: r.currency },
+    shipping: r.shipping === null ? null : { amount: r.shipping, currency: r.currency },
+    lines: parseJson<RefundLine[]>(r.lines_json, []),
+    reason: r.reason,
+    note: r.note,
+    provider: r.provider,
+    reference: r.reference,
+    failureReason: r.failure_reason,
+    idempotencyKey: r.idempotency_key,
+    source: r.source === 'processor' ? 'processor' : 'api',
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
   }
 }

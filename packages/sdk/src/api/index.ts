@@ -6,11 +6,11 @@ import { secretsEqual } from '../store/crypto'
 import { decodeKeysetCursor, encodeKeysetCursor } from '../store/cursor'
 import { StoreError } from '../store/errors'
 import {
-  serializeCategory, serializeFulfillment, serializeOrder, serializePayout, serializePayoutLine, serializeProduct, serializeQuote,
-  type ImageUrlResolver, type SerializeProductOptions,
+  serializeCategory, serializeFulfillment, serializeOrder, serializePayout, serializePayoutLine, serializeProduct, serializeQuote, serializeRefund,
+  type ImageUrlResolver, type SerializeOrderOptions, type SerializeProductOptions,
 } from './serialize'
 import {
-  validateCategories, validateFulfillment, validateInventory, validateListQuery, validateOrderPatch, validateProducts, validateQuotePatch, ValidationError,
+  validateCategories, validateFulfillment, validateInventory, validateListQuery, validateOrderPatch, validateProducts, validateQuotePatch, validateRefund, ValidationError,
 } from './validate'
 
 export interface StoreApiOptions {
@@ -37,12 +37,16 @@ export interface StoreApiOptions {
    * processor client is not built on every request). `GET /orders/{id}` uses the adapter that took
    * a paid order to ask its processor for the fee when the store has not recorded it yet. Omit it
    * and the fee is only what the adapters recorded when they confirmed the payment.
+   * `POST /orders/{id}/refunds` refunds through the adapter that took the order (its `refund()`);
+   * without it every order reads `payment.refundable: false` and a refund is 409.
    */
   payments?: PaymentAdapter[] | (() => PaymentAdapter[])
 }
 
 /** How long `GET /orders/{id}` waits for a processor before answering without the fee. */
 const SETTLEMENT_TIMEOUT_MS = 8000
+/** How long a GET of refunds waits for the processor to re-check a pending one. */
+const REFUND_STATUS_TIMEOUT_MS = 8000
 
 /** Who a request authenticated as: the environment key, or an approved connection. */
 export type ApiCaller = { kind: 'env' } | { kind: 'connection'; connection: Connection }
@@ -87,7 +91,7 @@ export async function handleStoreApi(request: Request, options: StoreApiOptions)
     if (!caller) return error(401, 'unauthorized', 'A valid bearer key is required: a connection key issued through /admin/connect, or the STORE_API_KEY secret')
 
     // A connection may use only what the owner approved; the STORE_API_KEY secret may use everything.
-    const scope = scopeFor(path)
+    const scope = scopeFor(path, method)
     if (scope && caller.kind === 'connection' && !caller.connection.scopes.includes(scope)) {
       return error(403, 'forbidden', `This connection was not approved for "${scope}"; reconnect and approve it at /admin/connect`)
     }
@@ -157,9 +161,14 @@ async function readJson(request: Request): Promise<Record<string, unknown>> {
  * sales. A key with `quotes` can price a quote; only the buyer turns it into
  * an order.
  */
-function scopeFor(path: string): ConnectScope | null {
+function scopeFor(path: string, method: string): ConnectScope | null {
   const first = path.split('/').filter(Boolean)[0]
-  if (first === 'orders') return /^\/orders\/[^/]+\/fulfillments$/.test(path) ? 'fulfillments' : 'orders'
+  if (first === 'orders') {
+    if (/^\/orders\/[^/]+\/fulfillments$/.test(path)) return 'fulfillments'
+    // Moving money back to a buyer is its own scope; reading refunds is reading orders.
+    if (method === 'POST' && /^\/orders\/[^/]+\/refunds$/.test(path)) return 'refunds'
+    return 'orders'
+  }
   if (first === 'inventory') return 'inventory'
   if (first === 'products' || first === 'categories') return 'catalog'
   if (first === 'quotes') return 'quotes'
@@ -173,6 +182,7 @@ async function route(
   payments: StoreApiOptions['payments']
 ): Promise<Response> {
   const segments = path.split('/').filter(Boolean)
+  const orderOptions = (): SerializeOrderOptions => ({ refundProviders: refundProviders(payments) })
 
   if (path === '/health' && method === 'GET') {
     const health = await store.health()
@@ -200,13 +210,14 @@ async function route(
       // Lazy housekeeping: abandoned processor checkouts become cancelled before the consumer sees the list.
       await store.orders.expireAbandoned()
       const page = await store.orders.changedSince(updatedSince ? new Date(updatedSince).toISOString() : null, cursor, limit)
-      return json({ data: page.orders.map((o) => serializeOrder(o, store.config.orders.numberPrefix)), next_cursor: page.nextCursor })
+      const options = orderOptions()
+      return json({ data: page.orders.map((o) => serializeOrder(o, store.config.orders.numberPrefix, options)), next_cursor: page.nextCursor })
     }
     const id = segments[1] ? decodeURIComponent(segments[1]) : ''
     if (segments.length === 2 && id) {
       if (method === 'GET') {
         const order = await fillSettlement(store, await store.orders.require(id), payments)
-        return json({ data: serializeOrder(order, store.config.orders.numberPrefix) })
+        return json({ data: serializeOrder(order, store.config.orders.numberPrefix, orderOptions()) })
       }
       if (method === 'PATCH') {
         const patch = validateOrderPatch(await readJson(request))
@@ -219,13 +230,30 @@ async function route(
         if (patch.external_reference !== undefined) order = await store.orders.setExternalReference(id, patch.external_reference)
         if (patch.payment) order = await store.orders.setPaymentStatus(id, patch.payment)
         if (patch.status === 'cancelled') order = await store.orders.cancel(id, 'Cancelled by the operations system')
-        return json({ data: serializeOrder(order, store.config.orders.numberPrefix) })
+        return json({ data: serializeOrder(order, store.config.orders.numberPrefix, orderOptions()) })
       }
     }
     if (segments.length === 3 && id && segments[2] === 'fulfillments' && method === 'POST') {
       const input = validateFulfillment(await readJson(request))
       const result = await store.orders.addFulfillment(id, input)
       return json({ data: serializeFulfillment(result.fulfillment) }, result.created ? 201 : 200)
+    }
+    if (segments[2] === 'refunds' && id) {
+      if (segments.length === 3 && method === 'POST') {
+        const input = validateRefund(await readJson(request))
+        const order = await store.orders.require(id)
+        const adapter = adapterFor(payments, order.payment.provider)
+        const refunder = adapter?.refund ? { provider: adapter.id, refund: adapter.refund.bind(adapter) } : null
+        const outcome = await store.refunds.create(id, input, refunder)
+        const data = serializeRefund(outcome.refund)
+        if (outcome.processorError) return json({ error: { code: 'processor_error', message: outcome.processorError, details: null }, data }, 502)
+        return json({ data }, outcome.created ? 201 : 200)
+      }
+      if (method === 'GET' && (segments.length === 3 || segments.length === 4)) {
+        await refreshPendingRefunds(store, id, payments)
+        if (segments.length === 3) return json({ data: (await store.refunds.list(id)).map(serializeRefund) })
+        return json({ data: serializeRefund(await store.refunds.require(id, decodeURIComponent(segments[3]!))) })
+      }
     }
   }
 
@@ -317,6 +345,58 @@ async function fillSettlement(store: Store, order: Order, payments: StoreApiOpti
   } catch (e) {
     console.error('store api: could not read the payment settlement for', order.id, e instanceof Error ? e.message : String(e))
     return order
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
+/** The store's adapters. A factory that throws (a processor key not configured) reads as none, logged. */
+function adapterList(payments: StoreApiOptions['payments']): PaymentAdapter[] {
+  if (!payments) return []
+  if (typeof payments !== 'function') return payments
+  try {
+    return payments()
+  } catch (e) {
+    console.error('store api: could not build the payment adapters', e instanceof Error ? e.message : String(e))
+    return []
+  }
+}
+
+function adapterFor(payments: StoreApiOptions['payments'], provider: string | null): PaymentAdapter | null {
+  if (!provider) return null
+  return adapterList(payments).find((a) => a.id === provider) ?? null
+}
+
+/** Ids of the adapters that can refund, for `payment.refundable`. */
+function refundProviders(payments: StoreApiOptions['payments']): Set<string> {
+  return new Set(adapterList(payments).flatMap((a) => (a.refund ? [a.id] : [])))
+}
+
+/**
+ * Before answering a GET of refunds, ask the processor about the order's `pending` ones (the
+ * adapter's `refundStatus()`), like `settlement()` on GET /orders/{id}. Bounded by a timeout; a
+ * processor error never fails the read.
+ */
+async function refreshPendingRefunds(store: Store, orderId: string, payments: StoreApiOptions['payments']): Promise<void> {
+  const order = await store.orders.require(orderId)
+  const pending = (order.refunds ?? []).filter((r) => r.status === 'pending' && r.reference)
+  if (!pending.length || !payments) return
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    const providers = new Set(pending.map((r) => r.provider))
+    const work = Promise.all(
+      [...providers].map(async (provider) => {
+        const adapter = adapterFor(payments, provider)
+        if (!adapter?.refundStatus) return
+        await store.refunds.refreshPending(orderId, provider, adapter.refundStatus.bind(adapter))
+      })
+    )
+    const timeout = new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, REFUND_STATUS_TIMEOUT_MS)
+    })
+    await Promise.race([work, timeout])
+  } catch (e) {
+    console.error('store api: could not re-check pending refunds for', orderId, e instanceof Error ? e.message : String(e))
   } finally {
     if (timer) clearTimeout(timer)
   }
@@ -488,8 +568,8 @@ export type { Payout, PayoutLine }
 export {
   serializeOrder, serializeFulfillment, serializeProduct, serializeCategory, serializeQuote, absoluteImageUrl,
   type ImageUrlResolver, type SerializeProductOptions,
-  serializePayout, serializePayoutLine,
-  type ApiOrder, type ApiOrderPayment, type ApiFulfillment, type ApiProduct, type ApiCategory, type ApiQuote,
+  serializePayout, serializePayoutLine, serializeRefund,
+  type ApiOrder, type ApiOrderPayment, type ApiRefund, type SerializeOrderOptions, type ApiFulfillment, type ApiProduct, type ApiCategory, type ApiQuote,
   type ApiPayout, type ApiPayoutLine,
 } from './serialize'
 export { ValidationError } from './validate'

@@ -18,7 +18,8 @@ import type { PaymentAdapter, PaymentContext, PaymentEvent, PaymentStart } from 
  * operations system's order poll is enough to keep it moving).
  *
  * Trade-offs, stated: on-chain only (no Lightning); detection depends on the
- * explorer being reachable; refunds are sent by hand from the wallet.
+ * explorer being reachable; refunds are sent by hand from the wallet (no
+ * `refund()`: the Store API reports these orders `payment.refundable: false`).
  */
 export interface BitcoinPaymentOptions {
   /** Account extended public key: zpub… (BIP84) or xpub… treated as BIP84. Never a private key. */

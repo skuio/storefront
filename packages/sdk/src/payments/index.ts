@@ -1,5 +1,5 @@
 import type { Store } from '../store'
-import type { Money, Order, PaymentSettlement } from '../types'
+import type { Money, Order, PaymentSettlement, RefundStatus } from '../types'
 
 export interface PaymentContext {
   store: Store
@@ -27,10 +27,61 @@ export type PaymentEvent =
       settlement?: PaymentSettlement
     }
   | { type: 'failed'; orderId: string; provider: string; reference: string | null; reason?: string }
+  /** The whole payment was given back. `reference` is the order's payment reference. */
   | { type: 'refunded'; orderId: string | null; provider: string; reference: string | null }
+  /**
+   * One refund the processor reported (full or partial, made through the Store API or in the
+   * processor's dashboard). `applyPaymentEvents` updates the matching refund row, or inserts one with
+   * `source: "processor"`. The order is `orderId`, else the one whose payment reference (or
+   * transaction id) is `paymentReference`.
+   */
+  | {
+      type: 'refund'
+      orderId: string | null
+      provider: string
+      paymentReference: string | null
+      refund: ProcessorRefund
+    }
   | { type: 'ignored'; reason: string }
 
-export type { PaymentSettlement }
+/** A refund as the processor reports it. */
+export interface ProcessorRefund {
+  /** The processor's refund id (Stripe `re_…`, PayPal refund id). */
+  reference: string
+  status: RefundStatus
+  amount: Money
+  failureReason?: string | null
+  /** The store's own `rf_…` id when the refund was made through the Store API (Stripe metadata, PayPal custom_id). */
+  refundId?: string | null
+  reason?: string | null
+}
+
+/** What the Store API asks an adapter to give back. */
+export interface RefundRequest {
+  /** The store's `rf_…` id: put it on the processor's refund (metadata) so a webhook finds the row. */
+  refundId: string
+  /** Integer minor units in the order currency, greater than zero. */
+  amount: Money
+  reason: string | null
+  /**
+   * Send it as the processor's idempotency key (Stripe `Idempotency-Key`, PayPal `PayPal-Request-Id`):
+   * the same key never moves money twice, even across a crash between the call and the store's write.
+   */
+  idempotencyKey: string
+}
+
+/**
+ * What the processor answered. `failed` with a `failureReason` when it refused (the Store API answers
+ * 502 and keeps the row); throw only when the outcome is unknown (a network error): the store records
+ * that as failed too, and a later webhook carrying the refund id corrects it.
+ */
+export interface RefundResult {
+  status: RefundStatus
+  reference: string | null
+  failureReason: string | null
+}
+
+export type { PaymentSettlement, RefundStatus }
 
 export class PaymentWebhookError extends Error {
   readonly status: number
@@ -78,6 +129,17 @@ export interface PaymentAdapter {
    * post one accounting document per payout without holding processor credentials.
    */
   payouts?: PaymentPayouts
+  /**
+   * Optional: give money back to the buyer of a paid order. An adapter without it (manual, bitcoin,
+   * btcpay) cannot refund: the Store API answers 409 `refund_unsupported` and the order reads
+   * `payment.refundable: false`. Called at most once per refund row.
+   */
+  refund?(order: Order, request: RefundRequest): Promise<RefundResult>
+  /**
+   * Optional: re-read a `pending` refund (`reference` is the processor's refund id). The Store API
+   * calls it on `GET /orders/{id}/refunds…`. Null when the processor does not know it.
+   */
+  refundStatus?(order: Order, reference: string): Promise<RefundResult | null>
 }
 
 export type PayoutStatus = 'pending' | 'in_transit' | 'paid' | 'failed' | 'canceled'
@@ -290,6 +352,16 @@ export async function applyPaymentEvents(store: Store, events: PaymentEvent[]): 
       case 'refunded': {
         const id = event.orderId ?? (event.reference ? (await store.orders.byPaymentReference(event.provider, event.reference))?.id : null)
         if (id) touched.push(await store.orders.setPaymentStatus(id, { status: 'refunded', provider: event.provider, reference: event.reference }))
+        break
+      }
+      case 'refund': {
+        const order = await store.refunds.recordFromProcessor({
+          orderId: event.orderId,
+          provider: event.provider,
+          paymentReference: event.paymentReference,
+          refund: event.refund,
+        })
+        if (order) touched.push(order)
         break
       }
       case 'ignored':

@@ -63,6 +63,12 @@ if (request && Astro.request.method === 'POST') {
             {request!.scopes.map((scope) => <li class="py-2.5">{SCOPE_DESCRIPTIONS[scope]}</li>)}
           </ul>
         </div>
+        {request!.unsupportedScopes.length > 0 && (
+          <p class="mt-3 text-xs text-body/70">
+            Also asked for, but not supported by this store version (it will not be granted; update the store to allow it):
+            {' '}<span class="font-mono">{request!.unsupportedScopes.join(', ')}</span>
+          </p>
+        )}
         <p class="mt-5 text-sm">
           After you approve, your browser goes to
           <span class="mt-1 block rounded bg-ink px-3 py-2 font-mono text-xs text-page">{request!.redirectHost}</span>

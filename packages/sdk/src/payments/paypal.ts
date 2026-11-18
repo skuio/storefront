@@ -1,6 +1,6 @@
-import type { Address, Money, Order, PaymentSettlement } from '../types'
+import type { Address, Money, Order, PaymentSettlement, RefundStatus } from '../types'
 import type { Quote } from '../store/checkout'
-import { PaymentWebhookError, type PaymentAdapter, type PaymentContext, type PaymentEvent, type PaymentStart } from './index'
+import { PaymentWebhookError, type PaymentAdapter, type PaymentContext, type PaymentEvent, type PaymentStart, type RefundResult } from './index'
 
 export interface PayPalPaymentOptions {
   clientId: string
@@ -33,6 +33,16 @@ interface PayPalCapture {
   custom_id?: string
   /** What PayPal kept and what the merchant receives (present on completed captures). */
   seller_receivable_breakdown?: { gross_amount?: PayPalMoney; paypal_fee?: PayPalMoney; net_amount?: PayPalMoney }
+}
+interface PayPalRefund {
+  id: string
+  status: string
+  amount?: PayPalMoney
+  /** The store's `rf_…` id, set when the refund was made through the Store API. */
+  custom_id?: string
+  note_to_payer?: string
+  status_details?: { reason?: string }
+  links?: PayPalLink[]
 }
 interface PayPalOrder {
   id: string
@@ -209,12 +219,16 @@ export function paypalPayments(options: PayPalPaymentOptions): PaymentAdapter {
           return c.custom_id ? [{ type: 'failed', orderId: c.custom_id, provider: PROVIDER, reference: c.id, reason: event.event_type }] : [{ type: 'ignored', reason: 'capture without custom_id' }]
         }
         case 'PAYMENT.CAPTURE.REFUNDED': {
-          // A refund resource links to its capture; only a full refund refunds the order.
-          const capId = ((resource.links as PayPalLink[] | undefined) ?? []).find((l) => l.rel === 'up')?.href.split('/').pop()
+          // The resource is the refund; it links up to its capture, whose custom_id is the order.
+          const r = resource as unknown as PayPalRefund
+          const capId = (r.links ?? []).find((l) => l.rel === 'up')?.href.split('/').pop()
           if (!capId) return [{ type: 'ignored', reason: 'refund without capture link' }]
           const c = await api<PayPalCapture & { status: string }>('GET', `/v2/payments/captures/${encodeURIComponent(capId)}`)
-          if (c.status !== 'REFUNDED') return [{ type: 'ignored', reason: `capture ${capId} is ${c.status} (partial refund)` }]
-          return [{ type: 'refunded', orderId: c.custom_id ?? null, provider: PROVIDER, reference: capId }]
+          const events: PaymentEvent[] = []
+          if (r.id && r.amount) events.push(refundEventFromPayPal(r, c.custom_id ?? null, capId))
+          // Only a full refund refunds the order outright.
+          if (c.status === 'REFUNDED') events.push({ type: 'refunded', orderId: c.custom_id ?? null, provider: PROVIDER, reference: capId })
+          return events.length ? events : [{ type: 'ignored', reason: `capture ${capId} is ${c.status} (partial refund without detail)` }]
         }
         default:
           return [{ type: 'ignored', reason: `unhandled event ${event.event_type}` }]
@@ -236,6 +250,81 @@ export function paypalPayments(options: PayPalPaymentOptions): PaymentAdapter {
       if (!captureId) return null
       return settlementOf(await api<PayPalCapture>('GET', `/v2/payments/captures/${encodeURIComponent(captureId)}`))
     },
+
+    // POST /v2/payments/captures/{capture}/refund; PayPal-Request-Id makes a repeat of the same key a read.
+    async refund(order, request): Promise<RefundResult> {
+      const captureId = order.payment.transactionId ?? order.payment.reference
+      if (!captureId) return { status: 'failed', reference: null, failureReason: 'The order has no PayPal capture to refund' }
+      try {
+        const refund = await api<PayPalRefund>(
+          'POST',
+          `/v2/payments/captures/${encodeURIComponent(captureId)}/refund`,
+          {
+            amount: { value: decimal(request.amount.amount, request.amount.currency), currency_code: request.amount.currency.toUpperCase() },
+            custom_id: request.refundId,
+            ...(request.reason ? { note_to_payer: request.reason.slice(0, 255) } : {}),
+          },
+          { 'paypal-request-id': request.idempotencyKey }
+        )
+        return paypalRefundResult(refund)
+      } catch (e) {
+        // PayPal answered and refused (already refunded, amount too large, …): a failed refund. Otherwise unknown: rethrow.
+        if (e instanceof PayPalError && e.status >= 400 && e.status < 500) return { status: 'failed', reference: null, failureReason: paypalIssue(e.body) ?? e.message }
+        throw e
+      }
+    },
+
+    async refundStatus(_order, reference): Promise<RefundResult | null> {
+      try {
+        return paypalRefundResult(await api<PayPalRefund>('GET', `/v2/payments/refunds/${encodeURIComponent(reference)}`))
+      } catch (e) {
+        if (e instanceof PayPalError && e.status === 404) return null
+        throw e
+      }
+    },
+  }
+}
+
+/** PayPal refund status → the store's. */
+function paypalRefundStatus(status: string | undefined): RefundStatus {
+  if (status === 'COMPLETED') return 'succeeded'
+  if (status === 'CANCELLED' || status === 'FAILED') return 'failed'
+  return 'pending'
+}
+
+function paypalRefundResult(r: PayPalRefund): RefundResult {
+  const status = paypalRefundStatus(r.status)
+  return { status, reference: r.id, failureReason: status === 'failed' ? (r.status_details?.reason ?? r.status) : null }
+}
+
+function refundEventFromPayPal(r: PayPalRefund, orderId: string | null, captureId: string): PaymentEvent {
+  const status = paypalRefundStatus(r.status)
+  const currency = (r.amount?.currency_code ?? 'USD').toLowerCase()
+  return {
+    type: 'refund',
+    orderId,
+    provider: PROVIDER,
+    paymentReference: captureId,
+    refund: {
+      reference: r.id,
+      status,
+      amount: { amount: r.amount ? minor(r.amount.value, currency) : 0, currency },
+      failureReason: status === 'failed' ? (r.status_details?.reason ?? r.status) : null,
+      refundId: r.custom_id?.startsWith('rf_') ? r.custom_id : null,
+      reason: r.note_to_payer ?? null,
+    },
+  }
+}
+
+/** The `issue` of a PayPal error body (`CAPTURE_FULLY_REFUNDED`, …) with its description, when there is one. */
+function paypalIssue(body: string): string | null {
+  try {
+    const parsed = JSON.parse(body) as { name?: string; message?: string; details?: { issue?: string; description?: string }[] }
+    const d = parsed.details?.[0]
+    if (d?.issue) return d.description ? `${d.issue}: ${d.description}` : d.issue
+    return parsed.message ?? parsed.name ?? null
+  } catch {
+    return null
   }
 }
 
