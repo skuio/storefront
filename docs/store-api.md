@@ -89,6 +89,11 @@ The owner's order list is `/admin/orders` (search by number, email or name; stat
 their `updated_at` before the consumer's import start date so the Store API's `updated_since` never hands them out as
 new.
 
+Every checkout also stamps the order's `metadata` with where the buyer came from (the `attribution` block):
+`src_first` / `src_last` (e.g. `"google / cpc / pmax"`) with `src_first_at` / `src_last_at` and `src_last_click`, and
+the ad click ids themselves: at most one of `gclid` / `gbraid` / `wbraid`, plus `fbclid`, `msclkid`, `ttclid`. A key is
+present only when the buyer arrived through that channel. The store sets them server-side and drops any a client sends.
+
 ### Connecting an operations system other than SKU.io
 
 Nothing in the store is specific to SKU.io. Any ERP, OMS or integration platform (NetSuite, Odoo,

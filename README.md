@@ -230,7 +230,10 @@ stay underneath.
   to ask a price.
 - **Attribution**: first and last touch (utm tags, ad click ids, referrers)
   ride on every order's metadata as `src_first` / `src_last`, so the operations
-  system knows which channel sold it.
+  system knows which channel sold it. The ad click id itself (`gclid` /
+  `gbraid` / `wbraid`, `fbclid`, `msclkid`, `ttclid`) is kept 90 days and rides
+  along too, so SKU.io can tell which orders an ad drove and send their profit
+  back to Google Ads and Meta.
 - **Express checkout**: PayPal / Venmo / Pay Later buttons beside the buy
   button (`paypal-express` block). The address comes from the buyer's PayPal
   account, and the store refuses to capture if the approved amount differs
